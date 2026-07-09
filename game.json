@@ -1,5 +1,6 @@
 {
   "deviceOrientation": "portrait",
   "showStatusBar": false,
+  "cloud": true,
   "navigateToMiniProgramAppIdList": []
 }

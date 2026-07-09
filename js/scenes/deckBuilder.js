@@ -8,8 +8,10 @@ const {
   FACTION_LABELS,
   ROW_LABELS,
   displayName,
-  cardSummary
+  cardSummary,
+  cardById
 } = require("../core/cards");
+const { drawDetail } = require("./cardsBrowser");
 
 function canAddCard(status, card) {
   if (status.total >= 40) return false;
@@ -19,12 +21,68 @@ function canAddCard(status, card) {
 
 function slotLabel(slot, index, faction) {
   const status = deckStatus(slot.ids, faction);
-  const mark = status.valid ? "✓" : (status.total ? "*" : "");
-  return `${index + 1}${mark}`;
+  const name = slot.name || `牌组${index + 1}`;
+  if (status.valid) return `${name} · 已存 · ${status.total}张`;
+  if (status.total) return `${name} · 未完成 · ${status.total}张`;
+  return `${name} · 空`;
+}
+
+function drawSlotDropdown(ctx, view, actions, ui, anchor, slots, activeSlot, faction) {
+  if (ui.deckSlotDropdown !== "slot") return;
+  const itemH = 38;
+  const menuH = slots.length * itemH;
+  const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
+  const menuY = Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8);
+  actions.push({ id: "closeDeckSlotDropdown", x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(38, 28, 18, 0.2)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+  fillRoundRect(ctx, menuX, menuY, anchor.w, menuH, 12, "#fffaf0", "#2f6f57");
+  slots.forEach((slot, index) => {
+    const y = menuY + index * itemH;
+    const active = index === activeSlot;
+    actions.push({ id: "selectDeckSlotOption", slotIndex: index, x: menuX, y, w: anchor.w, h: itemH });
+    if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
+    else if (index > 0) {
+      ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
+      ctx.beginPath();
+      ctx.moveTo(menuX + 10, y);
+      ctx.lineTo(menuX + anchor.w - 10, y);
+      ctx.stroke();
+    }
+    text(ctx, slotLabel(slot, index, faction), menuX + anchor.w / 2, y + itemH / 2, 12, active ? "#ffffff" : "#2f2417", "center");
+  });
+}
+
+function pageLayout(view) {
+  const top = view.safeTop + 26;
+  const slotY = top + 58;
+  const toolY = top + 98;
+  const listTop = top + 140;
+  const backY = view.height - view.safeBottom - 50;
+  const listBottom = backY - 22;
+  const pageSize = Math.max(4, Math.min(7, Math.floor((listBottom - listTop) / 68)));
+  return { top, slotY, toolY, listTop, backY, listBottom, pageSize };
+}
+
+function clampPage(view, ui, targetPage) {
+  const settings = loadSettings();
+  const faction = settings.humanFaction;
+  const { pageSize } = pageLayout(view);
+  const cards = eligibleCards(faction);
+  const totalPages = Math.max(1, Math.ceil(cards.length / pageSize));
+  const page = targetPage == null ? (ui.deckPage || 0) : targetPage;
+  return Math.max(0, Math.min(page, totalPages - 1));
 }
 
 function draw(ctx, view, actions, ui) {
   clear(ctx, view.width, view.height);
+  let detail = null;
+  if (ui.deckCardDetailId) {
+    detail = cardById(ui.deckCardDetailId);
+    if (!detail) ui.deckCardDetailId = "";
+  }
   const settings = loadSettings();
   const faction = settings.humanFaction;
   const slots = getCustomDeckSlots(settings, faction);
@@ -32,12 +90,7 @@ function draw(ctx, view, actions, ui) {
   const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
   const page = ui.deckPage || 0;
-  const top = view.safeTop + 26;
-  const slotY = top + 58;
-  const toolY = top + 98;
-  const listTop = top + 140;
-  const bottom = view.height - view.safeBottom - 50;
-  const pageSize = Math.max(4, Math.min(6, Math.floor((bottom - listTop - 8) / 68)));
+  const { top, slotY, toolY, listTop, backY, pageSize } = pageLayout(view);
   const cards = eligibleCards(faction).sort((a, b) => cardValue(b) - cardValue(a));
   const totalPages = Math.max(1, Math.ceil(cards.length / pageSize));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
@@ -48,19 +101,15 @@ function draw(ctx, view, actions, ui) {
   const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
   text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略 ${status.specials}/10`, view.width / 2, top + 45, 12, statusColor, "center");
 
-  const gap = 6;
-  const slotW = (view.width - 36 - gap * (MAX_CUSTOM_DECKS - 1)) / MAX_CUSTOM_DECKS;
-  for (let i = 0; i < MAX_CUSTOM_DECKS; i++) {
-    const rect = { id: "customDeckSlot", slotIndex: i, x: 18 + i * (slotW + gap), y: slotY, w: slotW, h: 30 };
-    actions.push(rect);
-    button(ctx, {
-      ...rect,
-      label: slotLabel(slots[i], i, faction),
-      fill: i === activeSlot ? "#a1632b" : "#6b6b5f",
-      stroke: i === activeSlot ? "#6d2d18" : "#56564e",
-      size: 12
-    });
-  }
+  const slotRect = { id: "customDeckSlot", x: 26, y: slotY, w: view.width - 52, h: 34 };
+  actions.push(slotRect);
+  button(ctx, {
+    ...slotRect,
+    label: `${slotLabel(slots[activeSlot], activeSlot, faction)} ${ui.deckSlotDropdown === "slot" ? "▴" : "▾"}`,
+    fill: "#a1632b",
+    stroke: "#6d2d18",
+    size: 12
+  });
 
   const auto = { id: "autoCustomDeck", x: 26, y: toolY, w: (view.width - 64) / 2, h: 34 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 12, y: toolY, w: auto.w, h: 34 };
@@ -86,17 +135,18 @@ function draw(ctx, view, actions, ui) {
     text(ctx, short(displayName(card), 9), x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
     const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略";
     text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
-    wrapText(ctx, cardSummary(card), x, y + 50, view.width - 164, 13, 1, 10, "#6f5a3a");
-    text(ctx, selected ? "已选" : (disabled ? "已满" : "加入"), view.width - 42, y + 29, 12, selected ? "#2f6f57" : (disabled ? "#8a8170" : "#8f3c1f"), "center");
+    wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
+    const detail = { id: "deckCardDetail", cardId: card.id, x: view.width - 72, y: y + 30, w: 48, h: 22 };
+    actions.push(detail);
+    button(ctx, { ...detail, label: "详情", fill: "#4f6d8a", stroke: "#36516a", size: 10, r: 8 });
   });
 
-  const prev = { id: "deckPrev", x: 18, y: bottom, w: 76, h: 40 };
-  const next = { id: "deckNext", x: view.width - 94, y: bottom, w: 76, h: 40 };
-  const back = { id: "backSettings", x: 108, y: bottom, w: view.width - 216, h: 40 };
-  actions.push(prev, back, next);
-  button(ctx, { ...prev, label: "上一页", size: 12, fill: "#6b6b5f" });
-  button(ctx, { ...back, label: "返回设置", size: 13, fill: "#8d6840" });
-  button(ctx, { ...next, label: "下一页", size: 12, fill: "#2f6f57" });
+  text(ctx, "上下滑动查看更多 · 点击卡牌加入/移除", view.width / 2, backY - 12, 11, "#775c34", "center");
+  const back = { id: "backSettings", x: 46, y: backY, w: view.width - 92, h: 40 };
+  actions.push(back);
+  button(ctx, { ...back, label: ui.deckReturnScene === "matchSetup" ? "返回准备" : "返回设置", size: 13, fill: "#8d6840" });
+  drawSlotDropdown(ctx, view, actions, ui, slotRect, slots, activeSlot, faction);
+  if (detail) drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回牌组编辑" });
 }
 
-module.exports = { draw };
+module.exports = { draw, clampPage };

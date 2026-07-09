@@ -1,6 +1,11 @@
-const { clear, text, button, fillRoundRect, wrapText } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, drawCardImage, short } = require("../ui/canvas");
 const { loadSave } = require("../core/storage");
-const { DIFFICULTY_LABELS } = require("../core/cards");
+const { DIFFICULTY_LABELS, allCards, cardById, displayName } = require("../core/cards");
+const { drawDetail } = require("./cardsBrowser");
+
+const ROW_H = 90;
+const ROW_GAP = 98;
+const LEADERS = allCards().filter(card => card.category === "leader");
 
 function formatTime(ts) {
   if (!ts) return "未知时间";
@@ -12,11 +17,52 @@ function formatTime(ts) {
   return `${m}-${day} ${h}:${min}`;
 }
 
-function resultColor(item) {
-  if (item.endReason === "surrender") return "#8f3c1f";
-  if (item.winner === 0) return "#2f6f57";
-  if (item.winner == null) return "#6b6b5f";
-  return "#8f3c1f";
+const RESULT_STYLES = {
+  win: { label: "胜利", color: "#2f6f57", fill: "#f0faf3", tagFill: "#2f6f57", streak: "连胜" },
+  loss: { label: "失败", color: "#9f3b24", fill: "#fff0ea", tagFill: "#9f3b24", streak: "连败" },
+  draw: { label: "平局", color: "#6b6b5f", fill: "#f6f2ea", tagFill: "#6b6b5f" }
+};
+
+function resultType(item) {
+  if (item.winner === 0) return "win";
+  if (item.winner == null) return "draw";
+  return "loss";
+}
+
+function resultStyle(item) {
+  return RESULT_STYLES[resultType(item)];
+}
+
+function streakBadges(history) {
+  const badges = {};
+  let start = 0;
+  while (start < history.length) {
+    const type = resultType(history[start]);
+    let end = start + 1;
+    while (end < history.length && resultType(history[end]) === type) end += 1;
+    const count = end - start;
+    if (type !== "draw" && count >= 3) {
+      const style = RESULT_STYLES[type];
+      badges[start] = { text: `${count}${style.streak}`, fill: style.tagFill };
+    }
+    start = end;
+  }
+  return badges;
+}
+
+function cleanName(value) {
+  return String(value || "")
+    .replace(/^领袖牌_/, "")
+    .replace(/^[^_]+阵营_/, "")
+    .trim();
+}
+
+function leaderCard(id, name) {
+  const byId = cardById(id);
+  if (byId) return byId;
+  const target = cleanName(name);
+  if (!target) return null;
+  return LEADERS.find(card => displayName(card) === target || cleanName(card.baseName || card.name) === target) || null;
 }
 
 function roundDetail(item) {
@@ -28,37 +74,100 @@ function roundDetail(item) {
   }).join(" · ");
 }
 
-function draw(ctx, view, actions) {
-  clear(ctx, view.width, view.height);
-  const save = loadSave();
+function layout(view) {
   const top = view.safeTop + 30;
-  const total = save.matches || 0;
-  const winRate = total ? Math.round((save.wins || 0) * 100 / total) : 0;
-  text(ctx, "战绩记录", view.width / 2, top, 22, "#2f2417", "center");
-  text(ctx, `总 ${total} · 胜 ${save.wins || 0} · 负 ${save.losses || 0} · 平 ${save.draws || 0} · 胜率 ${winRate}%`, view.width / 2, top + 28, 12, "#775c34", "center");
-  const history = (save.history || []).slice(0, 5);
-  if (!history.length) {
-    fillRoundRect(ctx, 24, top + 74, view.width - 48, 110, 18, "#fffaf0", "#dcc48d");
-    text(ctx, "还没有完成的对局", view.width / 2, top + 128, 15, "#775c34", "center");
-  }
-  history.forEach((item, index) => {
-    const y = top + 58 + index * 82;
-    fillRoundRect(ctx, 18, y, view.width - 36, 72, 12, "#fffaf0", "#dcc48d");
-    const title = item.endReason === "surrender" ? `${item.resultText} · 认输` : item.resultText;
-    text(ctx, `${title} · ${formatTime(item.time)}`, 34, y + 15, 13, resultColor(item));
-    text(ctx, `${item.humanFaction} vs ${item.aiFaction} · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty}`, 34, y + 34, 11, "#775c34");
-    if (item.humanLeader || item.aiLeader) {
-      wrapText(ctx, `${item.humanLeader || "主将"} / ${item.aiLeader || "系统主将"}`, 34, y + 51, view.width - 90, 14, 1, 10, "#6f5a3a");
-    }
-    wrapText(ctx, roundDetail(item), 34, y + 64, view.width - 90, 13, 1, 10, "#6f5a3a");
-    text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 34, 18, "#8f3c1f", "center");
-  });
   const bottom = view.height - view.safeBottom - 52;
-  const clearBtn = { id: "clear", x: 18, y: bottom, w: 112, h: 40 };
-  const back = { id: "back", x: 144, y: bottom, w: view.width - 162, h: 40 };
-  actions.push(clearBtn, back);
-  button(ctx, { ...clearBtn, label: "清空记录", size: 12, fill: "#8f3c1f" });
-  button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });
+  const listTop = top + 58;
+  const listBottom = bottom - 18;
+  const pageSize = Math.max(1, Math.floor((listBottom - listTop) / ROW_GAP));
+  return { top, bottom, listTop, pageSize };
 }
 
-module.exports = { draw };
+function pageState(view, ui, history, targetPage) {
+  const info = layout(view);
+  const totalPages = Math.max(1, Math.ceil(history.length / info.pageSize));
+  const page = targetPage == null ? (ui.historyPage || 0) : targetPage;
+  const safePage = Math.max(0, Math.min(page, totalPages - 1));
+  const start = safePage * info.pageSize;
+  return { ...info, totalPages, safePage, start, list: history.slice(start, start + info.pageSize) };
+}
+
+function clampPage(view, ui, page) {
+  return pageState(view, ui, loadSave().history || [], page).safePage;
+}
+
+function drawLeaderAvatar(ctx, actions, card, x, y, size, stroke) {
+  fillRoundRect(ctx, x - 3, y - 3, size + 6, size + 6, 9, "#fff7df", stroke);
+  if (card) {
+    actions.push({ id: "historyLeader", cardId: card.id, x: x - 8, y: y - 8, w: size + 16, h: size + 16 });
+    drawCardImage(ctx, { ...card, imageFill: true, imageX: x, imageY: y, imageW: size, imageH: size });
+  } else {
+    fillRoundRect(ctx, x, y, size, size, 8, "#d8c8aa", stroke);
+    text(ctx, "将", x + size / 2, y + size / 2, 11, "#fff7d8", "center");
+  }
+}
+
+function drawStreakBadge(ctx, badge, x, y) {
+  const w = 82;
+  const h = 26;
+  ctx.save();
+  ctx.shadowColor = "rgba(143, 60, 31, 0.32)";
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 2;
+  fillRoundRect(ctx, x, y, w, h, 13, "#f6d27a", "#fff1a8");
+  ctx.restore();
+  fillRoundRect(ctx, x + 4, y + 4, w - 8, h - 8, 9, badge.fill, "rgba(255,247,216,0.52)");
+  text(ctx, badge.text, x + w / 2, y + h / 2 + 0.5, 11, "#fff7d8", "center");
+}
+
+function draw(ctx, view, actions, ui = {}) {
+  clear(ctx, view.width, view.height);
+  const save = loadSave();
+  const allHistory = save.history || [];
+  const state = pageState(view, ui, allHistory);
+  ui.historyPage = state.safePage;
+  let detail = null;
+  if (ui.historyLeaderDetailId) {
+    detail = cardById(ui.historyLeaderDetailId);
+    if (!detail) ui.historyLeaderDetailId = "";
+  }
+  const total = save.matches || 0;
+  const winRate = total ? Math.round((save.wins || 0) * 100 / total) : 0;
+  text(ctx, "战绩记录", view.width / 2, state.top, 22, "#2f2417", "center");
+  text(ctx, `总 ${total} · 胜 ${save.wins || 0} · 负 ${save.losses || 0} · 平 ${save.draws || 0} · 胜率 ${winRate}%`, view.width / 2, state.top + 28, 12, "#775c34", "center");
+  const badges = streakBadges(allHistory);
+  if (!state.list.length) {
+    fillRoundRect(ctx, 24, state.top + 74, view.width - 48, 110, 18, "#fffaf0", "#dcc48d");
+    text(ctx, "还没有完成的对局", view.width / 2, state.top + 128, 15, "#775c34", "center");
+  }
+  state.list.forEach((item, index) => {
+    const globalIndex = state.start + index;
+    const y = state.listTop + index * ROW_GAP;
+    const style = resultStyle(item);
+    const badge = badges[globalIndex];
+    const humanLeader = leaderCard(item.humanLeaderId, item.humanLeader);
+    const aiLeader = leaderCard(item.aiLeaderId, item.aiLeader);
+    fillRoundRect(ctx, 18, y, view.width - 36, ROW_H, 13, style.fill, style.color);
+    fillRoundRect(ctx, 24, y + 10, 5, ROW_H - 20, 3, style.color);
+    fillRoundRect(ctx, 34, y + 8, 40, 18, 9, style.tagFill);
+    text(ctx, style.label, 54, y + 17, 10, "#fff7d8", "center");
+    if (badge) drawStreakBadge(ctx, badge, view.width - 128, y + 7);
+    const title = item.resultText || (item.endReason === "surrender" ? "认输" : "已结束");
+    text(ctx, `${title} · ${formatTime(item.time)}`, 82, y + 17, 13, style.color);
+    text(ctx, `${item.humanFaction} vs ${item.aiFaction} · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty}`, 34, y + 38, 11, "#775c34");
+    drawLeaderAvatar(ctx, actions, humanLeader, 34, y + 51, 24, "#2f6f57");
+    drawLeaderAvatar(ctx, actions, aiLeader, 64, y + 51, 24, "#9f3b24");
+    wrapText(ctx, `${short(item.humanLeader || "主将", 5)} / ${short(item.aiLeader || "系统主将", 5)}`, 98, y + 62, view.width - 178, 14, 1, 10, "#6f5a3a");
+    wrapText(ctx, roundDetail(item), 34, y + 82, view.width - 90, 13, 1, 10, "#6f5a3a");
+    text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 52, 18, style.color, "center");
+  });
+  if (state.totalPages > 1) {
+    text(ctx, `上下滑动查看更多 · ${state.safePage + 1}/${state.totalPages}`, view.width / 2, state.bottom - 16, 11, "#775c34", "center");
+  }
+  const back = { id: "back", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
+  actions.push(back);
+  button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });
+  if (detail) drawDetail(ctx, view, actions, detail);
+}
+
+module.exports = { draw, clampPage };
