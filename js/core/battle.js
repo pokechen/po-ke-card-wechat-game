@@ -14,7 +14,7 @@ const {
   tokenByName,
   cloneCard
 } = require("./cards");
-const { recordMatch, getActiveCustomDeckIds, getActiveCustomDeckSlotIndex } = require("./storage");
+const { recordMatch, getActiveCustomDeckIds } = require("./storage");
 
 const AI_DIFFICULTY = {
   easy: { blunder: 0.45, concede: false, valueNoise: 8, minLeadToStop: 99 },
@@ -74,23 +74,24 @@ function resolveAiLeaderId(options, faction, forceRandom) {
 }
 
 function createMatch(options = {}) {
-  const mode = options.mode === "hotseat" ? "hotseat" : "ai";
+  const mode = options.mode === "hotseat" || options.mode === "online" ? options.mode : "ai";
   const humanFaction = options.humanFaction || "Northern Realms";
   const aiFactionRandom = options.aiFaction === "random";
   const aiFaction = resolveAiFaction(options.aiFaction);
   const difficulty = options.difficulty || "normal";
-  const activeSlot = getActiveCustomDeckSlotIndex(options, humanFaction);
   const explicitCustomIds = Array.isArray(options.humanCustomDeckIds)
     ? options.humanCustomDeckIds
     : (Array.isArray(options.customDeckIds) ? options.customDeckIds : null);
   const customIds = explicitCustomIds || (options.customDeckEnabled ? getActiveCustomDeckIds(options, humanFaction) : []);
   const customStatus = deckStatus(customIds, humanFaction);
   const humanCustomDeckIds = customStatus.valid ? customStatus.ids : null;
+  const aiCustomStatus = deckStatus(Array.isArray(options.aiCustomDeckIds) ? options.aiCustomDeckIds : [], aiFaction);
+  const aiCustomDeckIds = aiCustomStatus.valid ? aiCustomStatus.ids : null;
   const humanLeaderId = options.humanLeaderIds?.[humanFaction] || options.humanLeaderId;
   const aiLeaderId = resolveAiLeaderId(options, aiFaction, aiFactionRandom);
   const players = [
     makePlayer("玩家一", 0, humanFaction, "normal", humanCustomDeckIds, humanLeaderId),
-    makePlayer(mode === "ai" ? "系统" : "玩家二", 1, aiFaction, difficulty, null, aiLeaderId)
+    makePlayer(mode === "ai" ? "系统" : "玩家二", 1, aiFaction, difficulty, mode === "online" ? aiCustomDeckIds : null, aiLeaderId)
   ];
   const state = {
     mode,
@@ -108,14 +109,16 @@ function createMatch(options = {}) {
     finalScores: [0, 0],
     pending: null,
     endReason: "normal",
-    historyRecorded: false
+    historyRecorded: false,
+    lastPlayed: null,
+    lastPlayedSeq: 0
   };
   draw(state.players[0], 10);
   draw(state.players[1], 10);
   if (mode === "ai") aiMulligan(state);
   recalcScores(state);
   addLog(state, `先换牌：每名玩家最多 ${state.mulligan.max} 张，换满后自动开始；也可直接开始。`);
-  if (humanCustomDeckIds) addLog(state, `玩家一已使用自定义牌组${activeSlot + 1}：${customStatus.total} 张。`);
+  if (humanCustomDeckIds) addLog(state, `玩家一已使用该阵营自定义牌组：${customStatus.total} 张。`);
   else if (options.customDeckEnabled) addLog(state, "自定义牌组未完成，已改用自动组牌。");
   addLog(state, `对局开始：${state.players[0].name}使用${state.players[0].factionName}，${state.players[1].name}使用${state.players[1].factionName}。`);
   return state;
@@ -172,7 +175,7 @@ function mulliganSwap(state, uid) {
 
 function finishMulligan(state) {
   if (!state.mulligan || !state.mulligan.active) return false;
-  if (state.mode === "hotseat" && state.mulligan.current === 0) {
+  if ((state.mode === "hotseat" || state.mode === "online") && state.mulligan.current === 0) {
     state.mulligan.current = 1;
     state.current = 1;
     addLog(state, "请玩家二换牌。 ");
@@ -314,6 +317,36 @@ function pendingRowsForCard(state, playerIndex, card) {
   return (card.row || []).slice();
 }
 
+function markLastPlayed(state, playerIndex, card, targetIndex, row) {
+  const seq = (state.lastPlayedSeq || 0) + 1;
+  state.lastPlayedSeq = seq;
+  const targetName = state.players[targetIndex]?.name || "目标";
+  const rowName = row ? ROW_LABELS[row] : "特殊效果";
+  state.lastPlayed = {
+    seq,
+    playerIndex,
+    playerName: state.players[playerIndex]?.name || "对手",
+    targetIndex,
+    targetName,
+    row,
+    rowName,
+    cardId: card.id,
+    cardUid: card.uid,
+    name: cardLabel(card),
+    baseName: card.baseName,
+    imageUrl: card.imageUrl,
+    summary: card.summary,
+    category: categoryLabel(card),
+    faction: card.faction,
+    cardRow: card.row,
+    abilities: card.abilities,
+    abilityDisplayNames: card.abilityDisplayNames,
+    hero: card.hero,
+    strength: card.category === "weather" || card.category === "special" ? "策" : card.strength,
+    description: row ? `${targetName} · ${rowName}` : categoryLabel(card)
+  };
+}
+
 function playCard(state, cardUid, preferredRow) {
   if (state.over || state.pending || (state.mulligan && state.mulligan.active)) return false;
   const player = currentPlayer(state);
@@ -333,14 +366,17 @@ function playCard(state, cardUid, preferredRow) {
   }
   player.hand.splice(index, 1);
   if (card.category === "weather" || card.category === "special") {
-    resolveSpecial(state, player.index, card, preferredRow || rowForCard(state, player.index, card));
+    const row = preferredRow || rowForCard(state, player.index, card);
+    resolveSpecial(state, player.index, card, row);
     player.discard.push(card);
     addLog(state, `${player.name}打出${categoryLabel(card)}「${cardLabel(card)}」。`);
+    markLastPlayed(state, player.index, card, player.index, row);
   } else {
     const target = boardTargetForCard(player.index, card);
     const row = preferredRow || rowForCard(state, player.index, card) || "melee";
     placeUnitOnBoard(state, player.index, target, row, card);
     addLog(state, `${player.name}打出「${cardLabel(card)}」到${target === player.index ? "己方" : "对方"}${ROW_LABELS[row]}。`);
+    markLastPlayed(state, player.index, card, target, row);
     resolveUnitAbility(state, player.index, target, row, card);
   }
   if (!state.pending) afterPlay(state);

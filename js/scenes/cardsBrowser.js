@@ -72,7 +72,7 @@ function getPageState(view, ui, targetPage) {
   const totalPages = Math.max(1, Math.ceil(cards.length / layout.pageSize));
   const page = targetPage == null ? (ui.cardPage || 0) : targetPage;
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
-  const list = cards.slice(safePage * layout.pageSize, safePage * layout.pageSize + layout.pageSize);
+  const list = cards.slice(safePage * layout.pageSize, safePage * layout.pageSize + layout.pageSize + 1);
   return { ...layout, cards, totalPages, safePage, list };
 }
 
@@ -282,6 +282,8 @@ function draw(ctx, view, actions, ui) {
     if (!detail) ui.cardDetailId = "";
   }
   const { top, bottom, filtersTop, listTop, rowGap, cards, totalPages, safePage, list } = getPageState(view, ui);
+  const listBottom = bottom - 26;
+  const transitionY = ui.pageTransition?.scene === "cards" ? ui.pageTransition.offset || 0 : 0;
   ui.cardPage = safePage;
   text(ctx, "卡牌图鉴", view.width / 2, top, 22, "#2f2417", "center");
   text(ctx, `${safePage + 1}/${totalPages} · 命中 ${cards.length} 张`, view.width / 2, top + 26, 12, "#775c34", "center");
@@ -300,8 +302,12 @@ function draw(ctx, view, actions, ui) {
     fillRoundRect(ctx, 24, listTop + 28, view.width - 48, 92, 16, "#fffaf0", "#dcc48d");
     text(ctx, "没有符合条件的卡牌", view.width / 2, listTop + 74, 14, "#775c34", "center");
   }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, listTop - 4, view.width, listBottom - listTop + 4);
+  ctx.clip();
   list.forEach((card, index) => {
-    const y = listTop + index * rowGap;
+    const y = listTop + index * rowGap + transitionY;
     const rect = { id: "cardDetail", cardId: card.id, x: 18, y, w: view.width - 36, h: 66 };
     actions.push(rect);
     fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 12, "#fffaf0", "#dcc48d");
@@ -316,7 +322,15 @@ function draw(ctx, view, actions, ui) {
     actions.push(detail);
     button(ctx, { ...detail, label: "详情", fill: "#4f6d8a", stroke: "#36516a", size: 10, r: 8 });
   });
-  text(ctx, "上下滑动翻页 · 点击卡牌展开详细说明", view.width / 2, bottom - 14, 11, "#775c34", "center");
+  ctx.restore();
+  if (safePage < totalPages - 1) {
+    ctx.save();
+    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, listBottom - 30, 0, listBottom) : null;
+    if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
+    else ctx.fillStyle = "rgba(255,250,240,0.72)";
+    ctx.fillRect(0, listBottom - 30, view.width, 30);
+    ctx.restore();
+  }
   const back = { id: "back", x: 46, y: bottom, w: view.width - 92, h: 40 };
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });

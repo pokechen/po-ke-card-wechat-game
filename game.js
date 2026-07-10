@@ -21,6 +21,8 @@ const app = {
   actions: [],
   match: null,
   aiTimer: null,
+  recentPlayTimer: null,
+  recentPlayTimerSeq: 0,
   pvp: {
     roomId: "",
     room: null,
@@ -50,15 +52,79 @@ const app = {
     settingDropdown: "",
     settingCardTab: "all",
     settingDeckPage: 0,
-    settingSelectedSlotIndex: null,
     matchSetupDropdown: "",
     deckSlotDropdown: "",
     historyPage: 0,
-    historyLeaderDetailId: ""
+    historyLeaderDetailId: "",
+    dismissedRecentPlaySeq: 0,
+    discardPileOwner: null,
+    discardPilePage: 0,
+    pageTransition: null
   }
 };
 
 setImageRenderHook(() => render());
+
+const RECENT_PLAY_AUTO_DISMISS_MS = 2800;
+const PAGE_TRANSITION_MS = 180;
+
+function requestFrame(callback) {
+  if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
+  return setTimeout(callback, 16);
+}
+
+function startPageTransition(scene, axis, fromOffset) {
+  const start = Date.now();
+  app.ui.pageTransition = { scene, axis, offset: fromOffset };
+  function step() {
+    const progress = Math.min(1, (Date.now() - start) / PAGE_TRANSITION_MS);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    if (app.ui.pageTransition?.scene !== scene) return;
+    app.ui.pageTransition.offset = fromOffset * (1 - eased);
+    render();
+    if (progress < 1) requestFrame(step);
+    else {
+      app.ui.pageTransition = null;
+      render();
+    }
+  }
+  requestFrame(step);
+}
+
+function clearRecentPlayTimer() {
+  if (app.recentPlayTimer) {
+    clearTimeout(app.recentPlayTimer);
+    app.recentPlayTimer = null;
+  }
+  app.recentPlayTimerSeq = 0;
+}
+
+function visibleRecentPlaySeq() {
+  const notice = app.match?.lastPlayed;
+  if (app.scene !== "battle" || !app.match || !notice || app.match.over || app.match.mulligan?.active) return 0;
+  const localPlayerIndex = app.match.mode === "online" && Number.isInteger(app.match.localPlayerIndex) ? app.match.localPlayerIndex : 0;
+  if (notice.playerIndex === localPlayerIndex) return 0;
+  if (notice.seq <= (app.ui.dismissedRecentPlaySeq || 0)) return 0;
+  return notice.seq || 0;
+}
+
+function scheduleRecentPlayAutoDismiss() {
+  const seq = visibleRecentPlaySeq();
+  if (!seq) {
+    clearRecentPlayTimer();
+    return;
+  }
+  if (app.recentPlayTimer && app.recentPlayTimerSeq === seq) return;
+  clearRecentPlayTimer();
+  app.recentPlayTimerSeq = seq;
+  app.recentPlayTimer = setTimeout(() => {
+    app.recentPlayTimer = null;
+    app.recentPlayTimerSeq = 0;
+    if (visibleRecentPlaySeq() !== seq) return;
+    app.ui.dismissedRecentPlaySeq = Math.max(app.ui.dismissedRecentPlaySeq || 0, seq);
+    render();
+  }, RECENT_PLAY_AUTO_DISMISS_MS);
+}
 
 function clearAiTimer() {
   if (app.aiTimer) {
@@ -68,7 +134,10 @@ function clearAiTimer() {
 }
 
 function setScene(scene) {
-  if (scene !== "battle") clearAiTimer();
+  if (scene !== "battle") {
+    clearAiTimer();
+    clearRecentPlayTimer();
+  }
   app.scene = scene;
   render();
 }
@@ -77,6 +146,10 @@ function startMatch(optionsPatch = {}) {
   clearAiTimer();
   app.ui.handPage = 0;
   app.ui.battleCardDetailId = "";
+  app.ui.discardPileOwner = null;
+  app.ui.discardPilePage = 0;
+  app.ui.dismissedRecentPlaySeq = 0;
+  clearRecentPlayTimer();
   const settings = { ...loadSettings(), ...optionsPatch };
   app.match = createMatch(settings);
   app.ui.showCardGuide = !loadSave().finishedTutorial;
@@ -95,6 +168,7 @@ function render() {
   if (app.scene === "history") historyScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "battle") battleScene.draw(ctx, view, app.actions, app.match, app.ui);
   if (app.scene === "result") resultScene.draw(ctx, view, app.actions, app.match);
+  scheduleRecentPlayAutoDismiss();
 }
 
 function scheduleAi() {
@@ -156,6 +230,10 @@ function shareGame() {
     console.warn("[share] shareAppMessage failed", err);
     toast("分享失败，请稍后重试");
   }
+}
+
+function normalizePvpRoomId(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 }
 
 function currentPlayerSetup() {
@@ -235,8 +313,8 @@ function createPvpRoom() {
 }
 
 function joinPvpRoom(roomId) {
-  const safeRoomId = String(roomId || "").trim().toUpperCase();
-  if (!safeRoomId) return toast("请输入房间号");
+  const safeRoomId = normalizePvpRoomId(roomId);
+  if (!safeRoomId) return toast("请输入有效房间号");
   resetPvpState();
   app.pvp.roomId = safeRoomId;
   app.pvp.loading = true;
@@ -272,11 +350,11 @@ function promptJoinPvpRoom() {
 function handleLaunchRoom() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return;
-  const roomId = api.getLaunchOptionsSync ? api.getLaunchOptionsSync()?.query?.roomId : "";
+  const roomId = normalizePvpRoomId(api.getLaunchOptionsSync ? api.getLaunchOptionsSync()?.query?.roomId : "");
   if (roomId) setTimeout(() => joinPvpRoom(roomId), 80);
   if (api.onShow) {
     api.onShow(options => {
-      const nextRoomId = options?.query?.roomId;
+      const nextRoomId = normalizePvpRoomId(options?.query?.roomId);
       if (nextRoomId && nextRoomId !== app.pvp.roomId) joinPvpRoom(nextRoomId);
     });
   }
@@ -344,7 +422,6 @@ function handleMenu(action) {
   if (action.id === "settings") {
     app.ui.settingDropdown = "";
     app.ui.settingDeckPage = 0;
-    app.ui.settingSelectedSlotIndex = null;
     return setScene("settings");
   }
   if (action.id === "cards") {
@@ -379,10 +456,6 @@ function applyMatchSetupOption(action) {
   if (field === "humanLeader") {
     saveSettings({ humanLeaderIds: { ...(settings.humanLeaderIds || {}), [settings.humanFaction]: value } });
   }
-  if (field === "customDeckSlot") {
-    app.ui.deckPage = 0;
-    switchCustomDeckSlot(settings.humanFaction, Number(value));
-  }
   if (field === "aiFaction") saveSettings({ aiFaction: value, aiOpponentRemembered: true });
   if (field === "aiLeader") {
     saveSettings({ aiLeaderIds: { ...(settings.aiLeaderIds || {}), [settings.aiFaction]: value }, aiOpponentRemembered: true });
@@ -392,7 +465,7 @@ function applyMatchSetupOption(action) {
 }
 
 function handleMatchSetup(action) {
-  const selectFields = ["humanFaction", "humanLeader", "customDeckSlot", "aiFaction", "aiLeader", "difficulty"];
+  const selectFields = ["humanFaction", "humanLeader", "aiFaction", "aiLeader", "difficulty"];
   if (action.id === "matchSetupCardDetail") {
     app.ui.matchSetupDropdown = "";
     app.ui.matchSetupCardDetailId = action.cardId || "";
@@ -419,6 +492,12 @@ function handleMatchSetup(action) {
   const faction = settings.humanFaction;
   const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
+  const useCustomDeck = status.valid && settings.customDeckEnabled;
+  if (action.id === "togglePreparedDeckMode") {
+    if (!status.valid) return render();
+    saveSettings({ customDeckEnabled: !useCustomDeck });
+    return render();
+  }
   if (action.id === "editCustomDeck") {
     app.ui.deckPage = 0;
     app.ui.deckSlotDropdown = "";
@@ -426,10 +505,10 @@ function handleMatchSetup(action) {
     return setScene("deckBuilder");
   }
   if (action.id === "startPrepared") {
-    const startOptions = status.valid
+    const startOptions = useCustomDeck
       ? { mode: "ai", customDeckEnabled: true, humanCustomDeckIds: status.ids }
       : { mode: "ai", customDeckEnabled: false };
-    saveSettings({ mode: "ai", customDeckEnabled: status.valid });
+    saveSettings({ mode: "ai", customDeckEnabled: useCustomDeck });
     return startMatch(startOptions);
   }
   if (action.id === "back") return setScene("menu");
@@ -444,10 +523,6 @@ function applySettingOption(action) {
   if (field === "humanLeader") {
     saveSettings({ humanLeaderIds: { ...(settings.humanLeaderIds || {}), [settings.humanFaction]: value } });
   }
-  if (field === "customDeckSlot") {
-    app.ui.settingDeckPage = 0;
-    app.ui.settingSelectedSlotIndex = Math.max(0, Number(value) || 0);
-  }
   render();
 }
 
@@ -455,77 +530,33 @@ function toast(title) {
   if (typeof wx !== "undefined" && wx.showToast) wx.showToast({ title, icon: "none" });
 }
 
-function saveDeckSetup(slotIndex, name, idsOverride) {
-  const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const slots = getCustomDeckSlots(settings, faction);
-  const safeIndex = Math.max(0, Math.min(slots.length - 1, slotIndex || 0));
-  const leader = leadersFor(faction).find(card => card.id === settings.humanLeaderIds?.[faction]) || leadersFor(faction)[0];
-  const ids = Array.isArray(idsOverride) ? idsOverride : slots[safeIndex].ids;
-  const status = deckStatus(ids, faction);
-  saveCustomDeckSlot(faction, safeIndex, status.ids, status.valid, name || slots[safeIndex].name, true);
-  saveSettings({
-    humanLeaderIds: leader ? { ...(settings.humanLeaderIds || {}), [faction]: leader.id } : (settings.humanLeaderIds || {}),
-    customDeckEnabled: status.valid
-  });
-  toast(status.valid ? "已保存牌组" : "已保存，牌组未完成");
+function actionCardIds(action) {
+  if (Array.isArray(action.cardIds)) return action.cardIds.filter(Boolean);
+  return action.cardId ? [action.cardId] : [];
 }
 
-function promptDeckNameAndSave(slotIndex, idsOverride) {
-  const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const slots = getCustomDeckSlots(settings, faction);
-  const safeIndex = Math.max(0, Math.min(slots.length - 1, slotIndex || 0));
-  const currentName = slots[safeIndex].name || `牌组${safeIndex + 1}`;
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api || !api.showModal) {
-    saveDeckSetup(safeIndex, currentName, idsOverride);
-    app.ui.settingSelectedSlotIndex = safeIndex;
-    return render();
-  }
-  api.showModal({
-    title: `保存到牌组${safeIndex + 1}`,
-    content: "设置牌组名称",
-    editable: true,
-    placeholderText: currentName,
-    success: res => {
-      if (!res.confirm) return render();
-      const name = String(res.content || currentName).trim().slice(0, 12) || currentName;
-      saveDeckSetup(safeIndex, name, idsOverride);
-      app.ui.settingSelectedSlotIndex = safeIndex;
-      render();
-    },
-    fail: () => {
-      saveDeckSetup(safeIndex, currentName, idsOverride);
-      app.ui.settingSelectedSlotIndex = safeIndex;
-      render();
-    }
-  });
+function addOneCardFromGroup(currentIds, groupIds, faction) {
+  const nextId = groupIds.find(id => !currentIds.includes(id));
+  if (!nextId) return currentIds;
+  const card = cardById(nextId);
+  if (!card) return currentIds;
+  const status = deckStatus(currentIds, faction);
+  const isSpecial = card.category === "special" || card.category === "weather";
+  if (status.total >= 40 || (isSpecial && status.specials >= 10)) return currentIds;
+  return currentIds.concat(nextId);
 }
 
-function chooseDeckSlotAndSave(defaultSlotIndex, idsOverride) {
-  const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const slots = getCustomDeckSlots(settings, faction);
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api || !api.showActionSheet) return promptDeckNameAndSave(defaultSlotIndex == null ? 0 : defaultSlotIndex, idsOverride);
-  api.showActionSheet({
-    itemList: slots.map((slot, index) => slotStatusLabelForAction(slot, index, faction)),
-    success: res => promptDeckNameAndSave(res.tapIndex, idsOverride),
-    fail: () => render()
-  });
-}
-
-function slotStatusLabelForAction(slot, index, faction) {
-  const status = deckStatus(slot.ids, faction);
-  const name = slot.name || `牌组${index + 1}`;
-  if (status.valid) return `${name}（已存 ${status.total}张）`;
-  if (status.total) return `${name}（未完成 ${status.total}张）`;
-  return `${name}（空）`;
+function removeOneCardFromGroup(currentIds, groupIds) {
+  const groupSet = new Set(groupIds);
+  const index = currentIds.map(id => groupSet.has(id)).lastIndexOf(true);
+  if (index < 0) return currentIds;
+  const nextIds = currentIds.slice();
+  nextIds.splice(index, 1);
+  return nextIds;
 }
 
 function handleSettings(action) {
-  const selectFields = ["humanLeader", "customDeckSlot"];
+  const selectFields = ["humanLeader"];
   if (action.id === "settingCardDetail") {
     app.ui.settingDropdown = "";
     app.ui.settingCardDetailId = action.cardId || "";
@@ -549,7 +580,6 @@ function handleSettings(action) {
   if (action.id === "selectSettingFaction") {
     app.ui.settingDropdown = "";
     app.ui.settingDeckPage = 0;
-    app.ui.settingSelectedSlotIndex = null;
     saveSettings({ humanFaction: action.faction });
     return render();
   }
@@ -558,72 +588,34 @@ function handleSettings(action) {
     app.ui.settingDeckPage = 0;
     return render();
   }
-  if (action.id === "toggleSettingCard") {
+  if (action.id === "addSettingCard" || action.id === "removeSettingCard") {
     const settings = loadSettings();
     const faction = settings.humanFaction;
-    const slots = getCustomDeckSlots(settings, faction);
-    const slotIndex = app.ui.settingSelectedSlotIndex;
-    if (slotIndex == null) {
-      app.ui.settingDropdown = "customDeckSlot";
-      return render();
-    }
-    const safeIndex = Math.max(0, Math.min(slots.length - 1, Number(slotIndex) || 0));
-    const currentIds = slots[safeIndex].ids.slice();
-    const card = cardById(action.cardId);
-    if (!card) return render();
-    const exists = currentIds.includes(card.id);
-    let nextIds = exists ? currentIds.filter(id => id !== card.id) : currentIds;
-    if (!exists) {
-      const status = deckStatus(currentIds, faction);
-      const isSpecial = card.category === "special" || card.category === "weather";
-      if (status.total < 40 && (!isSpecial || status.specials < 10)) nextIds = currentIds.concat(card.id);
-    }
+    const currentIds = getActiveCustomDeckIds(settings, faction).slice();
+    const groupIds = actionCardIds(action);
+    const nextIds = action.id === "removeSettingCard"
+      ? removeOneCardFromGroup(currentIds, groupIds)
+      : addOneCardFromGroup(currentIds, groupIds, faction);
     const nextStatus = deckStatus(nextIds, faction);
-    saveCustomDeckSlot(faction, safeIndex, nextStatus.ids, null, slots[safeIndex].name, false);
+    saveCustomDeckSlot(faction, 0, nextStatus.ids, nextStatus.valid, null, true);
     return render();
   }
   if (action.id === "autoCustomDeck") {
     const settings = loadSettings();
     const faction = settings.humanFaction;
-    const slots = getCustomDeckSlots(settings, faction);
-    const slotIndex = app.ui.settingSelectedSlotIndex;
     app.ui.settingDropdown = "";
     app.ui.settingDeckPage = 0;
-    if (slotIndex == null) {
-      app.ui.settingDropdown = "customDeckSlot";
-      toast("请先选择牌组");
-      return render();
-    }
-    const safeIndex = Math.max(0, Math.min(slots.length - 1, Number(slotIndex) || 0));
-    saveCustomDeckSlot(faction, safeIndex, recommendedDeckIds(faction, "normal"), null, slots[safeIndex].name, false);
-    toast("已推荐，可继续调整后保存");
+    saveCustomDeckSlot(faction, 0, recommendedDeckIds(faction, "normal"), true, null, true);
+    toast("已随机推荐，可继续调整");
     return render();
   }
   if (action.id === "clearCustomDeck") {
     const settings = loadSettings();
     const faction = settings.humanFaction;
-    const slots = getCustomDeckSlots(settings, faction);
-    const slotIndex = app.ui.settingSelectedSlotIndex;
     app.ui.settingDropdown = "";
     app.ui.settingDeckPage = 0;
-    if (slotIndex == null) {
-      app.ui.settingDropdown = "customDeckSlot";
-      toast("请先选择牌组");
-      return render();
-    }
-    const safeIndex = Math.max(0, Math.min(slots.length - 1, Number(slotIndex) || 0));
-    saveCustomDeckSlot(faction, safeIndex, [], null, slots[safeIndex].name, false);
+    saveCustomDeckSlot(faction, 0, [], false, null, true);
     return render();
-  }
-  if (action.id === "saveDeckSetup") {
-    const settings = loadSettings();
-    const faction = settings.humanFaction;
-    const slots = getCustomDeckSlots(settings, faction);
-    const slotIndex = app.ui.settingSelectedSlotIndex;
-    const safeIndex = slotIndex == null ? null : Math.max(0, Math.min(slots.length - 1, Number(slotIndex) || 0));
-    app.ui.settingDropdown = "";
-    chooseDeckSlotAndSave(safeIndex, safeIndex == null ? null : slots[safeIndex].ids.slice());
-    return;
   }
   if (action.id === "back") {
     app.ui.settingDropdown = "";
@@ -767,7 +759,7 @@ function saveCustomDeckSlot(faction, slotIndex, ids, enabled, name, activate = t
   const slots = getCustomDeckSlots(settings, faction);
   const safeIndex = Math.max(0, Math.min(slots.length - 1, slotIndex || 0));
   const nextIds = Array.isArray(ids) ? ids.slice(0, 40) : [];
-  slots[safeIndex] = { ...slots[safeIndex], ids: nextIds, name: String(name || slots[safeIndex].name || `牌组${safeIndex + 1}`).slice(0, 12) };
+  slots[safeIndex] = { ...slots[safeIndex], ids: nextIds, name: "自定义牌组" };
   const nextSlots = { ...(settings.customDeckSlots || {}), [faction]: slots };
   const patch = { customDeckSlots: nextSlots };
   if (activate) {
@@ -776,19 +768,6 @@ function saveCustomDeckSlot(faction, slotIndex, ids, enabled, name, activate = t
   }
   if (enabled != null) patch.customDeckEnabled = enabled;
   saveSettings(patch);
-}
-
-function switchCustomDeckSlot(faction, slotIndex) {
-  const settings = loadSettings();
-  const slots = getCustomDeckSlots(settings, faction);
-  const safeIndex = Math.max(0, Math.min(slots.length - 1, slotIndex || 0));
-  const ids = slots[safeIndex].ids;
-  const status = deckStatus(ids, faction);
-  saveSettings({
-    activeCustomDeckSlot: { ...(settings.activeCustomDeckSlot || {}), [faction]: safeIndex },
-    customDecks: { ...(settings.customDecks || {}), [faction]: ids },
-    customDeckEnabled: settings.customDeckEnabled && status.valid
-  });
 }
 
 function handleDeckBuilder(action) {
@@ -807,21 +786,6 @@ function handleDeckBuilder(action) {
     return render();
   }
   if (app.ui.deckCardDetailId) return render();
-  if (action.id === "closeDeckSlotDropdown") {
-    app.ui.deckSlotDropdown = "";
-    return render();
-  }
-  if (action.id === "selectDeckSlotOption") {
-    app.ui.deckSlotDropdown = "";
-    app.ui.deckPage = 0;
-    switchCustomDeckSlot(faction, action.slotIndex);
-    return render();
-  }
-  if (action.id === "customDeckSlot") {
-    app.ui.deckSlotDropdown = app.ui.deckSlotDropdown === "slot" ? "" : "slot";
-    return render();
-  }
-
   app.ui.deckSlotDropdown = "";
   if (action.id === "backSettings") return setScene(app.ui.deckReturnScene || "settings");
   if (action.id === "autoCustomDeck") {
@@ -832,16 +796,11 @@ function handleDeckBuilder(action) {
     saveCustomDeckSlot(faction, slotIndex, [], false);
     app.ui.deckPage = 0;
   }
-  if (action.id === "toggleCustomCard") {
-    const card = cardById(action.cardId);
-    if (!card) return render();
-    const exists = currentIds.includes(card.id);
-    let nextIds = exists ? currentIds.filter(id => id !== card.id) : currentIds;
-    if (!exists) {
-      const status = deckStatus(currentIds, faction);
-      const isSpecial = card.category === "special" || card.category === "weather";
-      if (status.total < 40 && (!isSpecial || status.specials < 10)) nextIds = currentIds.concat(card.id);
-    }
+  if (action.id === "addCustomCard" || action.id === "removeCustomCard") {
+    const groupIds = actionCardIds(action);
+    const nextIds = action.id === "removeCustomCard"
+      ? removeOneCardFromGroup(currentIds, groupIds)
+      : addOneCardFromGroup(currentIds, groupIds, faction);
     const nextStatus = deckStatus(nextIds, faction);
     saveCustomDeckSlot(faction, slotIndex, nextStatus.ids, nextStatus.valid);
   }
@@ -882,6 +841,11 @@ function handleBattle(action) {
     return render();
   }
   if (!app.match) return;
+  if (action.id === "dismissRecentPlay") {
+    app.ui.dismissedRecentPlaySeq = Math.max(app.ui.dismissedRecentPlaySeq || 0, action.seq || app.match.lastPlayed?.seq || 0);
+    clearRecentPlayTimer();
+    return render();
+  }
   if (action.id === "battleCardDetail") {
     app.ui.battleCardDetailId = action.cardId || "";
     return render();
@@ -892,6 +856,27 @@ function handleBattle(action) {
     return render();
   }
   if (app.ui.battleCardDetailId) return render();
+  if (action.id === "viewDiscardPile") {
+    app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
+    app.ui.discardPilePage = 0;
+    return render();
+  }
+  if (action.id === "closeDiscardPile") {
+    app.ui.discardPileOwner = null;
+    app.ui.discardPilePage = 0;
+    return render();
+  }
+  if (action.id === "switchDiscardPile") {
+    app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
+    app.ui.discardPilePage = 0;
+    return render();
+  }
+  if (action.id === "discardPilePage") {
+    app.ui.discardPilePage = Math.max(0, (app.ui.discardPilePage || 0) + (action.delta || 0));
+    return render();
+  }
+  if (action.id === "discardPilePanel") return render();
+  if (app.ui.discardPileOwner != null) return render();
   if (action.id === "home") {
     if (app.match.over) {
       if (isOnlineMatch()) resetPvpState();
@@ -990,8 +975,29 @@ function normalizeTouch(event) {
   return { x: touch.clientX ?? touch.x, y: touch.clientY ?? touch.y };
 }
 
+function handleDiscardPileSwipe(start, end) {
+  if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.discardPileOwner == null) return false;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  const panelY = view.safeTop + 74;
+  const panelH = Math.max(300, Math.min(390, view.height - view.safeTop - view.safeBottom - 178));
+  if (start.y < panelY || start.y > panelY + panelH || absY < 42 || absY < absX * 1.2) return false;
+  const owner = app.match.players[app.ui.discardPileOwner] ? app.ui.discardPileOwner : 0;
+  const pile = app.match.players[owner]?.discard || [];
+  const pageSize = Math.max(3, Math.floor((panelH - 124) / 48));
+  const totalPages = Math.max(1, Math.ceil(pile.length / pageSize));
+  const nextPage = Math.max(0, Math.min((app.ui.discardPilePage || 0) + (dy < 0 ? 1 : -1), totalPages - 1));
+  if (nextPage !== app.ui.discardPilePage) {
+    app.ui.discardPilePage = nextPage;
+    render();
+  }
+  return true;
+}
+
 function handleHandSwipe(start, end) {
-  if (!start || !end || app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId) return false;
+  if (!start || !end || app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId || app.ui.discardPileOwner != null) return false;
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.2) return false;
@@ -1001,7 +1007,7 @@ function handleHandSwipe(start, end) {
   const nextPage = clampHandPage(app.ui.handPage + (dx < 0 ? 1 : -1));
   if (nextPage !== app.ui.handPage) {
     app.ui.handPage = nextPage;
-    render();
+    startPageTransition("battleHand", "x", dx < 0 ? view.width * 0.38 : -view.width * 0.38);
   }
   return true;
 }
@@ -1018,7 +1024,7 @@ function handleCardsSwipe(start, end) {
   const nextPage = cardsScene.clampPage(view, app.ui, (app.ui.cardPage || 0) + (dy < 0 ? 1 : -1));
   if (nextPage !== app.ui.cardPage) {
     app.ui.cardPage = nextPage;
-    render();
+    startPageTransition("cards", "y", dy < 0 ? 76 : -76);
   }
   return true;
 }
@@ -1035,7 +1041,7 @@ function handleDeckBuilderSwipe(start, end) {
   const nextPage = deckBuilderScene.clampPage(view, app.ui, (app.ui.deckPage || 0) + (dy < 0 ? 1 : -1));
   if (nextPage !== app.ui.deckPage) {
     app.ui.deckPage = nextPage;
-    render();
+    startPageTransition("deckBuilder", "y", dy < 0 ? 68 : -68);
   }
   return true;
 }
@@ -1052,7 +1058,7 @@ function handleSettingsSwipe(start, end) {
   const nextPage = settingsScene.clampPage(view, app.ui, (app.ui.settingDeckPage || 0) + (dy < 0 ? 1 : -1));
   if (nextPage !== app.ui.settingDeckPage) {
     app.ui.settingDeckPage = nextPage;
-    render();
+    startPageTransition("settings", "y", dy < 0 ? 68 : -68);
   }
   return true;
 }
@@ -1069,7 +1075,7 @@ function handleHistorySwipe(start, end) {
   const nextPage = historyScene.clampPage(view, app.ui, (app.ui.historyPage || 0) + (dy < 0 ? 1 : -1));
   if (nextPage !== app.ui.historyPage) {
     app.ui.historyPage = nextPage;
-    render();
+    startPageTransition("history", "y", dy < 0 ? 98 : -98);
   }
   return true;
 }
@@ -1103,6 +1109,14 @@ function openHistoryLeaderDetail(cardId) {
   render();
 }
 
+function openMatchSetupCardDetail(cardId) {
+  if (!cardId) return;
+  app.ui.matchSetupDropdown = "";
+  app.ui.matchSetupCardDetailId = cardId;
+  vibrate();
+  render();
+}
+
 function startLongPress(point) {
   const action = findAction(point);
   if (!action || !action.cardId) return;
@@ -1112,6 +1126,9 @@ function startLongPress(point) {
   }
   if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
     openDetail = openHistoryLeaderDetail;
+  }
+  if (app.scene === "matchSetup" && !app.ui.matchSetupCardDetailId && ["humanLeader", "aiLeader", "selectMatchSetupOption"].includes(action.id)) {
+    openDetail = openMatchSetupCardDetail;
   }
   if (!openDetail) return;
   touchStartState.longPressTimer = setTimeout(() => {
@@ -1158,6 +1175,7 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
     if (state && state.longPressTimer) clearTimeout(state.longPressTimer);
     if (state && state.longPressFired) return;
     const start = state?.point || point;
+    if (handleDiscardPileSwipe(start, point)) return;
     if (handleHandSwipe(start, point)) return;
     if (handleCardsSwipe(start, point)) return;
     if (handleHistorySwipe(start, point)) return;

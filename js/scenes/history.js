@@ -89,7 +89,7 @@ function pageState(view, ui, history, targetPage) {
   const page = targetPage == null ? (ui.historyPage || 0) : targetPage;
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
   const start = safePage * info.pageSize;
-  return { ...info, totalPages, safePage, start, list: history.slice(start, start + info.pageSize) };
+  return { ...info, totalPages, safePage, start, list: history.slice(start, start + info.pageSize + 1) };
 }
 
 function clampPage(view, ui, page) {
@@ -125,6 +125,8 @@ function draw(ctx, view, actions, ui = {}) {
   const save = loadSave();
   const allHistory = save.history || [];
   const state = pageState(view, ui, allHistory);
+  const transitionY = ui.pageTransition?.scene === "history" ? ui.pageTransition.offset || 0 : 0;
+  const listBottom = state.bottom - 18;
   ui.historyPage = state.safePage;
   let detail = null;
   if (ui.historyLeaderDetailId) {
@@ -140,29 +142,41 @@ function draw(ctx, view, actions, ui = {}) {
     fillRoundRect(ctx, 24, state.top + 74, view.width - 48, 110, 18, "#fffaf0", "#dcc48d");
     text(ctx, "还没有完成的对局", view.width / 2, state.top + 128, 15, "#775c34", "center");
   }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, state.listTop - 4, view.width, listBottom - state.listTop + 4);
+  ctx.clip();
   state.list.forEach((item, index) => {
     const globalIndex = state.start + index;
-    const y = state.listTop + index * ROW_GAP;
+    const y = state.listTop + index * ROW_GAP + transitionY;
     const style = resultStyle(item);
     const badge = badges[globalIndex];
     const humanLeader = leaderCard(item.humanLeaderId, item.humanLeader);
-    const aiLeader = leaderCard(item.aiLeaderId, item.aiLeader);
     fillRoundRect(ctx, 18, y, view.width - 36, ROW_H, 13, style.fill, style.color);
     fillRoundRect(ctx, 24, y + 10, 5, ROW_H - 20, 3, style.color);
     fillRoundRect(ctx, 34, y + 8, 40, 18, 9, style.tagFill);
     text(ctx, style.label, 54, y + 17, 10, "#fff7d8", "center");
     if (badge) drawStreakBadge(ctx, badge, view.width - 128, y + 7);
     const title = item.resultText || (item.endReason === "surrender" ? "认输" : "已结束");
-    text(ctx, `${title} · ${formatTime(item.time)}`, 82, y + 17, 13, style.color);
-    text(ctx, `${item.humanFaction} vs ${item.aiFaction} · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty}`, 34, y + 38, 11, "#775c34");
-    drawLeaderAvatar(ctx, actions, humanLeader, 34, y + 51, 24, "#2f6f57");
-    drawLeaderAvatar(ctx, actions, aiLeader, 64, y + 51, 24, "#9f3b24");
-    wrapText(ctx, `${short(item.humanLeader || "主将", 5)} / ${short(item.aiLeader || "系统主将", 5)}`, 98, y + 62, view.width - 178, 14, 1, 10, "#6f5a3a");
-    wrapText(ctx, roundDetail(item), 34, y + 82, view.width - 90, 13, 1, 10, "#6f5a3a");
-    text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 52, 18, style.color, "center");
+    const avatarSize = 54;
+    const avatarY = y + 30;
+    drawLeaderAvatar(ctx, actions, humanLeader, 36, avatarY, avatarSize, style.color);
+    const textX = 104;
+    const textW = view.width - textX - 72;
+    text(ctx, `${title} · ${formatTime(item.time)}`, textX, y + 18, 13, style.color);
+    wrapText(ctx, `我方 ${item.humanFaction || "阵营"} · ${short(item.humanLeader || "主将", 8)}`, textX, y + 40, textW, 14, 1, 11, "#3b2b18");
+    wrapText(ctx, `对手 ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通"}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
+    wrapText(ctx, roundDetail(item), textX, y + 80, textW, 13, 1, 10, "#6f5a3a");
+    text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 54, 18, style.color, "center");
   });
-  if (state.totalPages > 1) {
-    text(ctx, `上下滑动查看更多 · ${state.safePage + 1}/${state.totalPages}`, view.width / 2, state.bottom - 16, 11, "#775c34", "center");
+  ctx.restore();
+  if (state.safePage < state.totalPages - 1) {
+    ctx.save();
+    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, listBottom - 30, 0, listBottom) : null;
+    if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
+    else ctx.fillStyle = "rgba(255,250,240,0.72)";
+    ctx.fillRect(0, listBottom - 30, view.width, 30);
+    ctx.restore();
   }
   const back = { id: "back", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
   actions.push(back);

@@ -1,6 +1,6 @@
 const SAVE_KEY = "zhangyu.wechat.demo.save.v2";
 const SETTINGS_KEY = "zhangyu.wechat.demo.settings.v2";
-const MAX_CUSTOM_DECKS = 3;
+const MAX_CUSTOM_DECKS = 1;
 
 const DEFAULT_SAVE = {
   finishedTutorial: false,
@@ -92,7 +92,7 @@ function safeObject(value) {
 function makeDeckSlot(slot, index) {
   const source = Array.isArray(slot) ? { ids: slot } : safeObject(slot);
   return {
-    name: source.name || `牌组${index + 1}`,
+    name: "自定义牌组",
     ids: Array.isArray(source.ids) ? source.ids.slice(0, 40) : []
   };
 }
@@ -106,7 +106,7 @@ function getCustomDeckSlots(settings, faction) {
     slots.push(makeDeckSlot(source[i], i));
   }
   if (!source.length && Array.isArray(legacyDecks[faction])) {
-    slots[0] = makeDeckSlot({ name: "牌组1", ids: legacyDecks[faction] }, 0);
+    slots[0] = makeDeckSlot({ name: "自定义牌组", ids: legacyDecks[faction] }, 0);
   }
   return slots;
 }

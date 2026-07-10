@@ -368,6 +368,7 @@ module.exports = {
   hasAbility,
   eligibleCards,
   leadersFor,
+  groupCards,
   normalizeDeckIds,
   deckStatus,
   recommendedDeckIds,

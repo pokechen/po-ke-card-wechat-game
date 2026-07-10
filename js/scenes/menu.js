@@ -1,5 +1,5 @@
 const { clear, text, button, fillRoundRect, drawAssetImage } = require("../ui/canvas");
-const { loadSave, loadSettings, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds, getCustomDeckSlots } = require("../core/storage");
+const { loadSave, loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName } = require("../core/cards");
 
 const LOGO_SRC = "assets/po-ke-card.png";
@@ -145,12 +145,9 @@ function currentSettingsLine(settings) {
   const faction = settings.humanFaction;
   const leaders = leadersFor(faction);
   const leader = leaders.find(card => card.id === settings.humanLeaderIds?.[faction]) || leaders[0];
-  const slot = getActiveCustomDeckSlotIndex(settings, faction);
-  const slots = getCustomDeckSlots(settings, faction);
   const status = deckStatus(getActiveCustomDeckIds(settings, faction), faction);
-  const deckName = slots[slot]?.name || `牌组${slot + 1}`;
-  const deckText = status.valid ? `${status.total}张已保存` : (status.total ? `${status.total}张未完成` : "空牌组");
-  return `我的牌组：${FACTION_LABELS[faction]} · ${leader ? displayName(leader) : "未选领袖"} · ${deckName} ${deckText}`;
+  const deckText = status.valid ? `${status.total}张自定义` : (status.total ? `${status.total}张未完成` : "随机卡牌");
+  return `我的牌组：${FACTION_LABELS[faction]} · ${leader ? displayName(leader) : "未选领袖"} · ${deckText}`;
 }
 
 function draw(ctx, view, actions) {

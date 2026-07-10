@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
-const { loadSettings, MAX_CUSTOM_DECKS, getCustomDeckSlots } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
+const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
+const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
 const { drawDetail } = require("./cardsBrowser");
 
 const CARD_TABS = [
@@ -25,14 +25,6 @@ function leaderSkill(card) {
   return card ? `技能：${cardSummary(card)}` : "暂无技能";
 }
 
-function slotStatusLabel(slot, index, faction) {
-  const status = deckStatus(slot.ids, faction);
-  const name = slot.name || `牌组${index + 1}`;
-  if (status.valid) return `${name} · 已存 · ${status.total}张`;
-  if (status.total) return `${name} · 未完成 · ${status.total}张`;
-  return `${name} · 空`;
-}
-
 function canAddCard(status, card) {
   if (status.total >= 40) return false;
   if ((card.category === "special" || card.category === "weather") && status.specials >= 10) return false;
@@ -43,16 +35,11 @@ function settingOptions(settings, field) {
   if (field === "humanLeader") {
     return leadersFor(settings.humanFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }));
   }
-  if (field === "customDeckSlot") {
-    const slots = getCustomDeckSlots(settings, settings.humanFaction);
-    return slots.map((slot, index) => ({ value: String(index), label: slotStatusLabel(slot, index, settings.humanFaction) }));
-  }
   return [];
 }
 
-function optionSelectedValue(settings, field, selectedSlotIndex) {
+function optionSelectedValue(settings, field) {
   if (field === "humanLeader") return selectedLeader(settings, settings.humanFaction)?.id || "";
-  if (field === "customDeckSlot") return selectedSlotIndex == null ? "" : String(selectedSlotIndex);
   return "";
 }
 
@@ -60,41 +47,46 @@ function pageLayout(view) {
   const top = view.safeTop + 28;
   const factionY = top + 48;
   const leaderY = top + 84;
-  const slotY = top + 120;
-  const statusY = top + 158;
-  const tabY = top + 188;
-  const listTop = top + 226;
+  const statusY = top + 120;
+  const tabY = top + 150;
+  const listTop = top + 188;
   const bottomY = view.height - view.safeBottom - 48;
   const toolY = bottomY - 48;
   const listBottom = toolY - 24;
   const pageSize = Math.max(3, Math.min(6, Math.floor((listBottom - listTop) / 68)));
-  return { top, factionY, leaderY, slotY, statusY, toolY, tabY, listTop, bottomY, listBottom, pageSize };
+  return { top, factionY, leaderY, statusY, toolY, tabY, listTop, bottomY, listBottom, pageSize };
 }
 
-function filteredCards(faction, tab) {
+function filteredCardGroups(faction, tab) {
   const active = tab || "all";
-  return eligibleCards(faction).filter(card => {
+  const cards = eligibleCards(faction).filter(card => {
     if (active === "all") return true;
     if (active === "special") return card.category === "special" || card.category === "weather";
     if (!(card.category === "unit" || card.category === "hero")) return false;
     return (card.row || []).includes(active);
-  }).sort((a, b) => cardValue(b) - cardValue(a));
+  });
+  return groupCards(cards).sort((a, b) => cardValue(b.card) - cardValue(a.card));
+}
+
+function selectedCount(ids, group) {
+  const groupIds = new Set(group.cards.map(card => card.id));
+  return ids.filter(id => groupIds.has(id)).length;
 }
 
 function clampPage(view, ui, targetPage) {
   const settings = loadSettings();
   const { pageSize } = pageLayout(view);
-  const totalPages = Math.max(1, Math.ceil(filteredCards(settings.humanFaction, ui.settingCardTab || "all").length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(filteredCardGroups(settings.humanFaction, ui.settingCardTab || "all").length / pageSize));
   const page = targetPage == null ? (ui.settingDeckPage || 0) : targetPage;
   return Math.max(0, Math.min(page, totalPages - 1));
 }
 
-function drawSettingDropdown(ctx, view, actions, settings, field, anchors, selectedSlotIndex) {
+function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
   const anchor = anchors[field];
   if (!anchor) return;
   const options = settingOptions(settings, field);
   if (!options.length) return;
-  const selected = optionSelectedValue(settings, field, selectedSlotIndex);
+  const selected = optionSelectedValue(settings, field);
   const isLeader = field === "humanLeader";
   const itemH = isLeader ? 38 : 34;
   const menuH = options.length * itemH;
@@ -165,24 +157,21 @@ function draw(ctx, view, actions, ui = {}) {
   }
   const settings = loadSettings();
   const faction = settings.humanFaction;
-  const slots = getCustomDeckSlots(settings, faction);
-  const rawSelectedSlot = ui.settingSelectedSlotIndex;
-  const selectedSlotIndex = rawSelectedSlot == null ? null : Math.max(0, Math.min(slots.length - 1, Number(rawSelectedSlot) || 0));
-  const hasSelectedSlot = selectedSlotIndex != null;
-  const selectedIds = hasSelectedSlot ? slots[selectedSlotIndex].ids : [];
+  const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
   const humanLeader = selectedLeader(settings, faction);
   const cardTab = ui.settingCardTab || "all";
   const page = ui.settingDeckPage || 0;
   const layout = pageLayout(view);
   const anchors = {};
-  const cards = filteredCards(faction, cardTab);
-  const totalPages = Math.max(1, Math.ceil(cards.length / layout.pageSize));
+  const groups = filteredCardGroups(faction, cardTab);
+  const totalPages = Math.max(1, Math.ceil(groups.length / layout.pageSize));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
-  const list = cards.slice(safePage * layout.pageSize, safePage * layout.pageSize + layout.pageSize);
+  const list = groups.slice(safePage * layout.pageSize, safePage * layout.pageSize + layout.pageSize + 1);
+  const transitionY = ui.pageTransition?.scene === "settings" ? ui.pageTransition.offset || 0 : 0;
 
   text(ctx, "我的牌组", view.width / 2, layout.top, 24, "#2f2417", "center");
-  text(ctx, hasSelectedSlot ? `${FACTION_LABELS[faction]} · ${slots[selectedSlotIndex].name || `牌组${selectedSlotIndex + 1}`} · ${safePage + 1}/${totalPages}` : `${FACTION_LABELS[faction]} · 请选择牌组 · 0/${MAX_CUSTOM_DECKS}`, view.width / 2, layout.top + 25, 12, "#775c34", "center");
+  text(ctx, `${FACTION_LABELS[faction]} · 自定义牌组 · ${safePage + 1}/${totalPages}`, view.width / 2, layout.top + 25, 12, "#775c34", "center");
   drawFactionTabs(ctx, view, actions, faction, layout.factionY);
 
   const leaderRect = { id: "humanLeader", x: 18, y: layout.leaderY, w: view.width - 36, h: 30 };
@@ -197,46 +186,63 @@ function draw(ctx, view, actions, ui = {}) {
     text(ctx, "详", detailBtn.x + detailBtn.w / 2, detailBtn.y + detailBtn.h / 2, 10, "#fff7d8", "center");
   }
 
-  const slotRect = { id: "customDeckSlot", x: 18, y: layout.slotY, w: view.width - 36, h: 30 };
-  anchors.customDeckSlot = slotRect;
-  actions.push(slotRect);
-  const slotLabel = hasSelectedSlot ? slotStatusLabel(slots[selectedSlotIndex], selectedSlotIndex, faction) : "选择牌组后展示内容";
-  button(ctx, { ...slotRect, label: `${slotLabel} ▾`, fill: "#a1632b", stroke: "#6d2d18", size: 12, r: 10 });
-
-  const statusColor = hasSelectedSlot ? (status.valid ? "#2f6f57" : "#8f3c1f") : "#775c34";
-  text(ctx, hasSelectedSlot ? `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10` : "先选择一个牌组，之后开始组牌", view.width / 2, layout.statusY, 12, statusColor, "center");
+  const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
+  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, layout.statusY, 12, statusColor, "center");
   drawCardTabs(ctx, view, actions, cardTab, layout.tabY);
 
-  list.forEach((card, index) => {
-    const y = layout.listTop + index * 68;
-    const selected = selectedIds.includes(card.id);
-    const disabled = !selected && !canAddCard(status, card);
-    const rect = { id: "toggleSettingCard", cardId: card.id, x: 18, y, w: view.width - 36, h: 58 };
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, layout.listTop - 4, view.width, layout.listBottom - layout.listTop + 4);
+  ctx.clip();
+  list.forEach((group, index) => {
+    const card = group.card;
+    const y = layout.listTop + index * 68 + transitionY;
+    const count = selectedCount(selectedIds, group);
+    const selected = count > 0;
+    const full = count >= group.cards.length;
+    const disabled = (!selected && !canAddCard(status, card)) || full;
+    const groupIds = group.cards.map(item => item.id);
+    const rect = { id: "addSettingCard", cardIds: groupIds, x: 18, y, w: view.width - 36, h: 58 };
     actions.push(rect);
     fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 12, selected ? "#eff8ef" : (disabled ? "#eee7da" : "#fffaf0"), selected ? "#2f6f57" : "#dcc48d");
     drawCardImage(ctx, { ...card, imageX: rect.x + 10, imageY: rect.y + 8, imageW: 42, imageH: 42 });
     const x = rect.x + 62;
     text(ctx, short(displayName(card), 9), x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
+    if (selected) {
+      fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
+      text(ctx, `×${count}`, x + 109, y + 15, 11, "#fff7d8", "center");
+    }
     const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略/时局";
     text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
     wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
+    if (selected) {
+      const remove = { id: "removeSettingCard", cardIds: groupIds, x: view.width - 124, y: y + 30, w: 48, h: 22 };
+      actions.push(remove);
+      button(ctx, { ...remove, label: "减1", fill: "#8f3c1f", stroke: "#6d2d18", size: 10, r: 8 });
+    }
     const cardDetail = { id: "settingCardDetail", cardId: card.id, x: view.width - 72, y: y + 30, w: 48, h: 22 };
     actions.push(cardDetail);
     button(ctx, { ...cardDetail, label: "详情", fill: "#4f6d8a", stroke: "#36516a", size: 10, r: 8 });
   });
+  ctx.restore();
+  if (safePage < totalPages - 1) {
+    ctx.save();
+    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, layout.listBottom - 30, 0, layout.listBottom) : null;
+    if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
+    else ctx.fillStyle = "rgba(255,250,240,0.72)";
+    ctx.fillRect(0, layout.listBottom - 30, view.width, 30);
+    ctx.restore();
+  }
 
-  text(ctx, hasSelectedSlot ? "上下滑动查看更多 · 点卡牌加入/移除" : "可先浏览全部卡牌，选定牌组后开始编辑", view.width / 2, layout.toolY - 10, 11, "#775c34", "center");
-  const auto = { id: "autoCustomDeck", x: 18, y: layout.toolY, w: (view.width - 48) / 3, h: 30 };
+  const auto = { id: "autoCustomDeck", x: 18, y: layout.toolY, w: (view.width - 42) / 2, h: 30 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 6, y: layout.toolY, w: auto.w, h: 30 };
-  const saveBtn = { id: "saveDeckSetup", x: clearBtn.x + clearBtn.w + 6, y: layout.toolY, w: auto.w, h: 30 };
-  actions.push(auto, clearBtn, saveBtn);
-  button(ctx, { ...auto, label: "推荐", fill: "#2f6f57", size: 11, r: 10 });
+  actions.push(auto, clearBtn);
+  button(ctx, { ...auto, label: "随机推荐", fill: "#2f6f57", size: 11, r: 10 });
   button(ctx, { ...clearBtn, label: "清空", fill: "#8f3c1f", stroke: "#6d2d18", size: 11, r: 10 });
-  button(ctx, { ...saveBtn, label: "保存", fill: "#8d6840", stroke: "#6f4d29", size: 11, r: 10 });
   const back = { id: "back", x: 46, y: layout.bottomY, w: view.width - 92, h: 40 };
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
-  drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors, selectedSlotIndex);
+  drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
   if (detail) drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回我的牌组" });
 }
 
