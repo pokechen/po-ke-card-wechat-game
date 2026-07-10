@@ -28,6 +28,9 @@ const DEFAULT_SETTINGS = {
   activeCustomDeckSlot: {},
   humanLeaderIds: {},
   aiLeaderIds: {},
+  pvpFaction: "Northern Realms",
+  pvpLeaderIds: {},
+  pvpDeckMode: "random",
   aiOpponentRemembered: false
 };
 
@@ -131,6 +134,9 @@ function normalizeSettings(settings) {
   next.activeCustomDeckSlot = { ...safeObject(next.activeCustomDeckSlot) };
   next.humanLeaderIds = { ...safeObject(next.humanLeaderIds) };
   next.aiLeaderIds = { ...safeObject(next.aiLeaderIds) };
+  next.pvpLeaderIds = { ...safeObject(next.pvpLeaderIds) };
+  next.pvpFaction = next.pvpFaction || next.humanFaction;
+  next.pvpDeckMode = next.pvpDeckMode === "custom" ? "custom" : "random";
   next.aiOpponentRemembered = !!next.aiOpponentRemembered;
   if (!next.aiOpponentRemembered && next.aiFaction === "Monsters" && !next.aiLeaderId && !Object.keys(next.aiLeaderIds).length) {
     next.aiFaction = "random";

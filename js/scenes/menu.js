@@ -168,10 +168,9 @@ function draw(ctx, view, actions) {
   drawSummaryCard(ctx, view, actions, summaryY, summaryH, save, settings, latest);
 
   const labels = [
-    ["start", "开始单机", "#2f6f57"],
+    ["start", "单机对战", "#2f6f57"],
     ["pvp", "联网对战", "#8f3c1f"],
     ["settings", "我的牌组", "#8d6840"],
-    ["cards", "卡牌图鉴", "#4f6d8a"],
     ["rules", "使用说明", "#7a5a95"]
   ];
   const buttonH = compact ? 40 : 44;
@@ -182,6 +181,7 @@ function draw(ctx, view, actions) {
     actions.push(rect);
     button(ctx, { ...rect, label: item[1], fill: item[2], stroke: "#4b3d2d", size: 15 });
   });
+
 }
 
 module.exports = { draw };

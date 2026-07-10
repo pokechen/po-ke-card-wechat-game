@@ -4,6 +4,7 @@ const battle = require("./js/core/battle");
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const db = cloud.database();
+const _ = db.command;
 const ROOMS = "game_rooms";
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -20,14 +21,12 @@ function now() {
 }
 
 function normalizeRoomId(value) {
-  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 4 ? digits : "";
 }
 
 function createRoomId() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let id = "";
-  for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 function safeSetup(input = {}) {
@@ -54,23 +53,25 @@ function makePlayer(openid, index, setup) {
 
 async function getRoom(roomId) {
   const id = normalizeRoomId(roomId);
-  if (!id) throw new Error("房间号不能为空");
+  if (!id) throw new Error("房间号必须是4位数字");
   try {
     const res = await db.collection(ROOMS).doc(id).get();
-    return res.data ? { _id: id, ...res.data } : null;
+    return res.data ? { ...res.data, _id: id, roomId: id } : null;
   } catch (err) {
     return null;
   }
 }
 
 function roomData(room) {
-  const data = { ...room };
+  const data = { ...room, roomId: room._id };
   delete data._id;
   return data;
 }
 
 function publicRoom(room) {
-  return room ? { ...room } : null;
+  if (!room) return null;
+  const roomId = normalizeRoomId(room.roomId || room._id);
+  return { ...room, roomId, _id: roomId };
 }
 
 function playerIndexOf(room, openid) {
@@ -138,6 +139,7 @@ async function createRoom(event, openid) {
     const roomId = createRoomId();
     const room = {
       _id: roomId,
+      roomId,
       status: "waiting",
       players: [player],
       match: null,
@@ -181,7 +183,7 @@ async function joinRoom(event, openid) {
     data: {
       status: nextRoom.status,
       players,
-      match,
+      match: _.set(match),
       turnSeq: nextRoom.turnSeq,
       updatedAt: nextRoom.updatedAt
     }
@@ -214,7 +216,7 @@ async function submitAction(event, openid) {
   await db.collection(ROOMS).doc(roomId).update({
     data: {
       status,
-      match,
+      match: _.set(match),
       turnSeq: nextRoom.turnSeq,
       updatedAt: nextRoom.updatedAt
     }
@@ -237,7 +239,7 @@ async function leaveRoom(event, openid) {
   await db.collection(ROOMS).doc(roomId).update({
     data: {
       status: room.status,
-      match: room.match,
+      match: _.set(room.match),
       turnSeq: room.turnSeq,
       updatedAt: room.updatedAt
     }

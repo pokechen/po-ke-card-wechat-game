@@ -1,7 +1,7 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById } = require("../core/cards");
-const { drawDetail } = require("./cardsBrowser");
+const { drawDetail } = require("./cardDetail");
 
 function selectedLeader(settings, side, faction) {
   if (faction === "random") return null;
@@ -30,8 +30,8 @@ function setupOptions(settings, field, slots, faction) {
     return leadersFor(settings.humanFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }));
   }
   if (field === "aiLeader") {
-    if (settings.aiFaction === "random") return [{ value: "random", label: "随机", hint: "开局时随机主将" }];
-    return [{ value: "random", label: "随机", hint: "开局时随机主将" }].concat(
+    if (settings.aiFaction === "random") return [{ value: "random", label: "随机" }];
+    return [{ value: "random", label: "随机" }].concat(
       leadersFor(settings.aiFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }))
     );
   }
@@ -196,13 +196,13 @@ function draw(ctx, view, actions, ui = {}) {
     id: "aiLeader",
     label: "主将",
     value: aiLeaderLabel,
-    subtitle: (settings.aiFaction === "random" || settings.aiLeaderIds?.[settings.aiFaction] === "random") ? "开局时随机主将" : "",
-    card: (settings.aiFaction === "random" || settings.aiLeaderIds?.[settings.aiFaction] === "random") ? null : aiLeader,
-    cardId: (settings.aiFaction === "random" || settings.aiLeaderIds?.[settings.aiFaction] === "random") ? "" : aiLeader?.id,
+    subtitle: "",
+    card: aiLeader,
+    cardId: aiLeader?.id,
     x: contentX,
     y: panelY + 344,
     w: rowW,
-    h: (settings.aiFaction === "random" || settings.aiLeaderIds?.[settings.aiFaction] === "random") ? 50 : 42,
+    h: 42,
     fill: "#7a5a95"
   }, dropdownField === "aiLeader", anchors);
   drawRow(ctx, actions, { id: "difficulty", label: "难度", value: DIFFICULTY_LABELS[settings.difficulty], x: contentX, y: panelY + 390, w: rowW, fill: "#8d6840" }, dropdownField === "difficulty", anchors);
@@ -213,7 +213,10 @@ function draw(ctx, view, actions, ui = {}) {
   button(ctx, { ...start, label: useCustomDeck ? "使用该阵营牌组开始" : "随机卡牌开始", fill: "#2f6f57", stroke: "#1d4f3c", size: 15 });
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSetupDropdown(ctx, view, actions, settings, dropdownField, anchors);
-  if (detail) drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回单机准备" });
+  if (detail) {
+    const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
+    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回单机准备", swipeOffset });
+  }
 }
 
 module.exports = { draw };

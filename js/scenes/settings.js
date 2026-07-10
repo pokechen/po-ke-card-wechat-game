@@ -1,13 +1,14 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
-const { drawDetail } = require("./cardsBrowser");
+const { drawDetail } = require("./cardDetail");
 
 const CARD_TABS = [
   { value: "all", label: "全部" },
   { value: "melee", label: ROW_LABELS.melee || "疆场" },
   { value: "ranged", label: ROW_LABELS.ranged || "朝堂" },
   { value: "siege", label: ROW_LABELS.siege || "文脉" },
+  { value: "hero", label: "传世" },
   { value: "special", label: "谋略/时局" }
 ];
 
@@ -62,6 +63,7 @@ function filteredCardGroups(faction, tab) {
   const cards = eligibleCards(faction).filter(card => {
     if (active === "all") return true;
     if (active === "special") return card.category === "special" || card.category === "weather";
+    if (active === "hero") return !!card.hero;
     if (!(card.category === "unit" || card.category === "hero")) return false;
     return (card.row || []).includes(active);
   });
@@ -102,7 +104,7 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
   options.forEach((option, index) => {
     const y = menuY + index * itemH;
     const active = option.value === selected;
-    actions.push({ id: "selectSettingOption", field, value: option.value, x: menuX, y, w: anchor.w, h: itemH });
+    actions.push({ id: "selectSettingOption", field, value: option.value, cardId: option.value, x: menuX, y, w: anchor.w, h: itemH });
     if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
     else if (index > 0) {
       ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
@@ -114,10 +116,7 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
     text(ctx, shortText(option.label, isLeader ? 14 : 18), menuX + anchor.w / 2, y + (isLeader ? 14 : itemH / 2), 12, active ? "#ffffff" : "#2f2417", "center");
     if (isLeader) {
       text(ctx, shortText(option.hint, 20), menuX + anchor.w / 2, y + 29, 8, active ? "#efe6ff" : "#775c34", "center");
-      const detail = { id: "settingCardDetail", cardId: option.value, x: menuX + anchor.w - 38, y: y + 7, w: 30, h: 24 };
-      actions.push(detail);
-      fillRoundRect(ctx, detail.x, detail.y, detail.w, detail.h, 8, "rgba(79,109,138,0.94)", "#36516a");
-      text(ctx, "详", detail.x + detail.w / 2, detail.y + detail.h / 2, 10, "#fff7d8", "center");
+      text(ctx, "长按看详情", menuX + anchor.w - 8, y + itemH / 2, 9, active ? "#e6dcff" : "#9a8a6f", "right");
     }
   });
 }
@@ -174,20 +173,13 @@ function draw(ctx, view, actions, ui = {}) {
   text(ctx, `${FACTION_LABELS[faction]} · 自定义牌组 · ${safePage + 1}/${totalPages}`, view.width / 2, layout.top + 25, 12, "#775c34", "center");
   drawFactionTabs(ctx, view, actions, faction, layout.factionY);
 
-  const leaderRect = { id: "humanLeader", x: 18, y: layout.leaderY, w: view.width - 36, h: 30 };
+  const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: layout.leaderY, w: view.width - 36, h: 30 };
   anchors.humanLeader = leaderRect;
   actions.push(leaderRect);
   fillRoundRect(ctx, leaderRect.x, leaderRect.y, leaderRect.w, leaderRect.h, 10, "#7a5a95", "#1d4f3c");
   text(ctx, `领袖：${shortText(humanLeader ? displayName(humanLeader) : "未选择", 14)} ▾`, leaderRect.x + leaderRect.w / 2, leaderRect.y + 15, 12, "#ffffff", "center");
-  if (humanLeader) {
-    const detailBtn = { id: "settingCardDetail", cardId: humanLeader.id, x: leaderRect.x + leaderRect.w - 42, y: leaderRect.y + 4, w: 32, h: 22 };
-    actions.push(detailBtn);
-    fillRoundRect(ctx, detailBtn.x, detailBtn.y, detailBtn.w, detailBtn.h, 8, "rgba(79,109,138,0.94)", "#36516a");
-    text(ctx, "详", detailBtn.x + detailBtn.w / 2, detailBtn.y + detailBtn.h / 2, 10, "#fff7d8", "center");
-  }
+  if (humanLeader) text(ctx, "长按看详情", leaderRect.x + leaderRect.w - 10, leaderRect.y + 15, 10, "#e6dcff", "right");
 
-  const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
-  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, layout.statusY, 12, statusColor, "center");
   drawCardTabs(ctx, view, actions, cardTab, layout.tabY);
 
   ctx.save();
@@ -202,27 +194,23 @@ function draw(ctx, view, actions, ui = {}) {
     const full = count >= group.cards.length;
     const disabled = (!selected && !canAddCard(status, card)) || full;
     const groupIds = group.cards.map(item => item.id);
-    const rect = { id: "addSettingCard", cardIds: groupIds, x: 18, y, w: view.width - 36, h: 58 };
+    const rect = { id: "addSettingCard", cardIds: groupIds, cardId: card.id, x: 18, y, w: view.width - 36, h: 58 };
     actions.push(rect);
     fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 12, selected ? "#eff8ef" : (disabled ? "#eee7da" : "#fffaf0"), selected ? "#2f6f57" : "#dcc48d");
     drawCardImage(ctx, { ...card, imageX: rect.x + 10, imageY: rect.y + 8, imageW: 42, imageH: 42 });
     const x = rect.x + 62;
-    text(ctx, short(displayName(card), 9), x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
-    if (selected) {
+    const maxCount = group.cards.length;
+    const baseName = short(displayName(card), 9);
+    const nameText = maxCount > 1 ? `${baseName} x${maxCount}` : baseName;
+    text(ctx, nameText, x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
+    if (selected && maxCount > 1) {
       fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
-      text(ctx, `×${count}`, x + 109, y + 15, 11, "#fff7d8", "center");
+      text(ctx, `${count}/${maxCount}`, x + 109, y + 15, 11, "#fff7d8", "center");
     }
     const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略/时局";
     text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
     wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
-    if (selected) {
-      const remove = { id: "removeSettingCard", cardIds: groupIds, x: view.width - 124, y: y + 30, w: 48, h: 22 };
-      actions.push(remove);
-      button(ctx, { ...remove, label: "减1", fill: "#8f3c1f", stroke: "#6d2d18", size: 10, r: 8 });
-    }
-    const cardDetail = { id: "settingCardDetail", cardId: card.id, x: view.width - 72, y: y + 30, w: 48, h: 22 };
-    actions.push(cardDetail);
-    button(ctx, { ...cardDetail, label: "详情", fill: "#4f6d8a", stroke: "#36516a", size: 10, r: 8 });
+    text(ctx, "长按看详情", view.width - 22, y + 41, 10, "#9a8a6f", "right");
   });
   ctx.restore();
   if (safePage < totalPages - 1) {
@@ -234,6 +222,8 @@ function draw(ctx, view, actions, ui = {}) {
     ctx.restore();
   }
 
+  const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
+  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, layout.toolY - 16, 12, statusColor, "center");
   const auto = { id: "autoCustomDeck", x: 18, y: layout.toolY, w: (view.width - 42) / 2, h: 30 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 6, y: layout.toolY, w: auto.w, h: 30 };
   actions.push(auto, clearBtn);
@@ -243,7 +233,13 @@ function draw(ctx, view, actions, ui = {}) {
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
-  if (detail) drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回我的牌组" });
+  if (detail) {
+    const currentIdx = groups.findIndex(g => g.card.id === detail.id);
+    const leftCard = currentIdx > 0 ? groups[currentIdx - 1].card : null;
+    const rightCard = currentIdx >= 0 && currentIdx < groups.length - 1 ? groups[currentIdx + 1].card : null;
+    const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
+    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回我的牌组", leftCard, rightCard, swipeOffset });
+  }
 }
 
 function nextFaction(current) {

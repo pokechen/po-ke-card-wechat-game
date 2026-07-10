@@ -71,11 +71,15 @@ function watchRoom(roomId, onChange, onError) {
   return roomWatcher;
 }
 
-function copyRoomId(roomId) {
+function copyText(value) {
   const api = wxApi();
   if (!api || !api.setClipboardData) return false;
-  api.setClipboardData({ data: String(roomId || "") });
+  api.setClipboardData({ data: String(value || "") });
   return true;
+}
+
+function copyRoomId(roomId) {
+  return copyText(roomId);
 }
 
 module.exports = {
@@ -87,5 +91,6 @@ module.exports = {
   leaveRoom,
   watchRoom,
   closeRoomWatch,
+  copyText,
   copyRoomId
 };
