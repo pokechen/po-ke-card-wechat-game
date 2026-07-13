@@ -60,12 +60,19 @@ function randomItem(list, fallback) {
   return list.length ? list[Math.floor(Math.random() * list.length)] : fallback;
 }
 
-function resolveAiFaction(value) {
-  return value === "random" ? randomItem(FACTION_KEYS, "Monsters") : (value || "Monsters");
+function resolveFaction(value, fallback) {
+  if (value === "random") return randomItem(FACTION_KEYS, fallback || FACTION_KEYS[0]);
+  return FACTION_KEYS.includes(value) ? value : (fallback || FACTION_KEYS[0]);
 }
 
-function resolveAiLeaderId(options, faction, forceRandom) {
-  const stored = options.aiLeaderIds?.[faction] ?? options.aiLeaderIds?.random ?? options.aiLeaderId;
+function resolveAiFaction(value) {
+  return resolveFaction(value, "Monsters");
+}
+
+function resolveLeaderId(options, side, faction, forceRandom) {
+  const ids = side === "ai" ? options.aiLeaderIds : options.humanLeaderIds;
+  const legacy = side === "ai" ? options.aiLeaderId : options.humanLeaderId;
+  const stored = ids?.[faction] ?? ids?.random ?? legacy;
   if (forceRandom || stored === "random") {
     const leader = randomItem(leadersFor(faction), null);
     return leader ? leader.id : "";
@@ -75,7 +82,8 @@ function resolveAiLeaderId(options, faction, forceRandom) {
 
 function createMatch(options = {}) {
   const mode = options.mode === "hotseat" || options.mode === "online" ? options.mode : "ai";
-  const humanFaction = options.humanFaction || "Northern Realms";
+  const humanFactionRandom = options.humanFaction === "random";
+  const humanFaction = resolveFaction(options.humanFaction, "Northern Realms");
   const aiFactionRandom = options.aiFaction === "random";
   const aiFaction = resolveAiFaction(options.aiFaction);
   const difficulty = options.difficulty || "normal";
@@ -87,8 +95,8 @@ function createMatch(options = {}) {
   const humanCustomDeckIds = customStatus.valid ? customStatus.ids : null;
   const aiCustomStatus = deckStatus(Array.isArray(options.aiCustomDeckIds) ? options.aiCustomDeckIds : [], aiFaction);
   const aiCustomDeckIds = aiCustomStatus.valid ? aiCustomStatus.ids : null;
-  const humanLeaderId = options.humanLeaderIds?.[humanFaction] || options.humanLeaderId;
-  const aiLeaderId = resolveAiLeaderId(options, aiFaction, aiFactionRandom);
+  const humanLeaderId = resolveLeaderId(options, "human", humanFaction, humanFactionRandom);
+  const aiLeaderId = resolveLeaderId(options, "ai", aiFaction, aiFactionRandom);
   const players = [
     makePlayer("玩家一", 0, humanFaction, "normal", humanCustomDeckIds, humanLeaderId),
     makePlayer(mode === "ai" ? "系统" : "玩家二", 1, aiFaction, difficulty, mode === "online" ? aiCustomDeckIds : null, aiLeaderId)

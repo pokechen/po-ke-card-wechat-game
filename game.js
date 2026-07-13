@@ -3,15 +3,15 @@ const menuScene = require("./js/scenes/menu");
 const matchSetupScene = require("./js/scenes/matchSetup");
 const rulesScene = require("./js/scenes/rules");
 const settingsScene = require("./js/scenes/settings");
-const cardsScene = require("./js/scenes/cardsBrowser");
 const deckBuilderScene = require("./js/scenes/deckBuilder");
 const historyScene = require("./js/scenes/history");
 const battleScene = require("./js/scenes/battleScene");
 const resultScene = require("./js/scenes/result");
 const pvpRoomScene = require("./js/scenes/pvpRoom");
+const pvpSetupScene = require("./js/scenes/pvpSetup");
 const pvpClient = require("./js/core/pvpClient");
-const { loadSave, loadSettings, saveSettings, saveProgress, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
-const { cardById, deckStatus, recommendedDeckIds, leadersFor } = require("./js/core/cards");
+const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
+const { cardById, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS } = require("./js/core/cards");
 const { createMatch, playCard, autoPlayHuman, pass, useLeader, mulliganSwap, finishMulligan, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
@@ -25,6 +25,7 @@ const app = {
   recentPlayTimerSeq: 0,
   pvp: {
     roomId: "",
+    pendingRoomId: "",
     room: null,
     playerIndex: 0,
     loading: false,
@@ -33,16 +34,7 @@ const app = {
   },
   ui: {
     handPage: 0,
-    cardPage: 0,
     deckPage: 0,
-    cardFactionFilter: "all",
-    cardCategoryFilter: "all",
-    cardFilterDropdown: "",
-    cardQuery: "",
-    cardSearchActive: false,
-    cardSearchDraft: "",
-    keyboardHeight: 0,
-    cardDetailId: "",
     battleCardDetailId: "",
     deckCardDetailId: "",
     settingCardDetailId: "",
@@ -59,14 +51,16 @@ const app = {
     dismissedRecentPlaySeq: 0,
     discardPileOwner: null,
     discardPilePage: 0,
-    pageTransition: null
+    pageTransition: null,
+    detailSwipe: null
   }
 };
 
 setImageRenderHook(() => render());
 
-const RECENT_PLAY_AUTO_DISMISS_MS = 2800;
+const RECENT_PLAY_AUTO_DISMISS_MS = 1800;
 const PAGE_TRANSITION_MS = 180;
+const DETAIL_SWIPE_MS = 220;
 
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
@@ -85,6 +79,25 @@ function startPageTransition(scene, axis, fromOffset) {
     if (progress < 1) requestFrame(step);
     else {
       app.ui.pageTransition = null;
+      render();
+    }
+  }
+  requestFrame(step);
+}
+
+function startDetailSwipeTransition(fromOffset, onComplete) {
+  const start = Date.now();
+  app.ui.detailSwipe = { offset: fromOffset };
+  function step() {
+    const progress = Math.min(1, (Date.now() - start) / DETAIL_SWIPE_MS);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    if (!app.ui.detailSwipe) return;
+    app.ui.detailSwipe.offset = fromOffset * (1 - eased);
+    render();
+    if (progress < 1) requestFrame(step);
+    else {
+      app.ui.detailSwipe = null;
+      if (onComplete) onComplete();
       render();
     }
   }
@@ -159,11 +172,11 @@ function startMatch(optionsPatch = {}) {
 function render() {
   app.actions = [];
   if (app.scene === "menu") menuScene.draw(ctx, view, app.actions);
+  if (app.scene === "pvpSetup") pvpSetupScene.draw(ctx, view, app.actions, app.ui, app.pvp);
   if (app.scene === "pvpRoom") pvpRoomScene.draw(ctx, view, app.actions, app.pvp);
   if (app.scene === "matchSetup") matchSetupScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "rules") rulesScene.draw(ctx, view, app.actions);
   if (app.scene === "settings") settingsScene.draw(ctx, view, app.actions, app.ui);
-  if (app.scene === "cards") cardsScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "deckBuilder") deckBuilderScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "history") historyScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "battle") battleScene.draw(ctx, view, app.actions, app.match, app.ui);
@@ -196,11 +209,28 @@ function vibrate() {
 
 function getSharePayload() {
   const roomId = app.pvp.roomId;
-  return {
+  const normal = {
     title: roomId ? `来章鱼牌房间 ${roomId} 对战` : "来盘章鱼牌吧",
     imageUrl: "assets/po-ke-card.png",
     query: roomId ? `roomId=${encodeURIComponent(roomId)}` : "from=share"
   };
+
+  // PVP对局结束：根据当前玩家视角生成个性化分享内容
+  const match = app.match;
+  if (match && match.mode === "online" && match.over) {
+    const myIndex = app.pvp.playerIndex ?? 0;
+    const me = match.players[myIndex];
+    const opp = match.players[1 - myIndex];
+    const myName = (me && me.name !== "玩家") ? me.name : (myIndex === 0 ? "玩家一" : "玩家二");
+    const oppName = (opp && opp.name !== "玩家") ? opp.name : ((1 - myIndex) === 0 ? "玩家一" : "玩家二");
+    const myScore = match.finalScores?.[myIndex] ?? 0;
+    const oppScore = match.finalScores?.[1 - myIndex] ?? 0;
+    const won = myScore > oppScore;
+    const resultLabel = won ? "获胜" : (myScore < oppScore ? "惜败" : "平局");
+    normal.title = `${myName} ${resultLabel} · ${myScore}:${oppScore} ${oppName}`;
+  }
+
+  return normal;
 }
 
 function setupShare() {
@@ -214,39 +244,60 @@ function setupShare() {
     });
   }
   if (api.onShareAppMessage) {
-    api.onShareAppMessage(() => getSharePayload());
+    api.onShareAppMessage(() => {
+      const payload = getSharePayload();
+      console.log("[share] onShareAppMessage payload:", JSON.stringify(payload), "currentRoomId:", app.pvp.roomId);
+      return payload;
+    });
   }
 }
 
-function shareGame() {
+function guideShare() {
   const api = typeof wx !== "undefined" ? wx : null;
-  if (!api || !api.shareAppMessage) {
-    toast("当前环境不支持分享");
+  if (api && api.showModal) {
+    api.showModal({
+      title: "分享给好友",
+      content: "请点击右上角“···”，选择“转发”给好友。",
+      showCancel: false
+    });
     return;
   }
-  try {
-    api.shareAppMessage(getSharePayload());
-  } catch (err) {
-    console.warn("[share] shareAppMessage failed", err);
-    toast("分享失败，请稍后重试");
-  }
+  toast("点右上角···转发");
 }
 
 function normalizePvpRoomId(value) {
-  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 4 ? digits : "";
+}
+
+function randomItem(list, fallback) {
+  return list.length ? list[Math.floor(Math.random() * list.length)] : fallback;
+}
+
+function resolvePvpFaction(settings) {
+  const value = settings.pvpFaction || settings.humanFaction || FACTION_KEYS[0];
+  if (value === "random") return randomItem(FACTION_KEYS, FACTION_KEYS[0]);
+  return FACTION_KEYS.includes(value) ? value : FACTION_KEYS[0];
+}
+
+function resolvePvpLeaderId(settings, faction) {
+  const leaders = leadersFor(faction);
+  const stored = settings.pvpLeaderIds?.[faction] ?? settings.humanLeaderIds?.[faction];
+  if (stored === "random") return randomItem(leaders, null)?.id || "";
+  return (leaders.find(card => card.id === stored) || leaders[0])?.id || "";
 }
 
 function currentPlayerSetup() {
   const settings = loadSettings();
-  const faction = settings.humanFaction;
+  const faction = resolvePvpFaction(settings);
   const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
-  const leader = leadersFor(faction).find(card => card.id === settings.humanLeaderIds?.[faction]) || leadersFor(faction)[0];
+  const useCustomDeck = settings.pvpDeckMode === "custom" && status.valid;
+  // 不预设name，由云函数根据座位号分配 玩家一/玩家二
   return {
-    name: "玩家",
     faction,
-    leaderId: leader?.id || "",
-    customDeckIds: status.valid ? status.ids : []
+    leaderId: resolvePvpLeaderId(settings, faction),
+    customDeckIds: useCustomDeck ? status.ids : []
   };
 }
 
@@ -257,10 +308,64 @@ function decorateOnlineMatch(match) {
   return match;
 }
 
+function cardLabel(card) {
+  return card ? (card.name || card.baseName || "主将") : "主将";
+}
+
+// 联网对局结束时，以本地玩家视角记录战绩到本机
+function recordOnlineMatch(match) {
+  if (!match || !match.over) return;
+  const roomKey = app.pvp.roomId || "";
+  if (app.pvp.recordedResultRoom === roomKey && roomKey) return;
+  app.pvp.recordedResultRoom = roomKey;
+
+  const meIdx = Number.isInteger(app.pvp.playerIndex) ? app.pvp.playerIndex : 0;
+  const oppIdx = 1 - meIdx;
+  const me = match.players[meIdx];
+  const opp = match.players[oppIdx];
+  if (!me || !opp) return;
+
+  // 把座位视角的 winner 转换为“我方视角”：0=我方胜，1=我方负，null=平局
+  let winner = match.winner;
+  if (winner === meIdx) winner = 0;
+  else if (winner === oppIdx) winner = 1;
+
+  const surrendered = match.endReason === "surrender";
+  let resultText;
+  if (winner == null) resultText = "平局";
+  else if (winner === 0) resultText = surrendered ? "对方认输" : "你赢了";
+  else resultText = surrendered ? "你已认输" : "你输了";
+
+  const roundResults = (match.roundResults || []).map(r => ({
+    round: r.round,
+    scores: [r.scores?.[meIdx] || 0, r.scores?.[oppIdx] || 0],
+    winner: r.winner == null ? null : (r.winner === meIdx ? 0 : 1)
+  }));
+
+  recordMatch({
+    time: Date.now(),
+    resultText,
+    winner,
+    rounds: [me.roundsWon || 0, opp.roundsWon || 0],
+    scores: [match.finalScores?.[meIdx] || 0, match.finalScores?.[oppIdx] || 0],
+    roundResults,
+    humanFaction: me.factionName || me.faction,
+    aiFaction: opp.factionName || opp.faction,
+    humanLeader: cardLabel(me.leader),
+    aiLeader: cardLabel(opp.leader),
+    humanLeaderId: me.leader?.id || "",
+    aiLeaderId: opp.leader?.id || "",
+    difficulty: "pvp",
+    mode: "online",
+    endReason: match.endReason || "normal"
+  });
+}
+
 function applyRoomUpdate(room, playerIndex) {
   if (!room) return;
+  const roomId = normalizePvpRoomId(room.roomId || room._id || app.pvp.roomId);
   app.pvp.room = room;
-  app.pvp.roomId = room._id || app.pvp.roomId;
+  if (roomId) app.pvp.roomId = roomId;
   if (Number.isInteger(playerIndex)) app.pvp.playerIndex = playerIndex;
   if (room.match) app.match = decorateOnlineMatch(room.match);
   app.pvp.loading = false;
@@ -270,7 +375,10 @@ function applyRoomUpdate(room, playerIndex) {
     app.ui.handPage = clampHandPage(app.ui.handPage);
     if (app.scene !== "battle") return setScene("battle");
   }
-  if (room.status === "finished" && app.match) return setScene("result");
+  if (room.status === "finished" && app.match) {
+    recordOnlineMatch(app.match);
+    return setScene("result");
+  }
   render();
 }
 
@@ -291,7 +399,15 @@ function watchPvpRoom(roomId) {
 
 function resetPvpState() {
   pvpClient.closeRoomWatch();
-  app.pvp = { roomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "" };
+  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultRoom: "" };
+}
+
+function enterPvpSetup(roomId) {
+  resetPvpState();
+  app.pvp.pendingRoomId = normalizePvpRoomId(roomId);
+  app.ui.matchSetupDropdown = "";
+  app.ui.matchSetupCardDetailId = "";
+  setScene("pvpSetup");
 }
 
 function createPvpRoom() {
@@ -303,7 +419,7 @@ function createPvpRoom() {
     app.pvp.playerIndex = result.playerIndex || 0;
     applyRoomUpdate(result.room, app.pvp.playerIndex);
     watchPvpRoom(result.roomId);
-    shareGame();
+    guideShare();
   }).catch(err => {
     console.warn("[pvp] create failed", err);
     app.pvp.loading = false;
@@ -314,7 +430,7 @@ function createPvpRoom() {
 
 function joinPvpRoom(roomId) {
   const safeRoomId = normalizePvpRoomId(roomId);
-  if (!safeRoomId) return toast("请输入有效房间号");
+  if (!safeRoomId) return toast("请输入4位数字房间号");
   resetPvpState();
   app.pvp.roomId = safeRoomId;
   app.pvp.loading = true;
@@ -337,9 +453,9 @@ function promptJoinPvpRoom() {
   if (!api || !api.showModal) return toast("当前环境不支持输入房间号");
   api.showModal({
     title: "加入房间",
-    content: "请输入好友分享的房间号",
+    content: "",
     editable: true,
-    placeholderText: "例如 ABC123",
+    placeholderText: "请输入4位数字房间号",
     success: res => {
       if (!res.confirm) return render();
       joinPvpRoom(res.content);
@@ -347,15 +463,41 @@ function promptJoinPvpRoom() {
   });
 }
 
+function readSharedRoomId() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api) return "";
+  // 启动参数（首次从分享卡片进入）
+  try {
+    const launch = api.getLaunchOptionsSync && api.getLaunchOptionsSync();
+    const fromLaunch = normalizePvpRoomId(launch?.query?.roomId);
+    console.log("[launch] launchOptions.query:", JSON.stringify(launch?.query || {}), "roomId:", fromLaunch);
+    if (fromLaunch) return fromLaunch;
+  } catch (e) {}
+  // 切后台再回来（部分场景启动参数在 enterOptions 中）
+  try {
+    const enter = api.getEnterOptionsSync && api.getEnterOptionsSync();
+    const fromEnter = normalizePvpRoomId(enter?.query?.roomId);
+    console.log("[launch] enterOptions.query:", JSON.stringify(enter?.query || {}), "roomId:", fromEnter);
+    if (fromEnter) return fromEnter;
+  } catch (e) {}
+  return "";
+}
+
 function handleLaunchRoom() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return;
-  const roomId = normalizePvpRoomId(api.getLaunchOptionsSync ? api.getLaunchOptionsSync()?.query?.roomId : "");
-  if (roomId) setTimeout(() => joinPvpRoom(roomId), 80);
+  const roomId = readSharedRoomId();
+  if (roomId) {
+    console.log("[launch] 检测到分享房间号，直接进入联网对战:", roomId);
+    setTimeout(() => joinPvpRoom(roomId), 120);
+  }
   if (api.onShow) {
     api.onShow(options => {
       const nextRoomId = normalizePvpRoomId(options?.query?.roomId);
-      if (nextRoomId && nextRoomId !== app.pvp.roomId) joinPvpRoom(nextRoomId);
+      if (nextRoomId && nextRoomId !== app.pvp.roomId) {
+        console.log("[launch] onShow 检测到房间号，进入联网对战:", nextRoomId);
+        joinPvpRoom(nextRoomId);
+      }
     });
   }
 }
@@ -424,23 +566,12 @@ function handleMenu(action) {
     app.ui.settingDeckPage = 0;
     return setScene("settings");
   }
-  if (action.id === "cards") {
-    app.ui.cardPage = 0;
-    app.ui.cardFilterDropdown = "";
-    app.ui.cardSearchActive = false;
-    app.ui.keyboardHeight = 0;
-    setScene("cards");
-  }
   if (action.id === "history") {
     app.ui.historyPage = 0;
     app.ui.historyLeaderDetailId = "";
     setScene("history");
   }
-  if (action.id === "share") shareGame();
-  if (action.id === "pvp") {
-    resetPvpState();
-    return setScene("pvpRoom");
-  }
+  if (action.id === "pvp") return enterPvpSetup();
   if (action.id === "rules") setScene("rules");
 }
 
@@ -512,6 +643,74 @@ function handleMatchSetup(action) {
     return startMatch(startOptions);
   }
   if (action.id === "back") return setScene("menu");
+  render();
+}
+
+function applyPvpSetupOption(action) {
+  const settings = loadSettings();
+  const field = action.field;
+  const value = action.value;
+  app.ui.matchSetupDropdown = "";
+  if (field === "pvpFaction") {
+    const patch = { pvpFaction: value };
+    if (value !== "random") patch.humanFaction = value;
+    saveSettings(patch);
+  }
+  if (field === "pvpLeader") {
+    const faction = settings.pvpFaction || settings.humanFaction;
+    if (faction !== "random") saveSettings({ pvpLeaderIds: { ...(settings.pvpLeaderIds || {}), [faction]: value } });
+  }
+  render();
+}
+
+function handlePvpSetup(action) {
+  const selectFields = ["pvpFaction", "pvpLeader"];
+  if (action.id === "matchSetupCardDetail") {
+    app.ui.matchSetupDropdown = "";
+    app.ui.matchSetupCardDetailId = action.cardId || "";
+    return render();
+  }
+  if (action.id === "detailPanel") return;
+  if (action.id === "closeDetail") {
+    app.ui.matchSetupCardDetailId = "";
+    return render();
+  }
+  if (app.ui.matchSetupCardDetailId) return render();
+  if (action.id === "closePvpSetupDropdown") {
+    app.ui.matchSetupDropdown = "";
+    return render();
+  }
+  if (action.id === "selectPvpSetupOption") return applyPvpSetupOption(action);
+  if (selectFields.includes(action.id)) {
+    app.ui.matchSetupDropdown = app.ui.matchSetupDropdown === action.id ? "" : action.id;
+    return render();
+  }
+
+  app.ui.matchSetupDropdown = "";
+  const settings = loadSettings();
+  const faction = settings.pvpFaction || settings.humanFaction;
+  if (action.id === "pvpDeckMode") {
+    if (action.value === "custom" && faction === "random") return toast("随机阵营将使用随机卡牌");
+    saveSettings({ pvpDeckMode: action.value === "custom" ? "custom" : "random" });
+    return render();
+  }
+  if (action.id === "editPvpCustomDeck") {
+    if (faction === "random") return toast("请先选择具体阵营");
+    saveSettings({ humanFaction: faction });
+    app.ui.deckPage = 0;
+    app.ui.deckSlotDropdown = "";
+    app.ui.deckReturnScene = "pvpSetup";
+    return setScene("deckBuilder");
+  }
+  if (action.id === "pvpCreatePrepared") return createPvpRoom();
+  if (action.id === "pvpJoinPrepared") {
+    if (app.pvp.pendingRoomId) return joinPvpRoom(app.pvp.pendingRoomId);
+    return promptJoinPvpRoom();
+  }
+  if (action.id === "back") {
+    resetPvpState();
+    return setScene("menu");
+  }
   render();
 }
 
@@ -588,14 +787,12 @@ function handleSettings(action) {
     app.ui.settingDeckPage = 0;
     return render();
   }
-  if (action.id === "addSettingCard" || action.id === "removeSettingCard") {
+  if (action.id === "addSettingCard") {
     const settings = loadSettings();
     const faction = settings.humanFaction;
     const currentIds = getActiveCustomDeckIds(settings, faction).slice();
     const groupIds = actionCardIds(action);
-    const nextIds = action.id === "removeSettingCard"
-      ? removeOneCardFromGroup(currentIds, groupIds)
-      : addOneCardFromGroup(currentIds, groupIds, faction);
+    const nextIds = toggleCardInGroup(currentIds, groupIds, faction);
     const nextStatus = deckStatus(nextIds, faction);
     saveCustomDeckSlot(faction, 0, nextStatus.ids, nextStatus.valid, null, true);
     return render();
@@ -624,136 +821,6 @@ function handleSettings(action) {
   render();
 }
 
-let searchKeyboardHandlers = null;
-
-function detachSearchKeyboardListeners() {
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api || !searchKeyboardHandlers) return;
-  if (api.offKeyboardInput) api.offKeyboardInput(searchKeyboardHandlers.onInput);
-  if (api.offKeyboardConfirm) api.offKeyboardConfirm(searchKeyboardHandlers.onConfirm);
-  if (api.offKeyboardComplete) api.offKeyboardComplete(searchKeyboardHandlers.onComplete);
-  if (api.offKeyboardHeightChange) api.offKeyboardHeightChange(searchKeyboardHandlers.onHeightChange);
-  searchKeyboardHandlers = null;
-}
-
-function syncSearchValue(value) {
-  app.ui.cardSearchDraft = String(value || "").trim();
-  app.ui.cardQuery = app.ui.cardSearchDraft;
-  app.ui.cardPage = 0;
-}
-
-function closeSearchKeyboard() {
-  const api = typeof wx !== "undefined" ? wx : null;
-  detachSearchKeyboardListeners();
-  if (api?.hideKeyboard) api.hideKeyboard();
-  app.ui.cardSearchActive = false;
-  app.ui.keyboardHeight = 0;
-  render();
-}
-
-function openSearchKeyboard() {
-  const api = typeof wx !== "undefined" ? wx : null;
-  app.ui.cardSearchActive = true;
-  app.ui.cardSearchDraft = app.ui.cardQuery || "";
-  app.ui.keyboardHeight = 0;
-  render();
-  if (!api || !api.showKeyboard || !api.onKeyboardConfirm) {
-    const value = typeof prompt === "function" ? prompt("搜索卡牌", app.ui.cardQuery || "") : (app.ui.cardQuery ? "" : "出使");
-    if (value != null) syncSearchValue(value);
-    app.ui.cardSearchActive = false;
-    return render();
-  }
-  detachSearchKeyboardListeners();
-  const onInput = event => {
-    syncSearchValue(event?.value || "");
-    render();
-  };
-  const finish = event => {
-    syncSearchValue(event?.value ?? app.ui.cardSearchDraft);
-    closeSearchKeyboard();
-  };
-  const onHeightChange = event => {
-    app.ui.keyboardHeight = Math.max(0, Number(event?.height || 0));
-    render();
-  };
-  searchKeyboardHandlers = { onInput, onConfirm: finish, onComplete: finish, onHeightChange };
-  if (api.onKeyboardInput) api.onKeyboardInput(onInput);
-  api.onKeyboardConfirm(finish);
-  if (api.onKeyboardComplete) api.onKeyboardComplete(finish);
-  if (api.onKeyboardHeightChange) api.onKeyboardHeightChange(onHeightChange);
-  api.showKeyboard({ defaultValue: app.ui.cardSearchDraft || "", maxLength: 20, multiple: false, confirmHold: false, confirmType: "search" });
-}
-
-function handleCards(action) {
-  if (action.id === "closeFilterDropdown") {
-    app.ui.cardFilterDropdown = "";
-    return render();
-  }
-  if (action.id === "searchCancel" || action.id === "searchDone" || action.id === "searchBackdrop") {
-    return closeSearchKeyboard();
-  }
-  if (action.id === "searchPanel") {
-    return render();
-  }
-  if (action.id === "searchClear") {
-    syncSearchValue("");
-    if (typeof wx !== "undefined" && wx.updateKeyboard) wx.updateKeyboard({ value: "" });
-    return render();
-  }
-  if (action.id === "quickSearch") {
-    syncSearchValue(action.value || "");
-    if (typeof wx !== "undefined" && wx.updateKeyboard) wx.updateKeyboard({ value: app.ui.cardQuery });
-    return render();
-  }
-  if (action.id === "selectFilterOption") {
-    if (action.filterType === "faction") app.ui.cardFactionFilter = action.value || "all";
-    if (action.filterType === "category") app.ui.cardCategoryFilter = action.value || "all";
-    app.ui.cardFilterDropdown = "";
-    app.ui.cardPage = 0;
-    return render();
-  }
-  if (action.id === "filterFaction") {
-    app.ui.cardFilterDropdown = app.ui.cardFilterDropdown === "faction" ? "" : "faction";
-    return render();
-  }
-  if (action.id === "filterCategory") {
-    app.ui.cardFilterDropdown = app.ui.cardFilterDropdown === "category" ? "" : "category";
-    return render();
-  }
-  if (action.id === "search") {
-    app.ui.cardFilterDropdown = "";
-    return openSearchKeyboard();
-  }
-  if (action.id === "clearSearch") {
-    app.ui.cardFactionFilter = "all";
-    app.ui.cardCategoryFilter = "all";
-    app.ui.cardFilterDropdown = "";
-    app.ui.cardQuery = "";
-    app.ui.cardSearchDraft = "";
-    app.ui.cardSearchActive = false;
-    app.ui.keyboardHeight = 0;
-    detachSearchKeyboardListeners();
-    if (typeof wx !== "undefined" && wx.hideKeyboard) wx.hideKeyboard();
-    app.ui.cardPage = 0;
-  }
-  if (action.id === "cardDetail") {
-    app.ui.cardFilterDropdown = "";
-    app.ui.cardSearchActive = false;
-    app.ui.keyboardHeight = 0;
-    detachSearchKeyboardListeners();
-    if (typeof wx !== "undefined" && wx.hideKeyboard) wx.hideKeyboard();
-    app.ui.cardDetailId = action.cardId || "";
-  }
-  if (action.id === "detailPanel") return;
-  if (action.id === "closeDetail") app.ui.cardDetailId = "";
-  if (action.id === "back") {
-    app.ui.cardDetailId = "";
-    app.ui.cardFilterDropdown = "";
-    return setScene("menu");
-  }
-  render();
-}
-
 function saveCustomDeckSlot(faction, slotIndex, ids, enabled, name, activate = true) {
   const settings = loadSettings();
   const slots = getCustomDeckSlots(settings, faction);
@@ -768,6 +835,18 @@ function saveCustomDeckSlot(faction, slotIndex, ids, enabled, name, activate = t
   }
   if (enabled != null) patch.customDeckEnabled = enabled;
   saveSettings(patch);
+}
+
+function toggleCardInGroup(currentIds, groupIds, faction) {
+  const groupSet = new Set(groupIds);
+  const currentCount = currentIds.filter(id => groupSet.has(id)).length;
+  const maxCount = groupIds.length;
+  if (currentCount >= maxCount) {
+    // 全选了，清空该组
+    return currentIds.filter(id => !groupSet.has(id));
+  }
+  // 还没选满，+1
+  return addOneCardFromGroup(currentIds, groupIds, faction);
 }
 
 function handleDeckBuilder(action) {
@@ -796,11 +875,9 @@ function handleDeckBuilder(action) {
     saveCustomDeckSlot(faction, slotIndex, [], false);
     app.ui.deckPage = 0;
   }
-  if (action.id === "addCustomCard" || action.id === "removeCustomCard") {
+  if (action.id === "addCustomCard") {
     const groupIds = actionCardIds(action);
-    const nextIds = action.id === "removeCustomCard"
-      ? removeOneCardFromGroup(currentIds, groupIds)
-      : addOneCardFromGroup(currentIds, groupIds, faction);
+    const nextIds = toggleCardInGroup(currentIds, groupIds, faction);
     const nextStatus = deckStatus(nextIds, faction);
     saveCustomDeckSlot(faction, slotIndex, nextStatus.ids, nextStatus.valid);
   }
@@ -820,10 +897,16 @@ function handleHistory(action) {
 
 function handlePvpRoom(action) {
   if (action.id === "pvpCreate") return createPvpRoom();
-  if (action.id === "pvpShare") return shareGame();
+  if (action.id === "pvpShare") return guideShare();
   if (action.id === "pvpCopy") {
     if (pvpClient.copyRoomId(app.pvp.roomId)) toast("房间号已复制");
     else toast(app.pvp.roomId || "暂无房间号");
+    return render();
+  }
+  if (action.id === "pvpCopyError") {
+    const message = [`房间号：${app.pvp.roomId || "无"}`, `错误信息：${app.pvp.error || "无"}`].join("\n");
+    if (pvpClient.copyText(message)) toast("错误信息已复制");
+    else toast(app.pvp.error || "暂无错误信息");
     return render();
   }
   if (action.id === "pvpJoin") return promptJoinPvpRoom();
@@ -846,10 +929,7 @@ function handleBattle(action) {
     clearRecentPlayTimer();
     return render();
   }
-  if (action.id === "battleCardDetail") {
-    app.ui.battleCardDetailId = action.cardId || "";
-    return render();
-  }
+  if (action.id === "battleCardDetail") return render();
   if (action.id === "detailPanel") return;
   if (action.id === "closeDetail") {
     app.ui.battleCardDetailId = "";
@@ -945,11 +1025,11 @@ function handleBattle(action) {
 function handleAction(action) {
   vibrate();
   if (app.scene === "menu") return handleMenu(action);
+  if (app.scene === "pvpSetup") return handlePvpSetup(action);
   if (app.scene === "pvpRoom") return handlePvpRoom(action);
   if (app.scene === "matchSetup") return handleMatchSetup(action);
   if (app.scene === "rules") return action.id === "back" ? setScene("menu") : null;
   if (app.scene === "settings") return handleSettings(action);
-  if (app.scene === "cards") return handleCards(action);
   if (app.scene === "deckBuilder") return handleDeckBuilder(action);
   if (app.scene === "history") return handleHistory(action);
   if (app.scene === "battle") return handleBattle(action);
@@ -1012,23 +1092,6 @@ function handleHandSwipe(start, end) {
   return true;
 }
 
-function handleCardsSwipe(start, end) {
-  if (!start || !end || app.scene !== "cards" || app.ui.cardDetailId || app.ui.cardFilterDropdown || app.ui.cardSearchActive) return false;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const absX = Math.abs(dx);
-  const absY = Math.abs(dy);
-  const listTop = view.safeTop + 26 + 34 + 92;
-  const listBottom = view.height - view.safeBottom - 82;
-  if (start.y < listTop || start.y > listBottom || absY < 42 || absY < absX * 1.2) return false;
-  const nextPage = cardsScene.clampPage(view, app.ui, (app.ui.cardPage || 0) + (dy < 0 ? 1 : -1));
-  if (nextPage !== app.ui.cardPage) {
-    app.ui.cardPage = nextPage;
-    startPageTransition("cards", "y", dy < 0 ? 76 : -76);
-  }
-  return true;
-}
-
 function handleDeckBuilderSwipe(start, end) {
   if (!start || !end || app.scene !== "deckBuilder" || app.ui.deckCardDetailId || app.ui.deckSlotDropdown) return false;
   const dx = end.x - start.x;
@@ -1080,6 +1143,60 @@ function handleHistorySwipe(start, end) {
   return true;
 }
 
+function getCurrentDetailCardList() {
+  if (app.scene === "deckBuilder") {
+    const settings = loadSettings();
+    const faction = settings.humanFaction;
+    const { eligibleCards, groupCards } = require("./js/core/cards");
+    return groupCards(eligibleCards(faction));
+  }
+  return [];
+}
+
+function handleCardDetailSwipe(start, end) {
+  const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
+  if (!detailId || !start || !end) return false;
+  
+  // 如果正在动画中，不处理新滑动
+  if (app.ui.detailSwipe && app.ui.detailSwipe.animating) return false;
+  
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  
+  // 需要水平滑动且幅度足够
+  if (absX < 40 || absX < absY * 0.8) return false;
+  
+  const cards = getCurrentDetailCardList();
+  if (!cards.length) return false;
+  
+  const currentIdx = cards.findIndex(g => g.card.id === detailId);
+  if (currentIdx < 0) return false;
+  
+  // 向左滑（dx < 0）显示下一张，向右滑（dx > 0）显示上一张
+  const swipeLeft = dx < 0;
+  const targetIdx = swipeLeft ? currentIdx + 1 : currentIdx - 1;
+  
+  // 检查边界
+  if (targetIdx < 0 || targetIdx >= cards.length) return false;
+  
+  const targetCard = cards[targetIdx].card;
+  const maxOffset = 112; // 最大滑动偏移量
+  
+  // 启动动画切换卡牌
+  startDetailSwipeTransition(swipeLeft ? -maxOffset : maxOffset, () => {
+    // 动画完成后更新当前查看的卡牌ID
+    if (app.scene === "deckBuilder") app.ui.deckCardDetailId = targetCard.id;
+    else if (app.scene === "battle") app.ui.battleCardDetailId = targetCard.id;
+    else if (app.scene === "settings") app.ui.settingCardDetailId = targetCard.id;
+    else if (app.scene === "matchSetup" || app.scene === "pvpSetup") app.ui.matchSetupCardDetailId = targetCard.id;
+    else if (app.scene === "history") app.ui.historyLeaderDetailId = targetCard.id;
+  });
+  
+  return true;
+}
+
 function findAction(point) {
   for (let i = app.actions.length - 1; i >= 0; i--) {
     if (hit(point, app.actions[i])) return app.actions[i];
@@ -1117,11 +1234,26 @@ function openMatchSetupCardDetail(cardId) {
   render();
 }
 
+function openDeckBuilderCardDetail(cardId) {
+  if (!cardId) return;
+  app.ui.deckCardDetailId = cardId;
+  vibrate();
+  render();
+}
+
+function openSettingCardDetail(cardId) {
+  if (!cardId) return;
+  app.ui.settingDropdown = "";
+  app.ui.settingCardDetailId = cardId;
+  vibrate();
+  render();
+}
+
 function startLongPress(point) {
   const action = findAction(point);
   if (!action || !action.cardId) return;
   let openDetail = null;
-  if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && ["card", "battleCardDetail", "leaderAvatar"].includes(action.id)) {
+  if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && ["card", "battleCardDetail", "leaderAvatar", "targetChoice"].includes(action.id)) {
     openDetail = openBattleCardDetail;
   }
   if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
@@ -1129,6 +1261,15 @@ function startLongPress(point) {
   }
   if (app.scene === "matchSetup" && !app.ui.matchSetupCardDetailId && ["humanLeader", "aiLeader", "selectMatchSetupOption"].includes(action.id)) {
     openDetail = openMatchSetupCardDetail;
+  }
+  if (app.scene === "pvpSetup" && !app.ui.matchSetupCardDetailId && ["pvpLeader", "selectPvpSetupOption"].includes(action.id)) {
+    openDetail = openMatchSetupCardDetail;
+  }
+  if (app.scene === "deckBuilder" && !app.ui.deckCardDetailId && action.id === "addCustomCard") {
+    openDetail = openDeckBuilderCardDetail;
+  }
+  if (app.scene === "settings" && !app.ui.settingCardDetailId && action.cardId && ["humanLeader", "addSettingCard", "selectSettingOption"].includes(action.id)) {
+    openDetail = openSettingCardDetail;
   }
   if (!openDetail) return;
   touchStartState.longPressTimer = setTimeout(() => {
@@ -1157,9 +1298,24 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
 
 if (typeof wx !== "undefined" && wx.onTouchMove) {
   wx.onTouchMove(event => {
-    if (!touchStartState || !touchStartState.longPressTimer) return;
     const point = normalizeTouch(event);
-    if (!point) return;
+    if (!point || !touchStartState) return;
+    
+    // 实时跟踪卡牌详情滑动
+    const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
+    if (detailId && !app.ui.detailSwipe?.animating) {
+      const dx = point.x - touchStartState.point.x;
+      const dy = point.y - touchStartState.point.y;
+      // 水平滑动幅度大于垂直，且超过阈值
+      if (Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 0.6) {
+        const maxOffset = 112;
+        const offset = Math.max(-maxOffset, Math.min(maxOffset, dx));
+        app.ui.detailSwipe = { offset, animating: false };
+        render();
+      }
+    }
+    
+    if (!touchStartState.longPressTimer) return;
     if (Math.hypot(point.x - touchStartState.point.x, point.y - touchStartState.point.y) > LONG_PRESS_MOVE) {
       clearLongPress();
     }
@@ -1175,9 +1331,24 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
     if (state && state.longPressTimer) clearTimeout(state.longPressTimer);
     if (state && state.longPressFired) return;
     const start = state?.point || point;
+    
+    // 检查是否在卡牌详情上有未完成的滑动，需要回弹
+    const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
+    if (detailId && app.ui.detailSwipe && !app.ui.detailSwipe.animating && Math.abs(app.ui.detailSwipe.offset || 0) > 5) {
+      // 如果没有触发卡牌切换，回弹到原位
+      startDetailSwipeTransition(app.ui.detailSwipe.offset);
+      return;
+    }
+    
+    // 重置未完成的滑动状态
+    if (app.ui.detailSwipe && !app.ui.detailSwipe.animating) {
+      app.ui.detailSwipe = null;
+      render();
+    }
+    
+    if (handleCardDetailSwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
     if (handleHandSwipe(start, point)) return;
-    if (handleCardsSwipe(start, point)) return;
     if (handleHistorySwipe(start, point)) return;
     if (handleSettingsSwipe(start, point)) return;
     if (handleDeckBuilderSwipe(start, point)) return;
@@ -1188,6 +1359,10 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
 if (typeof wx !== "undefined" && wx.onTouchCancel) {
   wx.onTouchCancel(() => {
     clearLongPress();
+    // 取消时如果有未完成的滑动，回弹
+    if (app.ui.detailSwipe && !app.ui.detailSwipe.animating && (app.ui.detailSwipe.offset || 0) !== 0) {
+      startDetailSwipeTransition(app.ui.detailSwipe.offset);
+    }
     touchStartState = null;
   });
 }

@@ -1,7 +1,7 @@
 const { clear, text, button, fillRoundRect, wrapText, drawCardImage, short } = require("../ui/canvas");
 const { loadSave } = require("../core/storage");
 const { DIFFICULTY_LABELS, allCards, cardById, displayName } = require("../core/cards");
-const { drawDetail } = require("./cardsBrowser");
+const { drawDetail } = require("./cardDetail");
 
 const ROW_H = 90;
 const ROW_GAP = 98;
@@ -107,17 +107,29 @@ function drawLeaderAvatar(ctx, actions, card, x, y, size, stroke) {
   }
 }
 
-function drawStreakBadge(ctx, badge, x, y) {
-  const w = 82;
-  const h = 26;
+function drawStreakBadge(ctx, badge, rightX, y) {
+  const w = 90;
+  const h = 28;
+  const cx = rightX - w * 0.5;
+  const cy = y + h * 0.3;
   ctx.save();
-  ctx.shadowColor = "rgba(143, 60, 31, 0.32)";
-  ctx.shadowBlur = 10;
-  ctx.shadowOffsetY = 2;
-  fillRoundRect(ctx, x, y, w, h, 13, "#f6d27a", "#fff1a8");
+  ctx.translate(cx, cy);
+  ctx.rotate(0.4);
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 3;
+  fillRoundRect(ctx, -w / 2, -h / 2, w, h, 6, "#e85d2a", "#ff9d5c");
   ctx.restore();
-  fillRoundRect(ctx, x + 4, y + 4, w - 8, h - 8, 9, badge.fill, "rgba(255,247,216,0.52)");
-  text(ctx, badge.text, x + w / 2, y + h / 2 + 0.5, 11, "#fff7d8", "center");
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(0.4);
+  fillRoundRect(ctx, -w / 2 + 3, -h / 2 + 3, w - 6, h - 6, 4, badge.fill, "rgba(255,255,255,0.18)");
+  ctx.font = "bold 13px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff7e0";
+  ctx.fillText(badge.text, 0, 1);
+  ctx.restore();
 }
 
 function draw(ctx, view, actions, ui = {}) {
@@ -153,19 +165,24 @@ function draw(ctx, view, actions, ui = {}) {
     const badge = badges[globalIndex];
     const humanLeader = leaderCard(item.humanLeaderId, item.humanLeader);
     fillRoundRect(ctx, 18, y, view.width - 36, ROW_H, 13, style.fill, style.color);
-    fillRoundRect(ctx, 24, y + 10, 5, ROW_H - 20, 3, style.color);
-    fillRoundRect(ctx, 34, y + 8, 40, 18, 9, style.tagFill);
-    text(ctx, style.label, 54, y + 17, 10, "#fff7d8", "center");
-    if (badge) drawStreakBadge(ctx, badge, view.width - 128, y + 7);
+    fillRoundRect(ctx, 24, y + 4, 5, ROW_H - 8, 3, style.color);
+    if (badge) drawStreakBadge(ctx, badge, view.width - 14, y);
     const title = item.resultText || (item.endReason === "surrender" ? "认输" : "已结束");
-    const avatarSize = 54;
-    const avatarY = y + 30;
-    drawLeaderAvatar(ctx, actions, humanLeader, 36, avatarY, avatarSize, style.color);
-    const textX = 104;
+    const avatarSize = ROW_H - 12;
+    const avatarY = y + 6;
+    drawLeaderAvatar(ctx, actions, humanLeader, 32, avatarY, avatarSize, style.color);
+    const textX = 32 + avatarSize + 10;
     const textW = view.width - textX - 72;
-    text(ctx, `${title} · ${formatTime(item.time)}`, textX, y + 18, 13, style.color);
+    const tagW = 38;
+    const tagH = 18;
+    fillRoundRect(ctx, textX, y + 8, tagW, tagH, 9, style.tagFill);
+    text(ctx, style.label, textX + tagW / 2, y + 17, 10, "#fff7d8", "center");
+    text(ctx, `${title} · ${formatTime(item.time)}`, textX + tagW + 8, y + 18, 13, style.color);
+    const isOnline = item.mode === "online";
     wrapText(ctx, `我方 ${item.humanFaction || "阵营"} · ${short(item.humanLeader || "主将", 8)}`, textX, y + 40, textW, 14, 1, 11, "#3b2b18");
-    wrapText(ctx, `对手 ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通"}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
+    const oppSuffix = isOnline ? "好友对战" : (DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通");
+    const oppName = isOnline ? "好友" : "对手";
+    wrapText(ctx, `${oppName} ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${oppSuffix}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
     wrapText(ctx, roundDetail(item), textX, y + 80, textW, 13, 1, 10, "#6f5a3a");
     text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 54, 18, style.color, "center");
   });
@@ -181,7 +198,10 @@ function draw(ctx, view, actions, ui = {}) {
   const back = { id: "back", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });
-  if (detail) drawDetail(ctx, view, actions, detail);
+  if (detail) {
+    const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
+    drawDetail(ctx, view, actions, detail, { swipeOffset });
+  }
 }
 
 module.exports = { draw, clampPage };

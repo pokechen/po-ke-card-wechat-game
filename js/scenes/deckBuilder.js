@@ -12,7 +12,7 @@ const {
   cardSummary,
   cardById
 } = require("../core/cards");
-const { drawDetail } = require("./cardsBrowser");
+const { drawDetail } = require("./cardDetail");
 
 function canAddCard(status, card) {
   if (status.total >= 40) return false;
@@ -87,7 +87,7 @@ function draw(ctx, view, actions, ui) {
     const full = count >= group.cards.length;
     const disabled = (!selected && !canAddCard(status, card)) || full;
     const groupIds = group.cards.map(item => item.id);
-    const rect = { id: "addCustomCard", cardIds: groupIds, x: 18, y, w: view.width - 36, h: 58 };
+    const rect = { id: "addCustomCard", cardIds: groupIds, cardId: card.id, x: 18, y, w: view.width - 36, h: 58 };
     actions.push(rect);
     fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 12, selected ? "#eff8ef" : (disabled ? "#eee7da" : "#fffaf0"), selected ? "#2f6f57" : "#dcc48d");
     drawCardImage(ctx, {
@@ -98,22 +98,17 @@ function draw(ctx, view, actions, ui) {
       imageH: 42
     });
     const x = rect.x + 62;
-    text(ctx, short(displayName(card), 9), x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
-    if (selected) {
+    const maxCount = group.cards.length;
+    const baseName = short(displayName(card), 9);
+    const nameText = maxCount > 1 ? `${baseName} x${maxCount}` : baseName;
+    text(ctx, nameText, x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
+    if (selected && maxCount > 1) {
       fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
-      text(ctx, `×${count}`, x + 109, y + 15, 11, "#fff7d8", "center");
+      text(ctx, `${count}/${maxCount}`, x + 109, y + 15, 11, "#fff7d8", "center");
     }
     const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略";
     text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
     wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
-    if (selected) {
-      const remove = { id: "removeCustomCard", cardIds: groupIds, x: view.width - 124, y: y + 30, w: 48, h: 22 };
-      actions.push(remove);
-      button(ctx, { ...remove, label: "减1", fill: "#8f3c1f", stroke: "#6d2d18", size: 10, r: 8 });
-    }
-    const detail = { id: "deckCardDetail", cardId: card.id, x: view.width - 72, y: y + 30, w: 48, h: 22 };
-    actions.push(detail);
-    button(ctx, { ...detail, label: "详情", fill: "#4f6d8a", stroke: "#36516a", size: 10, r: 8 });
   });
   ctx.restore();
   if (safePage < totalPages - 1) {
@@ -127,8 +122,14 @@ function draw(ctx, view, actions, ui) {
 
   const back = { id: "backSettings", x: 46, y: backY, w: view.width - 92, h: 40 };
   actions.push(back);
-  button(ctx, { ...back, label: ui.deckReturnScene === "matchSetup" ? "返回准备" : "返回设置", size: 13, fill: "#8d6840" });
-  if (detail) drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回牌组编辑" });
+  button(ctx, { ...back, label: ui.deckReturnScene === "matchSetup" || ui.deckReturnScene === "pvpSetup" ? "返回准备" : "返回设置", size: 13, fill: "#8d6840" });
+  if (detail) {
+    const currentIdx = groups.findIndex(g => g.card.id === detail.id);
+    const leftCard = currentIdx > 0 ? groups[currentIdx - 1].card : null;
+    const rightCard = currentIdx >= 0 && currentIdx < groups.length - 1 ? groups[currentIdx + 1].card : null;
+    const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
+    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回牌组编辑", leftCard, rightCard, swipeOffset });
+  }
 }
 
 module.exports = { draw, clampPage };
