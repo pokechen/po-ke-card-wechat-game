@@ -1,9 +1,6 @@
 # 系统文件
 .DS_Store
 
-# 开发截图
-preview-*.png
-
 # 微信开发者工具本地私有配置
 project.private.config.json
 
