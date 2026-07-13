@@ -5,6 +5,4 @@
 project.private.config.json
 
 # 本地工具缓存
-.workbuddy/
-.codebuddy/
 .kuai.yaml
