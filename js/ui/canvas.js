@@ -191,7 +191,7 @@ const ABILITY_MARKS = {
   "Commander's Horn": "号令",
   "Summon Shield Maidens": "召唤盾女",
   "Summon Avenger": "召唤复仇者",
-  "Summon Bovine Defense Force": "牛魔防卫",
+  "Summon Sky Hound": "召唤啸天",
   Berserker: "奋起",
   Mardroeme: "破釜"
 };

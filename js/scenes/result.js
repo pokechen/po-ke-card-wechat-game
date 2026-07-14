@@ -15,7 +15,7 @@ function draw(ctx, view, actions, state) {
   text(ctx, online ? "联网对局已结束" : "战绩已保存在本机", view.width / 2, top + 188, 12, "#775c34", "center");
   actions.push({ id: "restart", x: 46, y: top + 256, w: view.width - 92, h: 54 });
   actions.push({ id: "home", x: 46, y: top + 326, w: view.width - 92, h: 54 });
-  button(ctx, { ...actions[0], label: online ? "再开房间" : "再来一局" });
+  button(ctx, { ...actions[0], label: online ? "返回房间" : "再来一局" });
   button(ctx, { ...actions[1], label: "返回首页", fill: "#8d6840", stroke: "#6f4d29" });
 }
 

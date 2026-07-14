@@ -1,5 +1,6 @@
 const cloud = require("wx-server-sdk");
 const battle = require("./js/core/battle");
+const { FACTION_KEYS, deckStatus } = require("./js/core/cards");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
@@ -29,26 +30,56 @@ function createRoomId() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-function safeSetup(input = {}) {
-  const setup = input && typeof input === "object" ? input : {};
+function safeFaction(value, fallback = "Northern Realms") {
+  return FACTION_KEYS.includes(value) ? value : fallback;
+}
+
+function safeRules(input = {}, previous = null) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallbackFaction = safeFaction(previous?.faction || "Northern Realms");
+  const factionMode = source.factionMode === "fixed" ? "fixed" : "any";
+  const deckMode = source.deckMode === "autoOnly" ? "autoOnly" : "any";
+  const version = Number.isFinite(Number(previous?.version)) ? Number(previous.version) : 0;
   return {
-    name: String(setup.name || "").trim().slice(0, 12),
-    faction: String(setup.faction || "Northern Realms"),
-    leaderId: String(setup.leaderId || ""),
-    customDeckIds: Array.isArray(setup.customDeckIds) ? setup.customDeckIds.map(id => String(id)).slice(0, 40) : []
+    factionMode,
+    faction: safeFaction(source.faction || fallbackFaction, fallbackFaction),
+    deckMode,
+    version
   };
 }
 
-function makePlayer(openid, index, setup) {
-  const safe = safeSetup(setup);
+function safeSetup(input = {}, rules = null) {
+  const setup = input && typeof input === "object" ? input : {};
+  const activeRules = safeRules(rules || {});
+  const faction = activeRules.factionMode === "fixed"
+    ? activeRules.faction
+    : safeFaction(String(setup.faction || "Northern Realms"));
+  const rawIds = Array.isArray(setup.customDeckIds) ? setup.customDeckIds.map(id => String(id)).slice(0, 40) : [];
+  const status = activeRules.deckMode === "autoOnly" ? { valid: false, ids: [] } : deckStatus(rawIds, faction);
+  return {
+    name: String(setup.name || "").trim().slice(0, 12),
+    faction,
+    leaderId: String(setup.leaderId || ""),
+    customDeckIds: status.valid ? status.ids : []
+  };
+}
+
+function makePlayer(openid, index, setup, rules) {
+  const safe = safeSetup(setup, rules);
   return {
     openid,
     index,
     name: safe.name || `玩家${index + 1}`,
     faction: safe.faction,
     leaderId: safe.leaderId,
-    customDeckIds: safe.customDeckIds
+    customDeckIds: safe.customDeckIds,
+    ready: false,
+    setupReady: false
   };
+}
+
+function resetPlayerFlags(players = []) {
+  return players.map(player => ({ ...player, ready: false, setupReady: false }));
 }
 
 async function getRoom(roomId) {
@@ -93,7 +124,7 @@ function buildMatch(players) {
   match.mode = "online";
   match.players[0].name = p0.name || "玩家一";
   match.players[1].name = p1.name || "玩家二";
-  match.logs.unshift("好友已加入，联网对战开始。 ");
+  match.logs.unshift("双方已确认出战配置，联网对战开始。 ");
   return match;
 }
 
@@ -106,8 +137,12 @@ function pendingOwner(match) {
 function assertCanAct(match, playerIndex, actionType) {
   if (!match || match.over) throw new Error("牌局已结束");
   if (match.mulligan && match.mulligan.active) {
-    if (match.mulligan.current !== playerIndex) throw new Error("等待对方换牌");
     if (actionType !== "mulliganSwap" && actionType !== "mulliganDone") throw new Error("请先完成换牌");
+    if (match.mulligan.simultaneous && match.mode === "online") {
+      if (match.mulligan.done?.[playerIndex]) throw new Error("等待对方换牌");
+      return;
+    }
+    if (match.mulligan.current !== playerIndex) throw new Error("等待对方换牌");
     return;
   }
   if (match.pending) {
@@ -121,8 +156,8 @@ function assertCanAct(match, playerIndex, actionType) {
 function applyBattleAction(match, playerIndex, action = {}) {
   const type = String(action.type || "");
   assertCanAct(match, playerIndex, type);
-  if (type === "mulliganSwap") return battle.mulliganSwap(match, action.cardUid);
-  if (type === "mulliganDone") return battle.finishMulligan(match);
+  if (type === "mulliganSwap") return battle.mulliganSwap(match, action.cardUid, playerIndex);
+  if (type === "mulliganDone") return battle.finishMulligan(match, playerIndex);
   if (type === "resolvePending") return battle.resolvePending(match, action.choice || {});
   if (type === "cancelPending") return battle.cancelPending(match);
   if (type === "card") return battle.playCard(match, action.cardUid, action.row);
@@ -134,7 +169,8 @@ function applyBattleAction(match, playerIndex, action = {}) {
 }
 
 async function createRoom(event, openid) {
-  const player = makePlayer(openid, 0, event.setup);
+  const rules = { ...safeRules(event.rules), version: 1, changedAt: now() };
+  const player = makePlayer(openid, 0, event.setup, rules);
   for (let i = 0; i < 5; i++) {
     const roomId = createRoomId();
     const room = {
@@ -142,6 +178,7 @@ async function createRoom(event, openid) {
       roomId,
       status: "waiting",
       players: [player],
+      rules,
       match: null,
       turnSeq: 0,
       createdAt: now(),
@@ -169,13 +206,14 @@ async function joinRoom(event, openid) {
   if (room.status !== "waiting") return fail("房间已开始或已结束", "ROOM_CLOSED");
   if ((room.players || []).length >= 2) return fail("房间已满", "ROOM_FULL");
 
-  const players = (room.players || []).concat(makePlayer(openid, 1, event.setup));
-  const match = buildMatch(players);
+  const rules = safeRules(room.rules || {});
+  const players = (room.players || []).concat(makePlayer(openid, 1, event.setup, rules));
   const nextRoom = {
     ...room,
-    status: "playing",
+    status: "waiting",
     players,
-    match,
+    rules,
+    match: null,
     turnSeq: (room.turnSeq || 0) + 1,
     updatedAt: now()
   };
@@ -183,12 +221,91 @@ async function joinRoom(event, openid) {
     data: {
       status: nextRoom.status,
       players,
-      match: _.set(match),
+      rules,
+      match: null,
       turnSeq: nextRoom.turnSeq,
       updatedAt: nextRoom.updatedAt
     }
   });
   return ok({ roomId, playerIndex: 1, room: publicRoom(nextRoom) });
+}
+
+async function updateRules(event, openid) {
+  const roomId = normalizeRoomId(event.roomId);
+  const room = await getRoom(roomId);
+  if (!room) return fail("房间不存在", "NOT_FOUND");
+  if (playerIndexOf(room, openid) !== 0) return fail("只有房主可以修改规则", "FORBIDDEN");
+  if (room.status === "playing" || room.status === "selecting") return fail("本局已开始，不能修改规则", "ROOM_BUSY");
+  const previous = safeRules(room.rules || {});
+  const rules = { ...safeRules(event.rules, previous), version: (previous.version || 0) + 1, changedAt: now() };
+  const players = resetPlayerFlags(room.players || []);
+  const nextRoom = { ...room, status: "waiting", rules, players, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  await db.collection(ROOMS).doc(roomId).update({
+    data: { status: "waiting", rules, players, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt }
+  });
+  return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom) });
+}
+
+async function setReady(event, openid) {
+  const roomId = normalizeRoomId(event.roomId);
+  const room = await getRoom(roomId);
+  if (!room) return fail("房间不存在", "NOT_FOUND");
+  if (room.status !== "waiting") return fail("当前不能准备", "ROOM_BUSY");
+  const playerIndex = playerIndexOf(room, openid);
+  if (playerIndex < 0) return fail("你不在这个房间", "FORBIDDEN");
+  if (playerIndex === 0) return fail("房主无需准备，等待好友准备后开始", "HOST_READY_IGNORED");
+  const players = (room.players || []).map((player, index) => index === playerIndex ? { ...player, ready: !!event.ready } : player);
+  const nextRoom = { ...room, players, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  await db.collection(ROOMS).doc(roomId).update({ data: { players, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt } });
+  return ok({ roomId, playerIndex, room: publicRoom(nextRoom) });
+}
+
+async function startSelection(event, openid) {
+  const roomId = normalizeRoomId(event.roomId);
+  const room = await getRoom(roomId);
+  if (!room) return fail("房间不存在", "NOT_FOUND");
+  if (playerIndexOf(room, openid) !== 0) return fail("只有房主可以开始", "FORBIDDEN");
+  if (room.status !== "waiting") return fail("当前不能开始", "ROOM_BUSY");
+  const players = room.players || [];
+  if (players.length < 2) return fail("等待好友加入", "WAITING_PLAYER");
+  if (!players[1]?.ready) return fail("好友准备后才能开始", "WAITING_READY");
+  const nextPlayers = resetPlayerFlags(players);
+  const nextRoom = { ...room, status: "selecting", players: nextPlayers, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  await db.collection(ROOMS).doc(roomId).update({ data: { status: "selecting", players: nextPlayers, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt } });
+  return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom) });
+}
+
+async function submitSetup(event, openid) {
+  const roomId = normalizeRoomId(event.roomId);
+  const room = await getRoom(roomId);
+  if (!room) return fail("房间不存在", "NOT_FOUND");
+  if (room.status !== "selecting") return fail("还未进入选择卡牌阶段", "NOT_SELECTING");
+  const playerIndex = playerIndexOf(room, openid);
+  if (playerIndex < 0) return fail("你不在这个房间", "FORBIDDEN");
+  const rules = safeRules(room.rules || {});
+  const setup = safeSetup(event.setup, rules);
+  const players = (room.players || []).map((player, index) => index === playerIndex ? { ...player, ...setup, setupReady: true } : player);
+  const allReady = players.length >= 2 && players.slice(0, 2).every(player => player.setupReady);
+  const match = allReady ? buildMatch(players) : null;
+  const status = allReady ? "playing" : "selecting";
+  const nextRoom = { ...room, status, players, match, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  await db.collection(ROOMS).doc(roomId).update({
+    data: { status, players, match: match ? _.set(match) : null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt }
+  });
+  return ok({ roomId, playerIndex, room: publicRoom(nextRoom) });
+}
+
+async function returnToRoom(event, openid) {
+  const roomId = normalizeRoomId(event.roomId);
+  const room = await getRoom(roomId);
+  if (!room) return fail("房间不存在", "NOT_FOUND");
+  const playerIndex = playerIndexOf(room, openid);
+  if (playerIndex < 0) return fail("你不在这个房间", "FORBIDDEN");
+  if (room.status !== "finished") return ok({ roomId, playerIndex, room: publicRoom(room) });
+  const players = resetPlayerFlags(room.players || []);
+  const nextRoom = { ...room, status: "waiting", players, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  await db.collection(ROOMS).doc(roomId).update({ data: { status: "waiting", players, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt } });
+  return ok({ roomId, playerIndex, room: publicRoom(nextRoom) });
 }
 
 async function submitAction(event, openid) {
@@ -198,7 +315,11 @@ async function submitAction(event, openid) {
   if (room.status !== "playing") return fail("房间未在对战中", "NOT_PLAYING");
   const playerIndex = playerIndexOf(room, openid);
   if (playerIndex < 0) return fail("你不在这个房间", "FORBIDDEN");
-  if (Number.isFinite(Number(event.turnSeq)) && Number(event.turnSeq) !== Number(room.turnSeq || 0)) {
+  const actionType = String(event.battleAction?.type || "");
+  const allowStaleMulligan = room.match?.mulligan?.active
+    && room.match.mulligan.simultaneous
+    && (actionType === "mulliganSwap" || actionType === "mulliganDone");
+  if (!allowStaleMulligan && Number.isFinite(Number(event.turnSeq)) && Number(event.turnSeq) !== Number(room.turnSeq || 0)) {
     return fail("牌局已更新，请稍后再试", "STALE_TURN");
   }
   const match = room.match;
@@ -254,6 +375,11 @@ exports.main = async (event = {}) => {
     const action = String(event.action || "");
     if (action === "createRoom") return createRoom(event, OPENID);
     if (action === "joinRoom") return joinRoom(event, OPENID);
+    if (action === "updateRules") return updateRules(event, OPENID);
+    if (action === "setReady") return setReady(event, OPENID);
+    if (action === "startSelection") return startSelection(event, OPENID);
+    if (action === "submitSetup") return submitSetup(event, OPENID);
+    if (action === "returnToRoom") return returnToRoom(event, OPENID);
     if (action === "submitAction") return submitAction(event, OPENID);
     if (action === "leaveRoom") return leaveRoom(event, OPENID);
     return fail("未知请求");

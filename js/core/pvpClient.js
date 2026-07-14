@@ -31,12 +31,32 @@ function callRoom(action, data = {}) {
   });
 }
 
-function createRoom(setup) {
-  return callRoom("createRoom", { setup });
+function createRoom(setup, rules) {
+  return callRoom("createRoom", { setup, rules });
 }
 
 function joinRoom(roomId, setup) {
   return callRoom("joinRoom", { roomId, setup });
+}
+
+function updateRules(roomId, rules) {
+  return callRoom("updateRules", { roomId, rules });
+}
+
+function setReady(roomId, ready) {
+  return callRoom("setReady", { roomId, ready });
+}
+
+function startSelection(roomId) {
+  return callRoom("startSelection", { roomId });
+}
+
+function submitSetup(roomId, setup) {
+  return callRoom("submitSetup", { roomId, setup });
+}
+
+function returnToRoom(roomId) {
+  return callRoom("returnToRoom", { roomId });
 }
 
 function submitAction(roomId, turnSeq, battleAction) {
@@ -59,12 +79,30 @@ function watchRoom(roomId, onChange, onError) {
   if (!initCloud() || !api.cloud.database) throw new Error("当前环境不支持云数据库监听");
   closeRoomWatch();
   const db = api.cloud.database({ env: ENV_ID });
+  console.log("[pvp] watchRoom 开始监听, roomId=", roomId);
   roomWatcher = db.collection(ROOM_COLLECTION).doc(roomId).watch({
     onChange(snapshot) {
+      console.log("[pvp] watch onChange 触发, type=", snapshot && snapshot.type,
+        "docChanges=", snapshot && snapshot.docChanges ? snapshot.docChanges.length : 0,
+        "docs=", snapshot && snapshot.docs ? snapshot.docs.length : 0);
+      // 优先从 docs 取最新文档
       const docs = snapshot && snapshot.docs ? snapshot.docs : [];
-      if (docs[0]) onChange(docs[0]);
+      if (docs[0]) {
+        console.log("[pvp] watch 收到房间数据, status=", docs[0].status, "players=", (docs[0].players || []).length);
+        onChange(docs[0]);
+        return;
+      }
+      // 兜底：从 docChanges 中取
+      const changes = snapshot && snapshot.docChanges ? snapshot.docChanges : [];
+      if (changes.length > 0 && changes[0].doc) {
+        console.log("[pvp] watch 从 docChanges 取数据, status=", changes[0].doc.status);
+        onChange(changes[0].doc);
+        return;
+      }
+      console.log("[pvp] watch onChange 但无有效文档数据, snapshot keys=", snapshot ? Object.keys(snapshot) : "null");
     },
     onError(err) {
+      console.error("[pvp] watch onError:", err && err.errMsg || err);
       if (onError) onError(err);
     }
   });
@@ -74,8 +112,17 @@ function watchRoom(roomId, onChange, onError) {
 function copyText(value) {
   const api = wxApi();
   if (!api || !api.setClipboardData) return false;
-  api.setClipboardData({ data: String(value || "") });
-  return true;
+  try {
+    api.setClipboardData({
+      data: String(value || ""),
+      success: () => {},
+      fail: err => console.warn("[pvp] setClipboardData failed", err)
+    });
+    return true;
+  } catch (err) {
+    console.warn("[pvp] setClipboardData exception", err);
+    return false;
+  }
 }
 
 function copyRoomId(roomId) {
@@ -87,6 +134,11 @@ module.exports = {
   initCloud,
   createRoom,
   joinRoom,
+  updateRules,
+  setReady,
+  startSelection,
+  submitSetup,
+  returnToRoom,
   submitAction,
   leaveRoom,
   watchRoom,

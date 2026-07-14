@@ -53,14 +53,21 @@ function selectedValue(settings, field) {
   return "";
 }
 
+function detailLeaderCards(settings, detailId) {
+  const candidates = [leadersFor(settings.humanFaction)];
+  if (settings.aiFaction !== "random") candidates.push(leadersFor(settings.aiFaction));
+  return candidates.find(list => list.some(card => card.id === detailId)) || candidates.reduce((all, list) => all.concat(list), []);
+}
+
 function drawSectionTitle(ctx, label, x, y) {
   fillRoundRect(ctx, x, y - 8, 4, 16, 2, "#d3a44f");
   text(ctx, label, x + 10, y, 13, "#3b2b18");
 }
 
 function drawInfoCard(ctx, content, x, y, w, h, color) {
+  const compact = h <= 38;
   fillRoundRect(ctx, x, y, w, h, 12, "rgba(255, 249, 235, 0.88)", "rgba(216, 189, 131, 0.7)");
-  wrapText(ctx, content, x + 12, y + 13, w - 24, 15, 2, 10, color || "#775c34");
+  wrapText(ctx, content, x + 12, compact ? y + h / 2 : y + 13, w - 24, 15, compact ? 1 : 2, 10, color || "#775c34");
 }
 
 function drawRow(ctx, actions, spec, opened, anchors) {
@@ -174,9 +181,9 @@ function draw(ctx, view, actions, ui = {}) {
   }, dropdownField === "humanLeader", anchors);
 
   const statusText = status.valid
-    ? `该阵营自定义牌组已完成：${status.total}张；本局${useCustomDeck ? "使用自定义牌组" : "使用随机卡牌"}。`
-    : `该阵营自定义牌组未完成：${status.total}/40张；可编辑卡牌，或直接随机卡牌开始。`;
-  drawInfoCard(ctx, statusText, contentX, panelY + 160, rowW, 46, status.valid ? (useCustomDeck ? "#2f6f57" : "#8d6840") : "#8f3c1f");
+    ? `自定义牌组已完成：${status.total}张，本局${useCustomDeck ? "使用自定义" : "使用随机"}。`
+    : `自定义牌组未完成：${status.total}/40，可编辑或随机开局。`;
+  drawInfoCard(ctx, statusText, contentX, panelY + 160, rowW, 34, status.valid ? (useCustomDeck ? "#2f6f57" : "#8d6840") : "#8f3c1f");
 
   if (status.valid) {
     const toggle = { id: "togglePreparedDeckMode", x: contentX, y: panelY + 218, w: (rowW - 10) / 2, h: 36 };
@@ -214,8 +221,12 @@ function draw(ctx, view, actions, ui = {}) {
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSetupDropdown(ctx, view, actions, settings, dropdownField, anchors);
   if (detail) {
+    const leaders = detailLeaderCards(settings, detail.id);
+    const currentIdx = leaders.findIndex(card => card.id === detail.id);
+    const leftCard = currentIdx > 0 ? leaders[currentIdx - 1] : null;
+    const rightCard = currentIdx >= 0 && currentIdx < leaders.length - 1 ? leaders[currentIdx + 1] : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
-    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回单机准备", swipeOffset });
+    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回单机准备", leftCard, rightCard, swipeOffset });
   }
 }
 

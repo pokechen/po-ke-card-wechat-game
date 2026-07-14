@@ -96,6 +96,18 @@ function clampPage(view, ui, page) {
   return pageState(view, ui, loadSave().history || [], page).safePage;
 }
 
+function detailLeaderCards(view, ui) {
+  const state = pageState(view, ui, loadSave().history || []);
+  const seen = new Set();
+  return state.list
+    .map(item => leaderCard(item.humanLeaderId, item.humanLeader))
+    .filter(card => {
+      if (!card || seen.has(card.id)) return false;
+      seen.add(card.id);
+      return true;
+    });
+}
+
 function drawLeaderAvatar(ctx, actions, card, x, y, size, stroke) {
   fillRoundRect(ctx, x - 3, y - 3, size + 6, size + 6, 9, "#fff7df", stroke);
   if (card) {
@@ -199,9 +211,13 @@ function draw(ctx, view, actions, ui = {}) {
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });
   if (detail) {
+    const leaders = detailLeaderCards(view, ui);
+    const currentIdx = leaders.findIndex(card => card.id === detail.id);
+    const leftCard = currentIdx > 0 ? leaders[currentIdx - 1] : null;
+    const rightCard = currentIdx >= 0 && currentIdx < leaders.length - 1 ? leaders[currentIdx + 1] : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
-    drawDetail(ctx, view, actions, detail, { swipeOffset });
+    drawDetail(ctx, view, actions, detail, { leftCard, rightCard, swipeOffset });
   }
 }
 
-module.exports = { draw, clampPage };
+module.exports = { draw, clampPage, detailLeaderCards };

@@ -3,13 +3,21 @@ const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility, abilit
 const { totalScore, rowScore, handOwnerIndex } = require("../core/battle");
 const { drawDetail } = require("./cardDetail");
 
+const FIELD_FONT = "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", sans-serif";
+
 function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, centerY) {
   const leader = player.leader;
   const active = state.current === playerIndex && !state.over && !(state.mulligan && state.mulligan.active);
+  const local = localPlayerIndex(state);
+  const isLocal = playerIndex === local;
   const avatar = 32;
   const x = 12;
   const y = centerY - avatar / 2;
-  const panelW = Math.min(174, view.width - 140);
+  const scoreReserve = 56;
+  const pillH = 24;
+  const pillW = 72;
+  const pillGap = 8;
+  const panelW = Math.max(120, Math.min(174, view.width - scoreReserve - pillW - pillGap - 24));
   fillRoundRect(ctx, x - 3, y - 2, panelW, avatar + 4, 10, active ? "#fff8e5" : "#f2ead8", active ? "#2f6f57" : "#d3b982");
   if (leader) {
     const action = { id: "leaderAvatar", playerIndex, cardId: leader.id, x, y, w: avatar, h: avatar };
@@ -29,6 +37,13 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
   text(ctx, `${player.name} · ${short(player.factionName, 4)}`, x + avatar + 6, centerY - 7, 11, "#3b2b18");
   const handInfo = `手牌 ${player.hand.length} 张${player.passed ? " · 已放弃" : ""}`;
   text(ctx, `${leader ? short(leader.name || leader.baseName, 4) : "未配置主将"} · ${handInfo}`, x + avatar + 6, centerY + 8, 10, player.leaderUsed ? "#9a8a73" : "#775c34");
+  const discardCount = player.discard ? player.discard.length : 0;
+  const pillX = x - 3 + panelW + pillGap;
+  const pillY = centerY - pillH / 2;
+  const pillFill = isLocal ? "#2f6f57" : "#8f3c1f";
+  fillRoundRect(ctx, pillX, pillY, pillW, pillH, 12, pillFill, "#fff7d8");
+  text(ctx, `弃牌 ${discardCount}`, pillX + pillW / 2, centerY + 1, 11, "#fff7d8", "center");
+  actions.push({ id: "viewDiscardPile", playerIndex, x: pillX, y: pillY, w: pillW, h: pillH });
   text(ctx, `${totalScore(player)} 分`, view.width - 14, centerY, 12, "#8f3c1f", "right");
 }
 
@@ -50,6 +65,42 @@ function sortedFieldCards(cards) {
   });
 }
 
+function drawFittedText(ctx, content, x, y, maxWidth, startSize, color) {
+  const value = String(content || "");
+  let size = startSize;
+  ctx.save();
+  while (size > 6) {
+    ctx.font = `${size}px ${FIELD_FONT}`;
+    if (ctx.measureText(value).width <= maxWidth) break;
+    size -= 0.5;
+  }
+  ctx.beginPath();
+  ctx.rect(x - maxWidth / 2, y - size / 2 - 2, maxWidth, size + 4);
+  ctx.clip();
+  text(ctx, value, x, y, size, color, "center");
+  ctx.restore();
+}
+
+function drawFieldCard(ctx, item, rect, rowH, suppressed) {
+  const power = item.effective == null ? item.strength : item.effective;
+  const reduced = suppressed && !item.hero && item.effective != null && item.effective < (item.strength || 0);
+  const stripH = Math.max(9, Math.min(12, Math.floor(rect.h * 0.34)));
+  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 7, item.hero ? "#f5dfac" : (reduced ? "#f4d3c8" : "#f9edcf"), reduced ? "#c0392b" : "#c6954b");
+  drawCardImage(ctx, {
+    ...item,
+    imageFill: true,
+    imageX: rect.x + 3,
+    imageY: rect.y + 3,
+    imageW: rect.w - 6,
+    imageH: rect.h - 6
+  });
+  fillRoundRect(ctx, rect.x + 2, rect.y + rect.h - stripH - 1, rect.w - 4, stripH, 5, "rgba(255, 249, 235, 0.96)", "#e2cc9c");
+  drawFittedText(ctx, item.name || item.baseName || "卡牌", rect.x + rect.w / 2, rect.y + rect.h - stripH / 2 - 1, rect.w - 4, stripH >= 11 ? 7.5 : 6.5, "#3b2b18");
+  const badge = Math.min(17, Math.max(14, Math.floor(rect.h * 0.48)));
+  fillRoundRect(ctx, rect.x + 2, rect.y + 2, badge, badge, badge / 2, reduced ? "#c0392b" : "rgba(143,60,31,0.92)", "rgba(255,247,216,0.88)");
+  drawFittedText(ctx, reduced ? `↓${power}` : String(power), rect.x + 2 + badge / 2, rect.y + 2 + badge / 2, badge - 3, 8, "#fff7d8");
+}
+
 function drawRows(ctx, view, actions, state, topOffset) {
   const top = view.safeTop + (topOffset || 78);
   const rowH = Math.max(38, Math.min(47, Math.floor((view.height - view.safeTop - view.safeBottom - 318) / 6)));
@@ -62,15 +113,6 @@ function drawRows(ctx, view, actions, state, topOffset) {
     const isEnemySide = visualIndex === 0;
     const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + 34;
     drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16);
-    const discardCount = player.discard ? player.discard.length : 0;
-    const dbH = 26;
-    const dy = baseY + 2;
-    if (discardCount > 0) {
-      fillRoundRect(ctx, 12, dy, view.width - 24, dbH, 8, isEnemySide ? "#f2ead8" : "#fffaf0", "#d3b982");
-      text(ctx, `弃牌堆 · ${discardCount} 张`, 22, dy + dbH / 2 + 1, 11, "#775c34");
-      text(ctx, "查看", view.width - 24, dy + dbH / 2 + 1, 11, "#2f6f57", "right");
-      actions.push({ id: "viewDiscardPile", playerIndex, x: 12, y: dy, w: view.width - 24, h: dbH });
-    }
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
     rowOrder.forEach((row, index) => {
       const y = baseY + index * (rowH + gap);
@@ -87,20 +129,21 @@ function drawRows(ctx, view, actions, state, topOffset) {
       const cards = sortedFieldCards(player.board[row]).slice(-5);
       cards.forEach((item, cardIndex) => {
         const x = 86 + cardIndex * 43;
-        if (x + 34 > view.width - 48) return;
-        const detail = { id: "battleCardDetail", cardId: item.id, x, y: y + 5, w: 36, h: rowH - 10 };
+        if (x + 36 > view.width - 48) return;
+        const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, x, y: y + 5, w: 36, h: rowH - 10 };
         actions.push(detail);
-        const power = item.effective == null ? item.strength : item.effective;
-        const reduced = suppressed && !item.hero && item.effective != null && item.effective < (item.strength || 0);
-        fillRoundRect(ctx, x, y + 5, 36, rowH - 10, 7, item.hero ? "#f5dfac" : (reduced ? "#f4d3c8" : "#f9edcf"), reduced ? "#c0392b" : "#c6954b");
-        text(ctx, item.name.slice(0, 2), x + 18, y + rowH / 2 - 5, 10, "#3b2b18", "center");
-        text(ctx, reduced ? `↓${power}` : String(power), x + 18, y + rowH / 2 + 9, 11, reduced ? "#c0392b" : "#8f3c1f", "center");
+        drawFieldCard(ctx, item, detail, rowH, suppressed);
       });
     });
   });
 }
 
 const HAND_CARD_H = 96;
+const HAND_BOTTOM_OFFSET = 148;
+const HAND_LOG_GAP = 12;
+const ACTION_BUTTON_H = 34;
+const ACTION_BUTTON_BOTTOM_GAP = 4;
+const ACTION_BUTTON_BOTTOM_OFFSET = ACTION_BUTTON_H + ACTION_BUTTON_BOTTOM_GAP;
 
 function handSortGroup(card) {
   if (card.category === "special" || card.category === "weather" || card.category === "leader") return 100;
@@ -139,7 +182,7 @@ function drawHand(ctx, view, actions, state, ui) {
   const cardH = HAND_CARD_H;
   const transition = ui.pageTransition?.scene === "battleHand" ? ui.pageTransition.offset || 0 : 0;
   const startX = 10 + transition;
-  const startY = view.height - view.safeBottom - 184;
+  const startY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const totalPages = Math.max(1, Math.ceil(player.hand.length / pageSize));
   shown.forEach((item, index) => {
     const spec = {
@@ -201,17 +244,196 @@ function drawPendingChoice(ctx, view, actions, state) {
     actions.push(rect);
     button(ctx, { ...rect, label: `${item.name.slice(0, 4)} ${item.effective == null ? item.strength || "" : item.effective}`, size: 10, fill: "#7a5a95" });
   });
-  const skip = { id: "pendingSkip", x: view.width - 70, y: panelY + 28, w: 52, h: 28 };
-  actions.push(skip);
-  button(ctx, { ...skip, label: "跳过", size: 10, fill: "#8d6840" });
+  const skipId = pending.type === "decoy" ? "pendingCancel" : "pendingSkip";
+  const skipLabel = pending.type === "decoy" ? "取消" : "跳过";
+  const skipBtn = { id: skipId, x: view.width - 70, y: panelY + 28, w: 52, h: 28 };
+  actions.push(skipBtn);
+  button(ctx, { ...skipBtn, label: skipLabel, size: 10, fill: "#8d6840" });
 }
 
 function localPlayerIndex(state) {
   return state.mode === "online" && Number.isInteger(state.localPlayerIndex) ? state.localPlayerIndex : 0;
 }
 
+function battleCardMatch(card, cardId, cardUid) {
+  if (!card) return false;
+  if (cardUid && card.uid === cardUid) return true;
+  return !cardUid && cardId && card.id === cardId;
+}
+
+function findBattleCardContext(state, cardId, cardUid) {
+  if (!state || (!cardId && !cardUid)) return null;
+  for (let pi = 0; pi < state.players.length; pi += 1) {
+    const player = state.players[pi];
+    for (const row of ROWS) {
+      const card = (player.board[row] || []).find(item => battleCardMatch(item, cardId, cardUid));
+      if (card) return { card, playerIndex: pi, row, zone: "board" };
+    }
+  }
+  for (let pi = 0; pi < state.players.length; pi += 1) {
+    const player = state.players[pi];
+    const piles = [
+      ["hand", player.hand || []],
+      ["discard", player.discard || []]
+    ];
+    for (const [zone, pile] of piles) {
+      const card = pile.find(item => battleCardMatch(item, cardId, cardUid));
+      if (card) return { card, playerIndex: pi, row: null, zone };
+    }
+    if (battleCardMatch(player.leader, cardId, cardUid)) return { card: player.leader, playerIndex: pi, row: null, zone: "leader" };
+  }
+  return null;
+}
+
+function detailEntry(card) {
+  return card ? { card, cardId: card.id || "", cardUid: card.uid || "" } : null;
+}
+
+function detailEntries(cards) {
+  return (cards || []).map(detailEntry).filter(Boolean);
+}
+
+function visibleLeaderCards(state) {
+  const local = localPlayerIndex(state);
+  const enemy = local === 0 ? 1 : 0;
+  return [state.players[enemy]?.leader, state.players[local]?.leader].filter(Boolean);
+}
+
+function visibleHandDetailCards(state) {
+  const ownerIndex = handOwnerIndex(state);
+  const player = state.players[ownerIndex] || state.players[0];
+  return sortedHandCards(player?.hand || []);
+}
+
+function visibleDiscardDetailCards(state, ui = {}, fallbackOwner) {
+  const owner = state.players[ui.discardPileOwner]
+    ? ui.discardPileOwner
+    : (state.players[fallbackOwner] ? fallbackOwner : localPlayerIndex(state));
+  return state.players[owner]?.discard || [];
+}
+
+function visiblePendingDetailCards(state) {
+  if (!state.pending || state.pending.type === "row") return [];
+  return (state.pending.candidates || []).slice(0, 3).map(entry => entry.card || entry).filter(Boolean);
+}
+
+function detailCardEntries(state, ui = {}, view = null) {
+  const context = findBattleCardContext(state, ui.battleCardDetailId, ui.battleCardDetailUid);
+  if (!context) return [];
+  const pendingCards = visiblePendingDetailCards(state);
+  if (pendingCards.some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))) return detailEntries(pendingCards);
+  if (context.zone === "leader") return detailEntries(visibleLeaderCards(state));
+  if (context.zone === "board" && context.row) {
+    return detailEntries(sortedFieldCards(state.players[context.playerIndex]?.board?.[context.row] || []).slice(-5));
+  }
+  if (context.zone === "hand") return detailEntries(visibleHandDetailCards(state));
+  if (context.zone === "discard") return detailEntries(visibleDiscardDetailCards(state, ui, context.playerIndex));
+  return [];
+}
+
+function leaderTextForBattle(player) {
+  return `${player?.leader?.baseName || ""} ${player?.leader?.leaderAbility || ""} ${player?.leader?.abilityText || ""}`;
+}
+
+function hasHalfWeatherLeader(player) {
+  return /half (of )?(their )?strength|lose half|半损|一半战力/i.test(leaderTextForBattle(player));
+}
+
+function hasSpyDoubleLeader(player) {
+  return /treacherous/i.test(player?.leader?.baseName || "") || /all spies|doubles? strength of all spies|出使.*翻倍/i.test(leaderTextForBattle(player));
+}
+
+function collectBoardInstances(state, card) {
+  const results = [];
+  if (!state || !card) return results;
+  state.players.forEach((player, pi) => {
+    ROWS.forEach(row => {
+      (player.board[row] || []).forEach(item => {
+        if (item.id === card.id || (card.baseName && item.baseName === card.baseName && item.faction === card.faction)) {
+          results.push({ card: item, playerIndex: pi, row });
+        }
+      });
+    });
+  });
+  return results;
+}
+
+function describeBoardCardEffect(state, context) {
+  const { card, playerIndex, row } = context;
+  const player = state.players[playerIndex];
+  const rowCards = player?.board?.[row] || [];
+  const base = card.strength || 0;
+  const current = card.effective == null ? base : card.effective;
+  const lines = [];
+  const rowLabel = ROW_LABELS[row] || row;
+
+  if (card.hero) {
+    const blocked = [];
+    if (state.weather[row]) blocked.push("时局");
+    if (state.rowHorn?.[playerIndex]?.[row] || rowCards.some(item => hasAbility(item, "Commander's Horn"))) blocked.push("号令");
+    if (rowCards.some(item => item.uid !== card.uid && hasAbility(item, "Morale Boost"))) blocked.push("振势");
+    if (hasAbility(card, "Tight Bond") && rowCards.filter(item => hasAbility(item, "Tight Bond") && item.baseName === card.baseName).length > 1) blocked.push("同盟");
+    lines.push(`所在阵线：${rowLabel}，当前战力 ${current}（基础 ${base}）。`);
+    if (blocked.length) lines.push(`传世：不受${blocked.join("、")}修正影响。`);
+    else lines.push("传世：不受时局、号令、振势、同盟等战力修正影响。");
+    return lines;
+  }
+
+  lines.push(current !== base
+    ? `所在阵线：${rowLabel}，战力 ${base} → ${current}。`
+    : `所在阵线：${rowLabel}，当前战力 ${current}（未受效果影响）。`);
+  if (state.weather[row]) {
+    lines.push(hasHalfWeatherLeader(player)
+      ? `时局：${rowLabel}受压制，主将效果使其改为半损。`
+      : `时局：${rowLabel}受压制，基础战力降为 1。`);
+  }
+  const bondCount = hasAbility(card, "Tight Bond")
+    ? rowCards.filter(item => hasAbility(item, "Tight Bond") && item.baseName === card.baseName).length
+    : 0;
+  if (bondCount > 1) lines.push(`同盟：同名同盟牌 ${bondCount} 张，战力 ×${bondCount}。`);
+  else if (hasAbility(card, "Tight Bond")) lines.push("同盟：目前仅 1 张同名牌，未触发倍增。");
+  const moraleCount = rowCards.filter(item => item.uid !== card.uid && hasAbility(item, "Morale Boost")).length;
+  if (moraleCount > 0) lines.push(`振势：同阵线 ${moraleCount} 张振势牌，战力 +${moraleCount}。`);
+  const hornCards = rowCards.filter(item => hasAbility(item, "Commander's Horn"));
+  if (state.rowHorn?.[playerIndex]?.[row] || hornCards.length) {
+    const hornSource = hornCards.length ? `「${short(hornCards[0].name || hornCards[0].baseName || "号令", 6)}」` : "已打出的号令";
+    lines.push(`号令：${hornSource}影响${rowLabel}，战力翻倍。`);
+  }
+  if (hasAbility(card, "Spy") && hasSpyDoubleLeader(player)) lines.push("主将：出使人物战力翻倍。");
+  return lines;
+}
+
+function battlePowerEffectSections(state, context, fallbackCard) {
+  if (!state) return [];
+  let boardContexts = [];
+  if (context && context.zone === "board" && context.row) {
+    boardContexts = [context];
+  } else if (fallbackCard) {
+    boardContexts = collectBoardInstances(state, fallbackCard);
+  }
+  if (!boardContexts.length) return [];
+  const first = boardContexts[0].card;
+  if (!first || first.category === "weather" || first.category === "special") return [];
+
+  const blocks = [];
+  boardContexts.forEach((ctx, idx) => {
+    const owner = state.players[ctx.playerIndex]?.name || `玩家${ctx.playerIndex + 1}`;
+    const header = boardContexts.length > 1 ? `实例 ${idx + 1}（${owner}）：\n` : "";
+    const desc = describeBoardCardEffect(state, ctx).join("\n");
+    blocks.push(header + desc);
+  });
+
+  return [{ title: "战力影响", content: blocks.join("\n\n"), color: "#2f6f57", lines: 12 }];
+}
+
 function actionOwnerIndex(state) {
-  if (state.mulligan && state.mulligan.active) return state.mulligan.current || 0;
+  if (state.mulligan && state.mulligan.active) {
+    if (state.mulligan.simultaneous && state.mode === "online") {
+      const local = localPlayerIndex(state);
+      return state.mulligan.done?.[local] ? -1 : local;
+    }
+    return state.mulligan.current || 0;
+  }
   if (state.pending) {
     if (Number.isInteger(state.pending.playerIndex)) return state.pending.playerIndex;
     return state.current || 0;
@@ -221,6 +443,20 @@ function actionOwnerIndex(state) {
 
 function isLocalOnlineAction(state) {
   return state.mode !== "online" || actionOwnerIndex(state) === localPlayerIndex(state);
+}
+
+function mulliganDetailSections(state, context) {
+  if (!state?.mulligan?.active) return [];
+  const owner = context?.zone === "hand" ? context.playerIndex : handOwnerIndex(state);
+  const used = state.mulligan.used?.[owner] || 0;
+  const max = state.mulligan.max || 2;
+  const left = Math.max(0, max - used);
+  const done = state.mulligan.done?.[owner];
+  const startLabel = state.mode === "online" ? "准备" : "不换开始";
+  const lines = done
+    ? "你已完成换牌，正在等待对方。"
+    : `当前可换牌 ${used}/${max}。\n点击空白处回到手牌，点击不想保留的手牌即可重抽；还可替换 ${left} 张。\n若不想换牌，可点击「${startLabel}」保留当前手牌。`;
+  return [{ title: "换牌提示", content: lines, color: "#f1d58a", lines: 4 }];
 }
 
 function playerSideLabel(state, playerIndex) {
@@ -262,20 +498,21 @@ function drawRoundResultMarkers(ctx, view, state) {
   }
 }
 
-function drawDiscardButtons(ctx, view, actions, state) {
-  const local = localPlayerIndex(state);
-  const enemy = local === 0 ? 1 : 0;
-  const handY = view.height - view.safeBottom - 184;
-  const y = handY - 32;
-  const w = 68;
-  const gap = 8;
-  const x0 = view.width - 16 - w * 2 - gap;
-  [local, enemy].forEach((playerIndex, index) => {
-    const player = state.players[playerIndex];
-    const rect = { id: "viewDiscardPile", playerIndex, x: x0 + index * (w + gap), y, w, h: 24 };
-    actions.push(rect);
-    button(ctx, { ...rect, label: `${playerSideLabel(state, playerIndex)}弃 ${player?.discard?.length || 0}`, size: 10, fill: playerIndex === local ? "#2f6f57" : "#8f3c1f", r: 8 });
-  });
+function battlePlayEntryText(entry) {
+  if (entry.text) return entry.text;
+  const roundText = entry.round ? `第 ${entry.round} 回合` : "本局";
+  const targetText = entry.description || (entry.targetName && entry.rowName ? `${entry.targetName} · ${entry.rowName}` : "");
+  return `${roundText} · ${entry.playerName || "玩家"}打出「${entry.name || entry.baseName || "未知卡牌"}」${targetText ? ` → ${targetText}` : ""}`;
+}
+
+function battlePlayEntries(state) {
+  const playLogs = (state.logs || [])
+    .filter(item => /打出/.test(String(item || "")))
+    .map(text => ({ text: String(text) }));
+  if (playLogs.length) return playLogs;
+  const history = Array.isArray(state.playedHistory) ? state.playedHistory : [];
+  if (history.length) return history;
+  return state.lastPlayed ? [state.lastPlayed] : [];
 }
 
 function drawDiscardPilePanel(ctx, view, actions, state, ui) {
@@ -322,7 +559,7 @@ function drawDiscardPilePanel(ctx, view, actions, state, ui) {
   } else {
     shown.forEach((item, index) => {
       const y = listTop + index * rowH;
-      const detail = { id: "battleCardDetail", cardId: item.id, x: panelX + 18, y: y + 5, w: panelW - 42, h: 40 };
+      const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, x: panelX + 18, y: y + 5, w: panelW - 42, h: 40 };
       actions.push(detail);
       fillRoundRect(ctx, detail.x, detail.y, detail.w, detail.h, 10, "#f7edd8", "#dcc48d");
       drawCardImage(ctx, { ...item, imageFill: true, imageX: detail.x + 8, imageY: detail.y + 6, imageW: 28, imageH: 28 });
@@ -344,6 +581,91 @@ function drawDiscardPilePanel(ctx, view, actions, state, ui) {
     }
   }
 
+}
+
+function wrappedTextLineCount(ctx, content, maxWidth, size, maxLines) {
+  const value = String(content || "");
+  let count = 0;
+  ctx.font = `${size || 13}px ${FIELD_FONT}`;
+  value.split(/\n+/).forEach(part => {
+    let line = "";
+    for (const ch of part) {
+      const next = line + ch;
+      if (ctx.measureText(next).width > maxWidth && line) {
+        count += 1;
+        line = ch;
+      } else {
+        line = next;
+      }
+    }
+    if (line) count += 1;
+  });
+  return maxLines ? Math.min(count || 1, maxLines) : (count || 1);
+}
+
+function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
+  if (!ui.battleLogHistoryOpen) return;
+  const entries = battlePlayEntries(state);
+  const panelX = 16;
+  const panelY = view.safeTop + 74;
+  const panelW = view.width - 32;
+  const panelH = Math.max(300, Math.min(430, view.height - view.safeTop - view.safeBottom - 156));
+  const listTop = panelY + 72;
+  const listBottom = panelY + panelH - 22;
+  const rowH = 42;
+  const viewportH = Math.max(0, listBottom - listTop);
+  const contentH = entries.length * rowH;
+  const maxScroll = Math.max(0, contentH - viewportH);
+  const scroll = Math.max(0, Math.min(ui.battleLogHistoryScroll || 0, maxScroll));
+  ui.battleLogHistoryScroll = scroll;
+
+  actions.push({ id: "closeBattleLogHistory", x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(38, 28, 18, 0.46)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+  actions.push({ id: "battleLogHistoryPanel", x: panelX, y: panelY, w: panelW, h: panelH });
+  fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d3b982");
+  text(ctx, "出牌历史", panelX + 18, panelY + 24, 18, "#2f2417");
+  text(ctx, "上滑看更早，下滑看较新", panelX + 18, panelY + 48, 11, "#775c34");
+  const close = { id: "closeBattleLogHistory", x: panelX + panelW - 42, y: panelY + 10, w: 28, h: 28 };
+  actions.push(close);
+  fillRoundRect(ctx, close.x, close.y, close.w, close.h, 14, "rgba(141,104,64,0.92)", "#6f4d29");
+  text(ctx, "×", close.x + close.w / 2, close.y + close.h / 2 + 1, 15, "#fff7d8", "center");
+
+  if (!entries.length) {
+    text(ctx, "暂无出牌历史", panelX + panelW / 2, panelY + panelH / 2 + 8, 14, "#775c34", "center");
+  } else {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(panelX + 12, listTop, panelW - 24, viewportH);
+    ctx.clip();
+    const startIndex = Math.max(0, Math.floor(scroll / rowH) - 1);
+    const endIndex = Math.min(entries.length, Math.ceil((scroll + viewportH) / rowH) + 1);
+    for (let index = startIndex; index < endIndex; index += 1) {
+      const entry = entries[index];
+      const y = listTop + index * rowH - scroll;
+      const row = { id: "battleLogHistoryPanel", x: panelX + 18, y: y + 3, w: panelW - 46, h: 36 };
+      actions.push(row);
+      fillRoundRect(ctx, row.x, row.y, row.w, row.h, 9, "#f7edd8", "#dcc48d");
+      const entryText = battlePlayEntryText(entry);
+      const lineH = 13;
+      const lineCount = wrappedTextLineCount(ctx, entryText, row.w - 44, 11, 2);
+      const textY = row.y + row.h / 2 - (lineCount - 1) * lineH / 2;
+      text(ctx, `${index + 1}.`, row.x + 10, row.y + row.h / 2, 10, "#8f3c1f");
+      wrapText(ctx, entryText, row.x + 32, textY, row.w - 44, lineH, 2, 11, "#3b2b18");
+    }
+    ctx.restore();
+    if (maxScroll > 0) {
+      const trackX = panelX + panelW - 12;
+      const trackY = listTop + 4;
+      const trackH = Math.max(48, viewportH - 8);
+      const thumbH = Math.max(28, trackH * viewportH / contentH);
+      const thumbY = trackY + (trackH - thumbH) * (scroll / maxScroll);
+      fillRoundRect(ctx, trackX, trackY, 4, trackH, 2, "rgba(119,92,52,0.18)");
+      fillRoundRect(ctx, trackX - 1, thumbY, 6, thumbH, 3, "rgba(47,111,87,0.72)");
+    }
+  }
 }
 
 function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
@@ -386,7 +708,7 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
   const infoH = 55 + abilityAreaH;
   const panelH = padding * 2 + Math.max(cardH, infoH);
 
-  const handY = view.height - view.safeBottom - 184;
+  const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const panelY = Math.max(view.safeTop + 72, handY - panelH - 12);
   
   const cardX = panelX + padding;
@@ -414,9 +736,9 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
     abilityDisplayNames: notice.abilityDisplayNames || detail?.abilityDisplayNames,
     hero: notice.hero || detail?.hero,
     strength: notice.strength == null ? (detail?.category === "weather" || detail?.category === "special" ? "策" : detail?.strength) : notice.strength,
-    nameMax: 4
+    nameMax: 6
   };
-  actions.push({ id: "battleCardDetail", cardId: notice.cardId, x: cardX, y: cardY, w: cardW, h: cardH });
+  actions.push({ id: "battleCardDetail", cardId: notice.cardId, cardUid: notice.cardUid, x: cardX, y: cardY, w: cardW, h: cardH });
   card(ctx, preview);
 
   // 右侧信息区 — 与卡片顶部对齐
@@ -455,7 +777,7 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
 }
 
 function drawCardGuide(ctx, view, actions) {
-  const handY = view.height - view.safeBottom - 184;
+  const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const panelW = view.width - 48;
   const panelH = 168;
   const panelX = 24;
@@ -466,7 +788,7 @@ function drawCardGuide(ctx, view, actions) {
   fillRoundRect(ctx, 8, handY - 6, view.width - 16, 92, 12, "rgba(255, 247, 216, 0.18)", "#ffd76a");
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#ffd76a");
   text(ctx, "卡牌使用指引", panelX + 18, panelY + 24, 18, "#2f2417");
-  const guide = "点击手牌即可打出，长按手牌查看详情；点击当前方主将头像使用技能，长按双方头像可查看主将技能。";
+  const guide = "点击手牌即可打出，长按手牌、场上卡牌或弃牌堆卡牌查看详情；点击当前方主将头像使用技能，长按双方头像可查看主将技能。";
   wrapText(ctx, guide, panelX + 18, panelY + 58, panelW - 36, 20, 4, 12, "#5f4727");
   text(ctx, "点任意位置关闭，之后不再提示", panelX + 18, panelY + 130, 11, "#8f3c1f");
   const close = { id: "closeCardGuide", x: panelX + panelW - 106, y: panelY + panelH - 44, w: 84, h: 30 };
@@ -477,9 +799,14 @@ function drawCardGuide(ctx, view, actions) {
 function draw(ctx, view, actions, state, ui = {}) {
   clear(ctx, view.width, view.height);
   let detail = null;
-  if (ui.battleCardDetailId) {
-    detail = cardById(ui.battleCardDetailId);
-    if (!detail) ui.battleCardDetailId = "";
+  let detailContext = null;
+  if (ui.battleCardDetailId || ui.battleCardDetailUid) {
+    detailContext = findBattleCardContext(state, ui.battleCardDetailId, ui.battleCardDetailUid);
+    detail = detailContext?.card || cardById(ui.battleCardDetailId);
+    if (!detail) {
+      ui.battleCardDetailId = "";
+      ui.battleCardDetailUid = "";
+    }
   }
   const headerY = view.safeTop + 16;
   const isMulligan = state.mulligan && state.mulligan.active;
@@ -498,40 +825,69 @@ function draw(ctx, view, actions, state, ui = {}) {
     text(ctx, `时局：${weatherNames.join("、")}`, view.width / 2, headerY + 40, 10, "#8a785f", "center");
   }
   drawRows(ctx, view, actions, state, weatherNames.length ? 90 : 78);
-  const handY = view.height - view.safeBottom - 184;
-  const logH = 36;
-  const logY = handY - logH - 34;
-  fillRoundRect(ctx, 12, logY, view.width - 24, logH, 9, "#efe6d2", "#d3b982");
-  wrapText(ctx, state.logs[0] || "暂无行动记录", 24, logY + 11, view.width - 48, 13, 2, 10, "#775c34");
+  const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
+  const logLineH = 14;
+  const logTextW = view.width - 48;
+  const logEntries = state.logs && state.logs.length ? state.logs : ["暂无行动记录"];
+  ctx.font = `10px ${FIELD_FONT}`;
+  const latestFitsOneLine = !/\n/.test(logEntries[0]) && ctx.measureText(logEntries[0]).width <= logTextW;
+  const compactLog = latestFitsOneLine && logEntries.length <= 1;
+  const logH = compactLog ? 26 : 32;
+  const logY = handY - logH - HAND_LOG_GAP;
+  const logAction = { id: "battleLog", x: 12, y: logY, w: view.width - 24, h: logH };
+  actions.push(logAction);
+  fillRoundRect(ctx, logAction.x, logAction.y, logAction.w, logAction.h, 9, "#efe6d2", "#d3b982");
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(logAction.x + 10, logAction.y + 4, logAction.w - 20, logAction.h - 8);
+  ctx.clip();
+  if (compactLog) {
+    text(ctx, logEntries[0], 24, logY + logH / 2, 10, "#775c34");
+  } else {
+    const previewText = latestFitsOneLine ? logEntries.slice(0, 2).join("\n") : logEntries[0];
+    wrapText(ctx, previewText, 24, logY + 10, logTextW, logLineH, 2, 10, "#775c34");
+  }
+  ctx.restore();
   drawPendingChoice(ctx, view, actions, state);
   drawHand(ctx, view, actions, state, ui);
-  const bottom = view.height - view.safeBottom - 42;
-  if (isMulligan && isLocalOnlineAction(state)) {
-    const handControlY = handY + HAND_CARD_H + 6;
-    const done = { id: "mulliganDone", x: view.width - 136, y: handControlY, w: 120, h: 30 };
-    actions.push(done);
-    button(ctx, { ...done, label: "开始对局", size: 12, fill: "#2f6f57" });
-  }
+  const bottom = view.height - view.safeBottom - ACTION_BUTTON_BOTTOM_OFFSET;
   const w = (view.width - 44) / 3;
+  let rightButton;
+  if (state.over) rightButton = ["home", "首页", "#6b6b5f"];
+  else if (isMulligan) rightButton = isLocalOnlineAction(state) ? ["mulliganDone", "开始对局", "#2f6f57"] : ["noop", "等待", "#b6a98e"];
+  else rightButton = ["surrenderMatch", "认输", "#6b6b5f"];
   const buttons = [
     ["auto", "自动", "#4f6d8a"],
     ["pass", "放弃", "#8d6840"],
-    [state.over ? "home" : "surrenderMatch", state.over ? "首页" : "认输", "#6b6b5f"]
+    rightButton
   ];
   buttons.forEach((item, index) => {
-    const rect = { id: item[0], x: 10 + index * (w + 12), y: bottom, w, h: 34 };
+    const rect = { id: item[0], x: 10 + index * (w + 12), y: bottom, w, h: ACTION_BUTTON_H };
     actions.push(rect);
     button(ctx, { ...rect, label: item[1], size: 12, fill: item[2] });
   });
   drawRecentOpponentPlay(ctx, view, actions, state, ui);
   drawDiscardPilePanel(ctx, view, actions, state, ui);
+  drawBattleLogHistoryPanel(ctx, view, actions, state, ui);
   if (ui.showCardGuide && !isMulligan && !state.over && (state.mode === "online" ? state.current === local : state.current === 0)) {
     drawCardGuide(ctx, view, actions);
   }
   if (detail) {
+    const entries = detailCardEntries(state, ui, view);
+    const currentIdx = entries.findIndex(entry => battleCardMatch(entry.card, ui.battleCardDetailId, ui.battleCardDetailUid));
+    const leftCard = currentIdx > 0 ? entries[currentIdx - 1].card : null;
+    const rightCard = currentIdx >= 0 && currentIdx < entries.length - 1 ? entries[currentIdx + 1].card : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
-    drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回对局", swipeOffset });
+    const extraSections = mulliganDetailSections(state, detailContext).concat(battlePowerEffectSections(state, detailContext, detail));
+    drawDetail(ctx, view, actions, detail, {
+      title: isMulligan ? "换牌阶段" : "卡牌详情",
+      closeHint: isMulligan ? "点击空白处回到手牌" : "点击空白处返回对局",
+      leftCard,
+      rightCard,
+      swipeOffset,
+      extraSections
+    });
   }
 }
 
-module.exports = { draw };
+module.exports = { draw, detailCardEntries };

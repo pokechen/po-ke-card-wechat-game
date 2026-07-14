@@ -11,7 +11,7 @@ const pvpRoomScene = require("./js/scenes/pvpRoom");
 const pvpSetupScene = require("./js/scenes/pvpSetup");
 const pvpClient = require("./js/core/pvpClient");
 const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
-const { cardById, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS } = require("./js/core/cards");
+const { cardById, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, eligibleCards, groupCards, cardValue } = require("./js/core/cards");
 const { createMatch, playCard, autoPlayHuman, pass, useLeader, mulliganSwap, finishMulligan, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
@@ -30,12 +30,15 @@ const app = {
     playerIndex: 0,
     loading: false,
     submitting: false,
-    error: ""
+    error: "",
+    lastSeenRuleVersion: 0
   },
   ui: {
     handPage: 0,
     deckPage: 0,
     battleCardDetailId: "",
+    battleCardDetailUid: "",
+    mulliganGuideShown: false,
     deckCardDetailId: "",
     settingCardDetailId: "",
     matchSetupCardDetailId: "",
@@ -51,6 +54,8 @@ const app = {
     dismissedRecentPlaySeq: 0,
     discardPileOwner: null,
     discardPilePage: 0,
+    battleLogHistoryOpen: false,
+    battleLogHistoryScroll: 0,
     pageTransition: null,
     detailSwipe: null
   }
@@ -58,9 +63,13 @@ const app = {
 
 setImageRenderHook(() => render());
 
-const RECENT_PLAY_AUTO_DISMISS_MS = 1800;
+const RECENT_PLAY_AUTO_DISMISS_MS = 2500;
 const PAGE_TRANSITION_MS = 180;
 const DETAIL_SWIPE_MS = 220;
+const BATTLE_HAND_CARD_H = 96;
+const BATTLE_HAND_BOTTOM_OFFSET = 148;
+const BATTLE_HAND_SWIPE_TOP_PADDING = 26;
+const BATTLE_HAND_SWIPE_BOTTOM_PADDING = 10;
 
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
@@ -87,7 +96,7 @@ function startPageTransition(scene, axis, fromOffset) {
 
 function startDetailSwipeTransition(fromOffset, onComplete) {
   const start = Date.now();
-  app.ui.detailSwipe = { offset: fromOffset };
+  app.ui.detailSwipe = { offset: fromOffset, animating: true };
   function step() {
     const progress = Math.min(1, (Date.now() - start) / DETAIL_SWIPE_MS);
     const eased = 1 - Math.pow(1 - progress, 3);
@@ -146,6 +155,23 @@ function clearAiTimer() {
   }
 }
 
+function openMulliganGuideDetail() {
+  if (!app.match?.mulligan?.active || app.ui.mulliganGuideShown || app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return;
+  const playerIndex = handOwnerIndex(app.match);
+  const mulligan = app.match.mulligan;
+  if (mulligan.done?.[playerIndex]) return;
+  const hand = app.match.players[playerIndex]?.hand || [];
+  if (!hand.length) return;
+  const card = hand.slice().sort((a, b) => {
+    if (!!a.hero !== !!b.hero) return a.hero ? 1 : -1;
+    return cardValue(a) - cardValue(b);
+  })[0] || hand[0];
+  app.ui.battleCardDetailId = card.id || "";
+  app.ui.battleCardDetailUid = card.uid || "";
+  app.ui.detailSwipe = null;
+  app.ui.mulliganGuideShown = true;
+}
+
 function setScene(scene) {
   if (scene !== "battle") {
     clearAiTimer();
@@ -159,13 +185,18 @@ function startMatch(optionsPatch = {}) {
   clearAiTimer();
   app.ui.handPage = 0;
   app.ui.battleCardDetailId = "";
+  app.ui.battleCardDetailUid = "";
+  app.ui.mulliganGuideShown = false;
   app.ui.discardPileOwner = null;
   app.ui.discardPilePage = 0;
+  app.ui.battleLogHistoryOpen = false;
+  app.ui.battleLogHistoryScroll = 0;
   app.ui.dismissedRecentPlaySeq = 0;
   clearRecentPlayTimer();
   const settings = { ...loadSettings(), ...optionsPatch };
   app.match = createMatch(settings);
   app.ui.showCardGuide = !loadSave().finishedTutorial;
+  openMulliganGuideDetail();
   setScene("battle");
 }
 
@@ -197,7 +228,7 @@ function scheduleAi() {
     app.ui.handPage = clampHandPage(app.ui.handPage);
     render();
     scheduleAi();
-  }, 420);
+  }, 600);
 }
 
 function vibrate() {
@@ -208,11 +239,13 @@ function vibrate() {
 }
 
 function getSharePayload() {
-  const roomId = app.pvp.roomId;
+  const roomId = normalizePvpRoomId(app.pvp.roomId || app.pvp.room?.roomId || app.pvp.room?._id);
+  if (!roomId) {
+    console.warn("[share] 当前无房间号，分享出的卡片不会带 roomId，好友只能进入首页。请先创建/加入房间再转发。");
+  }
   const normal = {
     title: roomId ? `来章鱼牌房间 ${roomId} 对战` : "来盘章鱼牌吧",
-    imageUrl: "assets/po-ke-card.png",
-    query: roomId ? `roomId=${encodeURIComponent(roomId)}` : "from=share"
+    query: roomId ? `roomId=${roomId}` : "from=share"
   };
 
   // PVP对局结束：根据当前玩家视角生成个性化分享内容
@@ -236,33 +269,74 @@ function getSharePayload() {
 function setupShare() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return;
+  console.log("[share] setupShare 开始注册");
   if (api.showShareMenu) {
     api.showShareMenu({
       withShareTicket: false,
       menus: ["shareAppMessage"],
+      success: () => console.log("[share] showShareMenu success"),
       fail: err => console.warn("[share] showShareMenu failed", err)
     });
   }
   if (api.onShareAppMessage) {
     api.onShareAppMessage(() => {
-      const payload = getSharePayload();
-      console.log("[share] onShareAppMessage payload:", JSON.stringify(payload), "currentRoomId:", app.pvp.roomId);
-      return payload;
+      try {
+        console.log("[share] onShareAppMessage 回调被触发! 当前 app.pvp.roomId=", app.pvp.roomId,
+          "app.pvp.room=", JSON.stringify(app.pvp.room ? { roomId: app.pvp.room.roomId, _id: app.pvp.room._id } : null));
+        const payload = getSharePayload();
+        console.log("[share] 被动转发 payload:", JSON.stringify(payload));
+        return payload;
+      } catch (e) {
+        console.error("[share] onShareAppMessage 回调异常:", e.message, e.stack);
+        return { title: "来盘章鱼牌吧", query: "from=share_error" };
+      }
     });
+    console.log("[share] onShareAppMessage 已注册");
+  } else {
+    console.warn("[share] wx.onShareAppMessage 不存在，无法注册被动分享");
   }
 }
 
 function guideShare() {
   const api = typeof wx !== "undefined" ? wx : null;
-  if (api && api.showModal) {
-    api.showModal({
-      title: "分享给好友",
-      content: "请点击右上角“···”，选择“转发”给好友。",
-      showCancel: false
+  const roomId = normalizePvpRoomId(app.pvp.roomId);
+  if (!roomId) return toast("房间创建后才能转发邀请");
+  // 微信小游戏支持 wx.shareAppMessage 主动拉起转发
+  if (api && api.shareAppMessage) {
+    const payload = getSharePayload();
+    console.log("[share] 主动转发 shareAppMessage:", JSON.stringify(payload));
+    api.shareAppMessage({
+      ...payload,
+      success: () => console.log("[share] shareAppMessage success"),
+      fail: (err) => {
+        console.warn("[share] shareAppMessage fail:", JSON.stringify(err));
+        // 主动分享被封禁时，引导右上角转发 + 复制房间号
+        showShareFallback(api, roomId);
+      }
     });
     return;
   }
-  toast("点右上角···转发");
+  // 兜底提示
+  showShareFallback(api, roomId);
+}
+
+function showShareFallback(api, roomId) {
+  if (api && api.showModal) {
+    api.showModal({
+      title: `房间号 ${roomId}`,
+      content: "方法一：点右上角『···』→『转发给朋友』，好友点卡片可加入。\n\n方法二：复制房间号发给好友，让好友在「联网对战」中输入房间号加入。",
+      confirmText: "复制房间号",
+      cancelText: "我知道了",
+      success: res => {
+        if (res.confirm) {
+          if (pvpClient.copyRoomId(roomId)) toast("房间号已复制");
+        }
+        render();
+      }
+    });
+    return;
+  }
+  toast(`房间号 ${roomId}，请点右上角···转发`);
 }
 
 function normalizePvpRoomId(value) {
@@ -287,12 +361,42 @@ function resolvePvpLeaderId(settings, faction) {
   return (leaders.find(card => card.id === stored) || leaders[0])?.id || "";
 }
 
-function currentPlayerSetup() {
+function normalizePvpRules(rules = {}) {
+  const fallback = FACTION_KEYS[0];
+  const faction = FACTION_KEYS.includes(rules.faction) ? rules.faction : fallback;
+  return {
+    factionMode: rules.factionMode === "fixed" ? "fixed" : "any",
+    faction,
+    deckMode: rules.deckMode === "autoOnly" ? "autoOnly" : "any",
+    version: Number(rules.version || 0) || 0
+  };
+}
+
+function currentRulesFromSettings() {
   const settings = loadSettings();
-  const faction = resolvePvpFaction(settings);
+  return normalizePvpRules({
+    factionMode: settings.pvpRuleFactionMode,
+    faction: settings.pvpRuleFaction || settings.pvpFaction || settings.humanFaction,
+    deckMode: settings.pvpRuleDeckMode
+  });
+}
+
+function rememberPvpRules(rules) {
+  const safe = normalizePvpRules(rules);
+  saveSettings({
+    pvpRuleFactionMode: safe.factionMode,
+    pvpRuleFaction: safe.faction,
+    pvpRuleDeckMode: safe.deckMode
+  });
+}
+
+function currentPlayerSetup(ruleOverride = null) {
+  const settings = loadSettings();
+  const rules = ruleOverride ? normalizePvpRules(ruleOverride) : normalizePvpRules(app.pvp.room?.rules || {});
+  const faction = rules.factionMode === "fixed" ? rules.faction : resolvePvpFaction(settings);
   const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
-  const useCustomDeck = settings.pvpDeckMode === "custom" && status.valid;
+  const useCustomDeck = rules.deckMode !== "autoOnly" && settings.pvpDeckMode === "custom" && status.valid;
   // 不预设name，由云函数根据座位号分配 玩家一/玩家二
   return {
     faction,
@@ -364,21 +468,38 @@ function recordOnlineMatch(match) {
 function applyRoomUpdate(room, playerIndex) {
   if (!room) return;
   const roomId = normalizePvpRoomId(room.roomId || room._id || app.pvp.roomId);
+  console.log("[pvp] applyRoomUpdate: status=", room.status, "playerIndex=", playerIndex,
+    "roomId=", roomId, "players=", (room.players || []).length, "currentScene=", app.scene);
+  const prevVersion = app.pvp.room?.rules?.version || 0;
+  const nextVersion = room.rules?.version || 0;
   app.pvp.room = room;
   if (roomId) app.pvp.roomId = roomId;
   if (Number.isInteger(playerIndex)) app.pvp.playerIndex = playerIndex;
   if (room.match) app.match = decorateOnlineMatch(room.match);
+  else if (room.status !== "finished") app.match = null;
   app.pvp.loading = false;
   app.pvp.submitting = false;
   app.pvp.error = "";
+  if (app.pvp.playerIndex === 1 && prevVersion && nextVersion > prevVersion && room.status === "waiting") {
+    toast("房主修改了规则，请重新准备");
+  }
+  app.pvp.lastSeenRuleVersion = nextVersion || app.pvp.lastSeenRuleVersion || 0;
   if (room.status === "playing" && app.match) {
+    if (app.scene !== "battle") app.ui.mulliganGuideShown = false;
     app.ui.handPage = clampHandPage(app.ui.handPage);
+    openMulliganGuideDetail();
     if (app.scene !== "battle") return setScene("battle");
   }
   if (room.status === "finished" && app.match) {
     recordOnlineMatch(app.match);
-    return setScene("result");
+    if (app.scene !== "result") return setScene("result");
   }
+  if (room.status === "selecting") {
+    app.ui.matchSetupDropdown = "";
+    app.ui.matchSetupCardDetailId = "";
+    if (app.scene !== "pvpSetup") return setScene("pvpSetup");
+  }
+  if (room.status === "waiting" && ["battle", "result", "pvpSetup"].includes(app.scene)) return setScene("pvpRoom");
   render();
 }
 
@@ -399,7 +520,7 @@ function watchPvpRoom(roomId) {
 
 function resetPvpState() {
   pvpClient.closeRoomWatch();
-  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultRoom: "" };
+  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultRoom: "", lastSeenRuleVersion: 0 };
 }
 
 function enterPvpSetup(roomId) {
@@ -411,15 +532,16 @@ function enterPvpSetup(roomId) {
 }
 
 function createPvpRoom() {
+  const rules = currentRulesFromSettings();
   resetPvpState();
   app.pvp.loading = true;
   setScene("pvpRoom");
-  pvpClient.createRoom(currentPlayerSetup()).then(result => {
+  pvpClient.createRoom(currentPlayerSetup(rules), rules).then(result => {
     app.pvp.roomId = result.roomId;
     app.pvp.playerIndex = result.playerIndex || 0;
     applyRoomUpdate(result.room, app.pvp.playerIndex);
     watchPvpRoom(result.roomId);
-    guideShare();
+    toast("可先确认规则，再转发好友");
   }).catch(err => {
     console.warn("[pvp] create failed", err);
     app.pvp.loading = false;
@@ -431,11 +553,15 @@ function createPvpRoom() {
 function joinPvpRoom(roomId) {
   const safeRoomId = normalizePvpRoomId(roomId);
   if (!safeRoomId) return toast("请输入4位数字房间号");
+  console.log("[pvp] joinPvpRoom 开始, roomId=", safeRoomId);
   resetPvpState();
   app.pvp.roomId = safeRoomId;
   app.pvp.loading = true;
   setScene("pvpRoom");
   pvpClient.joinRoom(safeRoomId, currentPlayerSetup()).then(result => {
+    console.log("[pvp] joinRoom 云函数返回成功, roomId=", result.roomId,
+      "playerIndex=", result.playerIndex, "room.status=", result.room?.status,
+      "players=", result.room?.players?.length);
     app.pvp.roomId = result.roomId;
     app.pvp.playerIndex = Number.isInteger(result.playerIndex) ? result.playerIndex : 1;
     applyRoomUpdate(result.room, app.pvp.playerIndex);
@@ -463,41 +589,119 @@ function promptJoinPvpRoom() {
   });
 }
 
-function readSharedRoomId() {
+function safeDecode(value) {
+  const text = String(value || "");
+  try { return decodeURIComponent(text); } catch (e) { return text; }
+}
+
+function extractRoomIdFromText(value) {
+  const text = safeDecode(value);
+  const direct = normalizePvpRoomId(text);
+  if (direct) return direct;
+  const keyed = text.match(/(?:roomId|roomid|pvpRoomId|room|r)[^0-9]{0,16}(\d{4})(?!\d)/i);
+  if (keyed) return keyed[1];
+  return "";
+}
+
+function extractSharedRoomId(options = {}) {
+  if (typeof options === "string") return extractRoomIdFromText(options);
+  const query = options?.query || {};
+  if (typeof query === "string") return extractRoomIdFromText(query);
+  const keys = ["roomId", "roomid", "pvpRoomId", "pvpRoomID", "room", "r"];
+  for (const key of keys) {
+    const roomId = extractRoomIdFromText(query[key]);
+    if (roomId) return roomId;
+  }
+  for (const [key, value] of Object.entries(query)) {
+    if (!/room|^r$/i.test(key)) continue;
+    const roomId = extractRoomIdFromText(value);
+    if (roomId) return roomId;
+  }
+  for (const value of Object.values(query)) {
+    const roomId = extractRoomIdFromText(value);
+    if (roomId) return roomId;
+  }
+  return extractRoomIdFromText(options?.path || JSON.stringify(options?.referrerInfo?.extraData || {}));
+}
+
+function describeScene(scene) {
+  const map = {
+    1001: "最近使用列表",
+    1005: "微信顶部搜索结果",
+    1006: "发现-小程序搜索结果",
+    1007: "单聊会话卡片",
+    1008: "群聊会话卡片",
+    1010: "收藏夹",
+    1011: "扫描二维码",
+    1012: "长按图片识别二维码",
+    1023: "桌面图标",
+    1024: "小程序 profile 页",
+    1035: "公众号自定义菜单",
+    1036: "App 分享卡片",
+    1037: "小程序打开小程序",
+    1044: "群聊卡片(带 shareTicket)",
+    1047: "扫描小程序码",
+    1058: "公众号文章",
+    1089: "微信聊天主界面下拉，「最近使用」栏(小游戏中心)"
+  };
+  return map[scene] ? `${scene}(${map[scene]})` : `${scene ?? "未知"}`;
+}
+
+function readSharedRoomId(options) {
+  const fromOptions = extractSharedRoomId(options);
+  if (fromOptions) return fromOptions;
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return "";
-  // 启动参数（首次从分享卡片进入）
-  try {
-    const launch = api.getLaunchOptionsSync && api.getLaunchOptionsSync();
-    const fromLaunch = normalizePvpRoomId(launch?.query?.roomId);
-    console.log("[launch] launchOptions.query:", JSON.stringify(launch?.query || {}), "roomId:", fromLaunch);
-    if (fromLaunch) return fromLaunch;
-  } catch (e) {}
-  // 切后台再回来（部分场景启动参数在 enterOptions 中）
+  // 本次打开参数（冷启动/热启动），优先读取最新入口
   try {
     const enter = api.getEnterOptionsSync && api.getEnterOptionsSync();
-    const fromEnter = normalizePvpRoomId(enter?.query?.roomId);
-    console.log("[launch] enterOptions.query:", JSON.stringify(enter?.query || {}), "roomId:", fromEnter);
+    const fromEnter = extractSharedRoomId(enter);
+    console.log("[launch] enterOptions scene:", describeScene(enter?.scene), "query:", JSON.stringify(enter?.query || {}), "roomId:", fromEnter);
     if (fromEnter) return fromEnter;
   } catch (e) {}
+  // 冷启动参数兜底
+  try {
+    const launch = api.getLaunchOptionsSync && api.getLaunchOptionsSync();
+    const fromLaunch = extractSharedRoomId(launch);
+    console.log("[launch] launchOptions scene:", describeScene(launch?.scene), "query:", JSON.stringify(launch?.query || {}), "roomId:", fromLaunch);
+    if (fromLaunch) return fromLaunch;
+  } catch (e) {}
   return "";
+}
+
+function handleSharedRoomId(roomId, source) {
+  const safeRoomId = normalizePvpRoomId(roomId);
+  if (!safeRoomId || safeRoomId === app.pvp.roomId) return false;
+  console.log(`[launch] ${source} 检测到房间号，进入联网对战:`, safeRoomId);
+  joinPvpRoom(safeRoomId);
+  return true;
+}
+
+function hasRoomHint(options) {
+  const query = options?.query;
+  if (!query) return false;
+  if (typeof query === "string") return /room|\br\b/i.test(query);
+  const keys = Object.keys(query);
+  if (!keys.length) return false;
+  return keys.some(k => /room|^r$/i.test(k));
 }
 
 function handleLaunchRoom() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return;
-  const roomId = readSharedRoomId();
-  if (roomId) {
-    console.log("[launch] 检测到分享房间号，直接进入联网对战:", roomId);
-    setTimeout(() => joinPvpRoom(roomId), 120);
+  if (!handleSharedRoomId(readSharedRoomId(), "启动")) {
+    console.log("[launch] 启动未检测到 roomId，保持主页");
   }
   if (api.onShow) {
     api.onShow(options => {
-      const nextRoomId = normalizePvpRoomId(options?.query?.roomId);
-      if (nextRoomId && nextRoomId !== app.pvp.roomId) {
-        console.log("[launch] onShow 检测到房间号，进入联网对战:", nextRoomId);
-        joinPvpRoom(nextRoomId);
-      }
+      if (handleSharedRoomId(readSharedRoomId(options), "onShow")) return;
+      // 只在入口 query 明显带有 room 关键字时才走兜底解析，避免正常切前台产生噪音
+      if (!hasRoomHint(options)) return;
+      setTimeout(() => {
+        if (handleSharedRoomId(readSharedRoomId(), "onShow兜底")) return;
+        console.log("[launch] onShow 检测到 room 相关参数但未解析到 roomId，保持当前场景");
+        render();
+      }, 300);
     });
   }
 }
@@ -514,7 +718,10 @@ function pvpPendingOwner() {
 
 function isMyPvpTurn() {
   if (!isOnlineMatch()) return false;
-  if (app.match.mulligan?.active) return app.match.mulligan.current === app.pvp.playerIndex;
+  if (app.match.mulligan?.active) {
+    if (app.match.mulligan.simultaneous) return !app.match.mulligan.done?.[app.pvp.playerIndex];
+    return app.match.mulligan.current === app.pvp.playerIndex;
+  }
   if (app.match.pending) return pvpPendingOwner() === app.pvp.playerIndex;
   return app.match.current === app.pvp.playerIndex;
 }
@@ -553,6 +760,34 @@ function afterHumanAction() {
     render();
     if (!app.match.pending) scheduleAi();
   }
+}
+
+function performSurrenderMatch() {
+  if (!app.match || app.match.over) return render();
+  if (isOnlineMatch()) return submitPvpAction({ type: "surrender" });
+  surrender(app.match, app.match.current);
+  return setScene("result");
+}
+
+function confirmSurrenderMatch() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (api && api.showModal) {
+    api.showModal({
+      title: "确认认输",
+      content: "认输后将直接结束本局，确定要认输吗？",
+      confirmText: "认输",
+      confirmColor: "#8f3c1f",
+      cancelText: "再想想",
+      success: res => {
+        if (res.confirm) performSurrenderMatch();
+        else render();
+      },
+      fail: () => render()
+    });
+    return;
+  }
+  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm("确定要认输吗？")) return render();
+  return performSurrenderMatch();
 }
 
 function handleMenu(action) {
@@ -657,14 +892,19 @@ function applyPvpSetupOption(action) {
     saveSettings(patch);
   }
   if (field === "pvpLeader") {
-    const faction = settings.pvpFaction || settings.humanFaction;
+    const rules = normalizePvpRules(app.pvp.room?.rules || {});
+    const faction = app.pvp.room?.status === "selecting" && rules.factionMode === "fixed" ? rules.faction : (settings.pvpFaction || settings.humanFaction);
     if (faction !== "random") saveSettings({ pvpLeaderIds: { ...(settings.pvpLeaderIds || {}), [faction]: value } });
   }
   render();
 }
 
 function handlePvpSetup(action) {
-  const selectFields = ["pvpFaction", "pvpLeader"];
+  const selectingOnline = app.pvp.room?.status === "selecting";
+  const rules = normalizePvpRules(app.pvp.room?.rules || {});
+  const factionLocked = selectingOnline && rules.factionMode === "fixed";
+  const deckLocked = selectingOnline && rules.deckMode === "autoOnly";
+  const selectFields = factionLocked ? ["pvpLeader"] : ["pvpFaction", "pvpLeader"];
   if (action.id === "matchSetupCardDetail") {
     app.ui.matchSetupDropdown = "";
     app.ui.matchSetupCardDetailId = action.cardId || "";
@@ -687,14 +927,32 @@ function handlePvpSetup(action) {
   }
 
   app.ui.matchSetupDropdown = "";
+  if (!selectingOnline && action.id === "pvpRuleFactionMode") {
+    const current = currentRulesFromSettings();
+    const nextMode = action.value === "fixed" ? "fixed" : "any";
+    saveSettings({ pvpRuleFactionMode: nextMode, pvpRuleFaction: current.faction });
+    return render();
+  }
+  if (!selectingOnline && action.id === "pvpRuleFactionNext") {
+    const current = currentRulesFromSettings();
+    const nextIndex = (FACTION_KEYS.indexOf(current.faction) + 1) % FACTION_KEYS.length;
+    saveSettings({ pvpRuleFactionMode: "fixed", pvpRuleFaction: FACTION_KEYS[nextIndex] });
+    return render();
+  }
+  if (!selectingOnline && action.id === "pvpRuleDeckMode") {
+    saveSettings({ pvpRuleDeckMode: action.value === "autoOnly" ? "autoOnly" : "any" });
+    return render();
+  }
   const settings = loadSettings();
-  const faction = settings.pvpFaction || settings.humanFaction;
+  const faction = factionLocked ? rules.faction : (settings.pvpFaction || settings.humanFaction);
   if (action.id === "pvpDeckMode") {
+    if (deckLocked && action.value === "custom") return toast("本房间仅允许自动卡牌");
     if (action.value === "custom" && faction === "random") return toast("随机阵营将使用随机卡牌");
     saveSettings({ pvpDeckMode: action.value === "custom" ? "custom" : "random" });
     return render();
   }
   if (action.id === "editPvpCustomDeck") {
+    if (deckLocked) return toast("本房间仅允许自动卡牌");
     if (faction === "random") return toast("请先选择具体阵营");
     saveSettings({ humanFaction: faction });
     app.ui.deckPage = 0;
@@ -702,6 +960,8 @@ function handlePvpSetup(action) {
     app.ui.deckReturnScene = "pvpSetup";
     return setScene("deckBuilder");
   }
+  if (action.id === "pvpSubmitSetup") return submitPvpSetup();
+  if (action.id === "pvpRoomBack") return setScene("pvpRoom");
   if (action.id === "pvpCreatePrepared") return createPvpRoom();
   if (action.id === "pvpJoinPrepared") {
     if (app.pvp.pendingRoomId) return joinPvpRoom(app.pvp.pendingRoomId);
@@ -895,6 +1155,80 @@ function handleHistory(action) {
   render();
 }
 
+function updatePvpRoomRules(patch) {
+  if (!app.pvp.roomId || app.pvp.submitting) return;
+  const rules = normalizePvpRules({ ...(app.pvp.room?.rules || currentRulesFromSettings()), ...patch });
+  rememberPvpRules(rules);
+  app.pvp.submitting = true;
+  pvpClient.updateRules(app.pvp.roomId, rules).then(result => {
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "修改规则失败");
+    render();
+  });
+}
+
+function setPvpReady(ready) {
+  if (!app.pvp.roomId || app.pvp.submitting) {
+    console.log("[pvp] setPvpReady 被跳过: roomId=", app.pvp.roomId, "submitting=", app.pvp.submitting);
+    return;
+  }
+  console.log("[pvp] setPvpReady:", ready, "roomId=", app.pvp.roomId);
+  app.pvp.submitting = true;
+  pvpClient.setReady(app.pvp.roomId, ready).then(result => {
+    console.log("[pvp] setReady 成功, room.status=", result.room?.status);
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "准备失败");
+    render();
+  });
+}
+
+function startPvpSelection() {
+  if (!app.pvp.roomId || app.pvp.submitting) {
+    console.log("[pvp] startPvpSelection 被跳过: roomId=", app.pvp.roomId, "submitting=", app.pvp.submitting);
+    return;
+  }
+  console.log("[pvp] startPvpSelection, roomId=", app.pvp.roomId);
+  app.pvp.submitting = true;
+  pvpClient.startSelection(app.pvp.roomId).then(result => {
+    console.log("[pvp] startSelection 成功, room.status=", result.room?.status);
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "开始失败");
+    render();
+  });
+}
+
+function submitPvpSetup() {
+  if (!app.pvp.roomId || app.pvp.submitting) return;
+  app.pvp.submitting = true;
+  pvpClient.submitSetup(app.pvp.roomId, currentPlayerSetup(app.pvp.room?.rules)).then(result => {
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "确认配置失败");
+    render();
+  });
+}
+
+function returnPvpRoom() {
+  if (!app.pvp.roomId) return setScene("menu");
+  if (app.pvp.room?.status !== "finished") return setScene("pvpRoom");
+  if (app.pvp.submitting) return;
+  app.pvp.submitting = true;
+  pvpClient.returnToRoom(app.pvp.roomId).then(result => {
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "返回房间失败");
+    render();
+  });
+}
+
 function handlePvpRoom(action) {
   if (action.id === "pvpCreate") return createPvpRoom();
   if (action.id === "pvpShare") return guideShare();
@@ -910,6 +1244,23 @@ function handlePvpRoom(action) {
     return render();
   }
   if (action.id === "pvpJoin") return promptJoinPvpRoom();
+  if (action.id === "pvpRuleFactionMode") {
+    const current = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
+    return updatePvpRoomRules({ factionMode: current.factionMode === "fixed" ? "any" : "fixed" });
+  }
+  if (action.id === "pvpRuleFactionNext") {
+    const current = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
+    const nextIndex = (FACTION_KEYS.indexOf(current.faction) + 1) % FACTION_KEYS.length;
+    return updatePvpRoomRules({ factionMode: "fixed", faction: FACTION_KEYS[nextIndex] });
+  }
+  if (action.id === "pvpRuleDeckMode") {
+    const current = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
+    return updatePvpRoomRules({ deckMode: current.deckMode === "autoOnly" ? "any" : "autoOnly" });
+  }
+  if (action.id === "pvpReady") return setPvpReady(!app.pvp.room?.players?.[app.pvp.playerIndex]?.ready);
+  if (action.id === "pvpStartSelection") return startPvpSelection();
+  if (action.id === "pvpGoSetup") return setScene("pvpSetup");
+  if (action.id === "pvpReturnRoom") return returnPvpRoom();
   if (action.id === "pvpBack") {
     resetPvpState();
     return setScene("menu");
@@ -924,6 +1275,13 @@ function handleBattle(action) {
     return render();
   }
   if (!app.match) return;
+  if (action.id === "battleLog") return render();
+  if (action.id === "closeBattleLogHistory") {
+    app.ui.battleLogHistoryOpen = false;
+    app.ui.battleLogHistoryScroll = 0;
+    return render();
+  }
+  if (action.id === "battleLogHistoryPanel") return render();
   if (action.id === "dismissRecentPlay") {
     app.ui.dismissedRecentPlaySeq = Math.max(app.ui.dismissedRecentPlaySeq || 0, action.seq || app.match.lastPlayed?.seq || 0);
     clearRecentPlayTimer();
@@ -933,9 +1291,11 @@ function handleBattle(action) {
   if (action.id === "detailPanel") return;
   if (action.id === "closeDetail") {
     app.ui.battleCardDetailId = "";
+    app.ui.battleCardDetailUid = "";
     return render();
   }
-  if (app.ui.battleCardDetailId) return render();
+  if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return render();
+  if (app.ui.battleLogHistoryOpen) return render();
   if (action.id === "viewDiscardPile") {
     app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
     app.ui.discardPilePage = 0;
@@ -964,11 +1324,7 @@ function handleBattle(action) {
     }
     return render();
   }
-  if (action.id === "surrenderMatch") {
-    if (isOnlineMatch()) return submitPvpAction({ type: "surrender" });
-    surrender(app.match, app.match.current);
-    return setScene("result");
-  }
+  if (action.id === "surrenderMatch") return confirmSurrenderMatch();
   if (app.match.over) return;
 
   if (isOnlineMatch()) {
@@ -1035,7 +1391,7 @@ function handleAction(action) {
   if (app.scene === "battle") return handleBattle(action);
   if (app.scene === "result") {
     if (action.id === "restart") {
-      if (isOnlineMatch()) return createPvpRoom();
+      if (isOnlineMatch()) return returnPvpRoom();
       return startMatch();
     }
     if (action.id === "home") {
@@ -1055,8 +1411,57 @@ function normalizeTouch(event) {
   return { x: touch.clientX ?? touch.x, y: touch.clientY ?? touch.y };
 }
 
+function battlePlayedHistory() {
+  const playLogs = (app.match?.logs || [])
+    .filter(item => /打出/.test(String(item || "")))
+    .map(text => ({ text: String(text) }));
+  if (playLogs.length) return playLogs;
+  const history = Array.isArray(app.match?.playedHistory) ? app.match.playedHistory : [];
+  if (history.length) return history;
+  return app.match?.lastPlayed ? [app.match.lastPlayed] : [];
+}
+
+function battleLogHistoryScrollBounds() {
+  const panelY = view.safeTop + 74;
+  const panelH = Math.max(300, Math.min(430, view.height - view.safeTop - view.safeBottom - 156));
+  const listTop = panelY + 72;
+  const listBottom = panelY + panelH - 22;
+  const rowH = 42;
+  const viewportH = Math.max(0, listBottom - listTop);
+  const contentH = battlePlayedHistory().length * rowH;
+  return { listTop, listBottom, maxScroll: Math.max(0, contentH - viewportH) };
+}
+
+function clampBattleLogHistoryScroll(value) {
+  const { maxScroll } = battleLogHistoryScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollBattleLogHistoryBy(deltaY) {
+  if (app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || !app.ui.battleLogHistoryOpen) return false;
+  const before = app.ui.battleLogHistoryScroll || 0;
+  const next = clampBattleLogHistoryScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.5) {
+    app.ui.battleLogHistoryScroll = next;
+    render();
+  }
+  return true;
+}
+
+function handleBattleLogHistorySwipe(start, end) {
+  if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || !app.ui.battleLogHistoryOpen) return false;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  const bounds = battleLogHistoryScrollBounds();
+  if (start.y < bounds.listTop || start.y > bounds.listBottom || absY < 20 || absY < absX * 1.2) return false;
+  scrollBattleLogHistoryBy(dy);
+  return true;
+}
+
 function handleDiscardPileSwipe(start, end) {
-  if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.discardPileOwner == null) return false;
+  if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner == null) return false;
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const absX = Math.abs(dx);
@@ -1077,12 +1482,12 @@ function handleDiscardPileSwipe(start, end) {
 }
 
 function handleHandSwipe(start, end) {
-  if (!start || !end || app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId || app.ui.discardPileOwner != null) return false;
+  if (!start || !end || app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner != null) return false;
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.2) return false;
-  const handTop = view.height - view.safeBottom - 210;
-  const handBottom = view.height - view.safeBottom - 78;
+  const handTop = view.height - view.safeBottom - BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_SWIPE_TOP_PADDING;
+  const handBottom = view.height - view.safeBottom - (BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_CARD_H) + BATTLE_HAND_SWIPE_BOTTOM_PADDING;
   if (start.y < handTop || start.y > handBottom) return false;
   const nextPage = clampHandPage(app.ui.handPage + (dx < 0 ? 1 : -1));
   if (nextPage !== app.ui.handPage) {
@@ -1143,57 +1548,127 @@ function handleHistorySwipe(start, end) {
   return true;
 }
 
+function detailEntry(card) {
+  return card ? { card, cardId: card.id || "", cardUid: card.uid || "" } : null;
+}
+
+function detailEntries(cards) {
+  return (cards || []).map(detailEntry).filter(Boolean);
+}
+
+function detailEntryCard(entry) {
+  return entry?.card || entry;
+}
+
+function detailEntryId(entry) {
+  const card = detailEntryCard(entry);
+  return entry?.cardId || card?.id || "";
+}
+
+function detailEntryUid(entry) {
+  const card = detailEntryCard(entry);
+  return entry?.cardUid || card?.uid || "";
+}
+
+function detailEntryMatches(entry, detailId, detailUid) {
+  const uid = detailEntryUid(entry);
+  if (detailUid) return uid === detailUid;
+  return detailEntryId(entry) === detailId;
+}
+
+function currentDetailState() {
+  if (app.ui.deckCardDetailId) return { id: app.ui.deckCardDetailId, uid: "", slot: "deck" };
+  if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return { id: app.ui.battleCardDetailId, uid: app.ui.battleCardDetailUid, slot: "battle" };
+  if (app.ui.settingCardDetailId) return { id: app.ui.settingCardDetailId, uid: "", slot: "settings" };
+  if (app.ui.matchSetupCardDetailId) return { id: app.ui.matchSetupCardDetailId, uid: "", slot: app.scene === "pvpSetup" ? "pvpSetup" : "matchSetup" };
+  if (app.ui.historyLeaderDetailId) return { id: app.ui.historyLeaderDetailId, uid: "", slot: "history" };
+  return null;
+}
+
+function setCurrentDetailCard(slot, card, cardUid = "") {
+  if (!card) return;
+  if (slot === "deck") app.ui.deckCardDetailId = card.id;
+  else if (slot === "battle") {
+    app.ui.battleCardDetailId = card.id || "";
+    app.ui.battleCardDetailUid = cardUid || card.uid || "";
+  } else if (slot === "settings") app.ui.settingCardDetailId = card.id;
+  else if (slot === "matchSetup" || slot === "pvpSetup") app.ui.matchSetupCardDetailId = card.id;
+  else if (slot === "history") app.ui.historyLeaderDetailId = card.id;
+}
+
+function sortedEligibleGroups(faction) {
+  return groupCards(eligibleCards(faction)).sort((a, b) => cardValue(b.card) - cardValue(a.card));
+}
+
+function settingDetailEntries(settings, ui) {
+  const current = cardById(ui.settingCardDetailId);
+  if (current?.category === "leader") return detailEntries(leadersFor(settings.humanFaction));
+  const tab = ui.settingCardTab || "all";
+  const cards = eligibleCards(settings.humanFaction).filter(card => {
+    if (tab === "all") return true;
+    if (tab === "special") return card.category === "special" || card.category === "weather";
+    if (tab === "hero") return !!card.hero;
+    if (!(card.category === "unit" || card.category === "hero")) return false;
+    return (card.row || []).includes(tab);
+  });
+  return detailEntries(groupCards(cards).sort((a, b) => cardValue(b.card) - cardValue(a.card)).map(group => group.card));
+}
+
+function matchSetupDetailEntries(settings) {
+  const detailId = app.ui.matchSetupCardDetailId;
+  const candidates = [leadersFor(settings.humanFaction)];
+  if (settings.aiFaction !== "random") candidates.push(leadersFor(settings.aiFaction));
+  const matched = candidates.find(list => list.some(card => card.id === detailId));
+  return detailEntries(matched || candidates.reduce((all, list) => all.concat(list), []));
+}
+
+function pvpSetupDetailEntries(settings) {
+  const rules = normalizePvpRules(app.pvp.room?.rules || {});
+  const selectingOnline = app.pvp.room?.status === "selecting";
+  const faction = selectingOnline && rules.factionMode === "fixed" ? rules.faction : (settings.pvpFaction || settings.humanFaction);
+  if (!FACTION_KEYS.includes(faction)) return [];
+  return detailEntries(leadersFor(faction));
+}
+
 function getCurrentDetailCardList() {
-  if (app.scene === "deckBuilder") {
-    const settings = loadSettings();
-    const faction = settings.humanFaction;
-    const { eligibleCards, groupCards } = require("./js/core/cards");
-    return groupCards(eligibleCards(faction));
-  }
+  if (app.scene === "battle" && battleScene.detailCardEntries) return battleScene.detailCardEntries(app.match, app.ui, view);
+  if (app.scene === "history" && historyScene.detailLeaderCards) return detailEntries(historyScene.detailLeaderCards(view, app.ui));
+  const settings = loadSettings();
+  if (app.scene === "deckBuilder") return detailEntries(sortedEligibleGroups(settings.humanFaction).map(group => group.card));
+  if (app.scene === "settings") return settingDetailEntries(settings, app.ui);
+  if (app.scene === "matchSetup") return matchSetupDetailEntries(settings);
+  if (app.scene === "pvpSetup") return pvpSetupDetailEntries(settings);
   return [];
 }
 
 function handleCardDetailSwipe(start, end) {
-  const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
-  if (!detailId || !start || !end) return false;
-  
-  // 如果正在动画中，不处理新滑动
+  const detailState = currentDetailState();
+  if (!detailState || !start || !end) return false;
   if (app.ui.detailSwipe && app.ui.detailSwipe.animating) return false;
-  
+
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const absX = Math.abs(dx);
   const absY = Math.abs(dy);
-  
-  // 需要水平滑动且幅度足够
   if (absX < 40 || absX < absY * 0.8) return false;
-  
+
   const cards = getCurrentDetailCardList();
   if (!cards.length) return false;
-  
-  const currentIdx = cards.findIndex(g => g.card.id === detailId);
+
+  const currentIdx = cards.findIndex(entry => detailEntryMatches(entry, detailState.id, detailState.uid));
   if (currentIdx < 0) return false;
-  
-  // 向左滑（dx < 0）显示下一张，向右滑（dx > 0）显示上一张
+
   const swipeLeft = dx < 0;
   const targetIdx = swipeLeft ? currentIdx + 1 : currentIdx - 1;
-  
-  // 检查边界
   if (targetIdx < 0 || targetIdx >= cards.length) return false;
-  
-  const targetCard = cards[targetIdx].card;
-  const maxOffset = 112; // 最大滑动偏移量
-  
-  // 启动动画切换卡牌
-  startDetailSwipeTransition(swipeLeft ? -maxOffset : maxOffset, () => {
-    // 动画完成后更新当前查看的卡牌ID
-    if (app.scene === "deckBuilder") app.ui.deckCardDetailId = targetCard.id;
-    else if (app.scene === "battle") app.ui.battleCardDetailId = targetCard.id;
-    else if (app.scene === "settings") app.ui.settingCardDetailId = targetCard.id;
-    else if (app.scene === "matchSetup" || app.scene === "pvpSetup") app.ui.matchSetupCardDetailId = targetCard.id;
-    else if (app.scene === "history") app.ui.historyLeaderDetailId = targetCard.id;
-  });
-  
+
+  const targetEntry = cards[targetIdx];
+  const targetCard = detailEntryCard(targetEntry);
+  if (!targetCard) return false;
+
+  const maxOffset = 112;
+  setCurrentDetailCard(detailState.slot, targetCard, detailEntryUid(targetEntry));
+  startDetailSwipeTransition(swipeLeft ? maxOffset : -maxOffset);
   return true;
 }
 
@@ -1212,9 +1687,18 @@ function handleTap(point) {
 const LONG_PRESS_MS = 380;
 const LONG_PRESS_MOVE = 12;
 
-function openBattleCardDetail(cardId) {
-  if (!cardId) return;
-  app.ui.battleCardDetailId = cardId;
+function openBattleCardDetail(cardId, cardUid) {
+  if (!cardId && !cardUid) return;
+  app.ui.battleCardDetailId = cardId || "";
+  app.ui.battleCardDetailUid = cardUid || "";
+  app.ui.detailSwipe = null;
+  vibrate();
+  render();
+}
+
+function openBattleLogHistory() {
+  app.ui.battleLogHistoryOpen = true;
+  app.ui.battleLogHistoryScroll = 0;
   vibrate();
   render();
 }
@@ -1222,6 +1706,7 @@ function openBattleCardDetail(cardId) {
 function openHistoryLeaderDetail(cardId) {
   if (!cardId) return;
   app.ui.historyLeaderDetailId = cardId;
+  app.ui.detailSwipe = null;
   vibrate();
   render();
 }
@@ -1230,6 +1715,7 @@ function openMatchSetupCardDetail(cardId) {
   if (!cardId) return;
   app.ui.matchSetupDropdown = "";
   app.ui.matchSetupCardDetailId = cardId;
+  app.ui.detailSwipe = null;
   vibrate();
   render();
 }
@@ -1237,6 +1723,7 @@ function openMatchSetupCardDetail(cardId) {
 function openDeckBuilderCardDetail(cardId) {
   if (!cardId) return;
   app.ui.deckCardDetailId = cardId;
+  app.ui.detailSwipe = null;
   vibrate();
   render();
 }
@@ -1245,38 +1732,45 @@ function openSettingCardDetail(cardId) {
   if (!cardId) return;
   app.ui.settingDropdown = "";
   app.ui.settingCardDetailId = cardId;
+  app.ui.detailSwipe = null;
   vibrate();
   render();
 }
 
 function startLongPress(point) {
   const action = findAction(point);
-  if (!action || !action.cardId) return;
-  let openDetail = null;
-  if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && ["card", "battleCardDetail", "leaderAvatar", "targetChoice"].includes(action.id)) {
-    openDetail = openBattleCardDetail;
+  if (!action) return;
+  let onLongPress = null;
+  if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && action.id === "battleLog") {
+    onLongPress = openBattleLogHistory;
+  } else if (action.cardId) {
+    let openDetail = null;
+    if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && ["card", "battleCardDetail", "leaderAvatar", "targetChoice"].includes(action.id)) {
+      openDetail = openBattleCardDetail;
+    }
+    if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
+      openDetail = openHistoryLeaderDetail;
+    }
+    if (app.scene === "matchSetup" && !app.ui.matchSetupCardDetailId && ["humanLeader", "aiLeader", "selectMatchSetupOption"].includes(action.id)) {
+      openDetail = openMatchSetupCardDetail;
+    }
+    if (app.scene === "pvpSetup" && !app.ui.matchSetupCardDetailId && ["pvpLeader", "selectPvpSetupOption"].includes(action.id)) {
+      openDetail = openMatchSetupCardDetail;
+    }
+    if (app.scene === "deckBuilder" && !app.ui.deckCardDetailId && action.id === "addCustomCard") {
+      openDetail = openDeckBuilderCardDetail;
+    }
+    if (app.scene === "settings" && !app.ui.settingCardDetailId && action.cardId && ["humanLeader", "addSettingCard", "selectSettingOption"].includes(action.id)) {
+      openDetail = openSettingCardDetail;
+    }
+    if (openDetail) onLongPress = () => openDetail(action.cardId, action.cardUid);
   }
-  if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
-    openDetail = openHistoryLeaderDetail;
-  }
-  if (app.scene === "matchSetup" && !app.ui.matchSetupCardDetailId && ["humanLeader", "aiLeader", "selectMatchSetupOption"].includes(action.id)) {
-    openDetail = openMatchSetupCardDetail;
-  }
-  if (app.scene === "pvpSetup" && !app.ui.matchSetupCardDetailId && ["pvpLeader", "selectPvpSetupOption"].includes(action.id)) {
-    openDetail = openMatchSetupCardDetail;
-  }
-  if (app.scene === "deckBuilder" && !app.ui.deckCardDetailId && action.id === "addCustomCard") {
-    openDetail = openDeckBuilderCardDetail;
-  }
-  if (app.scene === "settings" && !app.ui.settingCardDetailId && action.cardId && ["humanLeader", "addSettingCard", "selectSettingOption"].includes(action.id)) {
-    openDetail = openSettingCardDetail;
-  }
-  if (!openDetail) return;
+  if (!onLongPress) return;
   touchStartState.longPressTimer = setTimeout(() => {
     if (!touchStartState) return;
     touchStartState.longPressTimer = null;
     touchStartState.longPressFired = true;
-    openDetail(action.cardId);
+    onLongPress();
   }, LONG_PRESS_MS);
 }
 
@@ -1314,6 +1808,21 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         render();
       }
     }
+
+    if (app.scene === "battle" && app.match && app.ui.battleLogHistoryOpen && !app.ui.battleCardDetailId && !app.ui.battleCardDetailUid) {
+      const bounds = battleLogHistoryScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx) * 0.8) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        scrollBattleLogHistoryBy(point.y - last.y);
+        touchStartState.battleLogHistoryScrolled = true;
+        touchStartState.lastPoint = point;
+        return;
+      }
+    }
     
     if (!touchStartState.longPressTimer) return;
     if (Math.hypot(point.x - touchStartState.point.x, point.y - touchStartState.point.y) > LONG_PRESS_MOVE) {
@@ -1332,21 +1841,22 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
     if (state && state.longPressFired) return;
     const start = state?.point || point;
     
-    // 检查是否在卡牌详情上有未完成的滑动，需要回弹
-    const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
-    if (detailId && app.ui.detailSwipe && !app.ui.detailSwipe.animating && Math.abs(app.ui.detailSwipe.offset || 0) > 5) {
-      // 如果没有触发卡牌切换，回弹到原位
+    const detailState = currentDetailState();
+    if (handleCardDetailSwipe(start, point)) return;
+
+    // 未达到切换条件的详情滑动回弹到原位
+    if (detailState && app.ui.detailSwipe && !app.ui.detailSwipe.animating && Math.abs(app.ui.detailSwipe.offset || 0) > 5) {
       startDetailSwipeTransition(app.ui.detailSwipe.offset);
       return;
     }
-    
-    // 重置未完成的滑动状态
+
     if (app.ui.detailSwipe && !app.ui.detailSwipe.animating) {
       app.ui.detailSwipe = null;
       render();
     }
-    
-    if (handleCardDetailSwipe(start, point)) return;
+
+    if (state && state.battleLogHistoryScrolled) return;
+    if (handleBattleLogHistorySwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
     if (handleHandSwipe(start, point)) return;
     if (handleHistorySwipe(start, point)) return;
@@ -1367,6 +1877,7 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
   });
 }
 
+console.log("===== 章鱼牌 v0714-1032 新代码已加载 =====");
 pvpClient.initCloud();
 setupShare();
 handleLaunchRoom();

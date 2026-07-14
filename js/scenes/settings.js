@@ -234,9 +234,10 @@ function draw(ctx, view, actions, ui = {}) {
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
   if (detail) {
-    const currentIdx = groups.findIndex(g => g.card.id === detail.id);
-    const leftCard = currentIdx > 0 ? groups[currentIdx - 1].card : null;
-    const rightCard = currentIdx >= 0 && currentIdx < groups.length - 1 ? groups[currentIdx + 1].card : null;
+    const detailCards = detail.category === "leader" ? leadersFor(faction) : groups.map(g => g.card);
+    const currentIdx = detailCards.findIndex(card => card.id === detail.id);
+    const leftCard = currentIdx > 0 ? detailCards[currentIdx - 1] : null;
+    const rightCard = currentIdx >= 0 && currentIdx < detailCards.length - 1 ? detailCards[currentIdx + 1] : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
     drawDetail(ctx, view, actions, detail, { closeHint: "点击空白处返回我的牌组", leftCard, rightCard, swipeOffset });
   }

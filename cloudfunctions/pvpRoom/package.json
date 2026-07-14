@@ -2,6 +2,9 @@
   "name": "pvp-room",
   "version": "1.0.0",
   "main": "index.js",
+  "scripts": {
+    "sync-core": "node ../../scripts/sync-pvp-core.js"
+  },
   "dependencies": {
     "wx-server-sdk": "latest"
   }
