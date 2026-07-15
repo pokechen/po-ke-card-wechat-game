@@ -559,7 +559,7 @@ function resolveUnitAbility(state, playedBy, target, row, card) {
     } else reviveBest(state, playedBy);
   }
   if (hasAbility(card, "Muster")) doMuster(state, playedBy, target, row, card);
-  if (hasAbility(card, "Summon Shield Maidens")) summonByName(state, playedBy, target, row, "Clan Drummond Shield Maiden");
+  if (hasAbility(card, "Summon Shield Maidens")) summonByName(state, playedBy, target, row, "岳家军");
   if (isScorch(card) && card.category !== "special") doScorch(state, playedBy, null, true, 10);
 }
 

@@ -48,14 +48,13 @@ function pageLayout(view) {
   const top = view.safeTop + 28;
   const factionY = top + 48;
   const leaderY = top + 84;
-  const statusY = top + 120;
-  const tabY = top + 150;
-  const listTop = top + 188;
+  const tabY = leaderY + 38;
+  const listTop = tabY + 38;
   const bottomY = view.height - view.safeBottom - 48;
   const toolY = bottomY - 48;
-  const listBottom = toolY - 24;
+  const listBottom = toolY - 20;
   const pageSize = Math.max(3, Math.min(6, Math.floor((listBottom - listTop) / 68)));
-  return { top, factionY, leaderY, statusY, toolY, tabY, listTop, bottomY, listBottom, pageSize };
+  return { top, factionY, leaderY, toolY, tabY, listTop, bottomY, listBottom, pageSize };
 }
 
 function filteredCardGroups(faction, tab) {

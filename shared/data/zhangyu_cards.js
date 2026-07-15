@@ -1808,8 +1808,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0036",
-      "name": "岳飞",
-      "baseName": "岳飞",
+      "name": "卫青",
+      "baseName": "卫青",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "hero",
@@ -1829,7 +1829,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/岳飞.webp"
+      "imageUrl": "assets/card-icons/卫青.webp"
     },
     {
       "id": "zhangyu-0236",
@@ -4685,8 +4685,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0114",
-      "name": "秦良玉",
-      "baseName": "秦良玉",
+      "name": "岳飞",
+      "baseName": "岳飞",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "hero",
@@ -4701,14 +4701,14 @@ const DATA = {
       ],
       "abilityDisplayNames": [
         "传世",
-        "召唤盾女"
+        "召唤岳家军"
       ],
-      "abilityText": "传世、召唤盾女",
+      "abilityText": "传世：战力恒为 10，不受时局、号令、振势、同盟等影响，也不会被奇策、请辞、济世选中。\n召唤岳家军：打出后从己方手牌和牌库中把所有「岳家军」一起部署到「疆场」阵线。",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/秦良玉.webp"
+      "imageUrl": "assets/card-icons/岳飞.webp"
     },
     {
       "id": "zhangyu-0307",
@@ -4875,8 +4875,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0314",
-      "name": "平阳昭公主",
-      "baseName": "平阳昭公主",
+      "name": "岳家军",
+      "baseName": "岳家军",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -4891,17 +4891,17 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟",
+      "abilityText": "岳家军：同盟——同一阵线的「岳家军」越多，每张战力翻倍越高。也可被岳飞的「召唤岳家军」从手牌、牌库中一并部署。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/平阳昭公主.webp"
+      "imageUrl": "assets/card-icons/岳家军.webp"
     },
     {
       "id": "zhangyu-0315",
-      "name": "平阳昭公主",
-      "baseName": "平阳昭公主",
+      "name": "岳家军",
+      "baseName": "岳家军",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -4916,17 +4916,17 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟",
+      "abilityText": "岳家军：同盟——同一阵线的「岳家军」越多，每张战力翻倍越高。也可被岳飞的「召唤岳家军」从手牌、牌库中一并部署。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/平阳昭公主.webp"
+      "imageUrl": "assets/card-icons/岳家军.webp"
     },
     {
       "id": "zhangyu-0316",
-      "name": "平阳昭公主",
-      "baseName": "平阳昭公主",
+      "name": "岳家军",
+      "baseName": "岳家军",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -4941,12 +4941,12 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟",
+      "abilityText": "岳家军：同盟——同一阵线的「岳家军」越多，每张战力翻倍越高。也可被岳飞的「召唤岳家军」从手牌、牌库中一并部署。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/平阳昭公主.webp"
+      "imageUrl": "assets/card-icons/岳家军.webp"
     },
     {
       "id": "zhangyu-0317",

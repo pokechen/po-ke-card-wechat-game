@@ -62,7 +62,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
   const panelX = (view.width - panelW) / 2;
 
   const contentW = panelW - 32;
-  const sections = effectSections(card);
+  const sections = effectSections(card).concat(options.extraSections || []);
   const sectionW = contentW;
   let sectionsH = 0;
   sections.forEach(item => {
@@ -98,6 +98,12 @@ function drawDetail(ctx, view, actions, card, options = {}) {
   // 标题栏
   fillRoundRect(ctx, panelX + 10, panelY + 8, panelW - 20, headerH - 8, 14, "#efe2c6", "#dcc48d");
   text(ctx, options.title || "卡牌详情", panelX + 22, panelY + 26, 17, "#2f2417");
+  if (options.helpAction) {
+    const help = { ...options.helpAction, x: panelX + panelW - 52, y: panelY + 12, w: 28, h: 28 };
+    actions.push(help);
+    fillRoundRect(ctx, help.x, help.y, help.w, help.h, 14, options.helpOpen ? "#8f3c1f" : "#fff7d8", "#d1ad6a");
+    text(ctx, "?", help.x + help.w / 2, help.y + help.h / 2 + 1, 16, options.helpOpen ? "#fff7d8" : "#8f3c1f", "center");
+  }
 
   // ===== 卡牌滑动区域 =====
   // swipeOffset: 正值表示向右滑动（显示左边的卡牌），负值表示向左滑动
@@ -135,10 +141,20 @@ function drawDetail(ctx, view, actions, card, options = {}) {
   {
     const mcx = centerCardX + offset; // 滑动时主卡牌跟随手指移动
     const mcy = cardsY;
-    
+    const anim = options.anim;
+    const mainCenterY = mcy + mainCardH / 2;
+
+    ctx.save();
+    if (anim) {
+      ctx.globalAlpha = anim.alpha;
+      ctx.translate(mcx, mainCenterY);
+      ctx.scale(anim.scale, anim.scale);
+      ctx.translate(-mcx, -mainCenterY);
+    }
+
     // 主卡牌外框（高亮边框）
     ctx.save();
-    ctx.globalAlpha = 1 - Math.abs(progress) * 0.5;
+    ctx.globalAlpha = anim ? anim.alpha : (1 - Math.abs(progress) * 0.5);
     ctx.shadowColor = "rgba(43, 28, 12, 0.22)";
     ctx.shadowBlur = 12;
     ctx.shadowOffsetY = 3;
@@ -147,7 +163,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
 
     // 绘制卡牌图片
     ctx.save();
-    ctx.globalAlpha = 1 - Math.abs(progress) * 0.3;
+    ctx.globalAlpha = anim ? anim.alpha : (1 - Math.abs(progress) * 0.3);
     const artPadding = 6;
     const artX = mcx - mainCardW/2 + artPadding;
     const artY = mcy + artPadding;
@@ -161,6 +177,16 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, "#2f2417", "center");
 
     // 战力icon
+    if (options.cardAction) {
+      actions.push({
+        ...options.cardAction,
+        x: mcx - mainCardW / 2 - 8,
+        y: mcy - 8,
+        w: mainCardW + 16,
+        h: mainCardH + 16
+      });
+    }
+
     if (card.strength != null) {
       const bs = 30;
       const bx = mcx - mainCardW/2 + 6;
@@ -179,6 +205,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
       ctx.restore();
       text(ctx, String(displayStrength), bx + bs / 2, by + bs / 2, isStrategy ? 13 : 15, "#fff7d8", "center");
     }
+    ctx.restore();
     ctx.restore();
   }
 
@@ -201,6 +228,45 @@ function drawDetail(ctx, view, actions, card, options = {}) {
 
   const footerHint = leftCard || rightCard ? `左右滑动切换 · ${options.closeHint || "点击空白处返回"}` : (options.closeHint || "点击空白处返回");
   text(ctx, footerHint, panelX + panelW / 2, footerY, 11, "#8a785f", "center");
+
+  const helpSections = options.helpOpen ? (options.helpSections || []).filter(Boolean) : [];
+  if (helpSections.length) {
+    const helpW = Math.min(panelW - 48, 304);
+    const helpX = panelX + panelW - helpW - 22;
+    const helpY = panelY + headerH + 10;
+    const lineH = 18;
+    let helpH = 22;
+    helpSections.forEach(item => {
+      helpH += 22 + wrappedHeight(ctx, item.content, helpW - 30, lineH, item.lines, 12) + 6;
+    });
+    helpH = Math.min(helpH + 6, panelY + panelH - helpY - 52);
+    actions.push({ id: "mulliganHelpPanel", x: helpX, y: helpY, w: helpW, h: helpH });
+    fillRoundRect(ctx, helpX + 2, helpY + 3, helpW, helpH, 13, "rgba(60, 42, 24, 0.16)");
+    fillRoundRect(ctx, helpX, helpY, helpW, helpH, 13, "rgba(255, 248, 234, 0.98)", "#d8bd83");
+    ctx.save();
+    ctx.fillStyle = "#fff8ea";
+    ctx.strokeStyle = "#d8bd83";
+    ctx.beginPath();
+    ctx.moveTo(helpX + helpW - 40, helpY);
+    ctx.lineTo(helpX + helpW - 29, helpY - 9);
+    ctx.lineTo(helpX + helpW - 18, helpY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(helpX + 12, helpY + 10, helpW - 24, helpH - 20);
+    ctx.clip();
+    let y = helpY + 22;
+    helpSections.forEach(item => {
+      const bodyH = wrappedHeight(ctx, item.content, helpW - 30, lineH, item.lines, 12);
+      text(ctx, item.title, helpX + 15, y, 12, item.color || "#8f3c1f");
+      wrapText(ctx, item.content, helpX + 15, y + 21, helpW - 30, lineH, item.lines, 12, "#5f4727");
+      y += 23 + bodyH + 6;
+    });
+    ctx.restore();
+  }
 }
 
 module.exports = { drawDetail };

@@ -189,7 +189,7 @@ const ABILITY_MARKS = {
   Agile: "通才",
   Scorch: "奇策",
   "Commander's Horn": "号令",
-  "Summon Shield Maidens": "召唤盾女",
+  "Summon Shield Maidens": "召唤岳家军",
   "Summon Avenger": "召唤复仇者",
   "Summon Sky Hound": "召唤啸天",
   Berserker: "奋起",

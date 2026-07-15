@@ -101,17 +101,19 @@ function drawFieldCard(ctx, item, rect, rowH, suppressed) {
   drawFittedText(ctx, reduced ? `↓${power}` : String(power), rect.x + 2 + badge / 2, rect.y + 2 + badge / 2, badge - 3, 8, "#fff7d8");
 }
 
-function drawRows(ctx, view, actions, state, topOffset) {
+function drawRows(ctx, view, actions, state, topOffset, bottomLimit) {
   const top = view.safeTop + (topOffset || 78);
-  const rowH = Math.max(38, Math.min(47, Math.floor((view.height - view.safeTop - view.safeBottom - 318) / 6)));
   const gap = 6;
+  const sideGap = 34;
+  const availableH = (bottomLimit || (view.height - view.safeBottom - 180)) - top - gap * 5 - sideGap;
+  const rowH = Math.max(44, Math.min(92, Math.floor(availableH / 6)));
   const local = localPlayerIndex(state);
   const enemy = local === 0 ? 1 : 0;
   [enemy, local].forEach((playerIndex, visualIndex) => {
     const player = state.players[playerIndex];
     if (!player) return;
     const isEnemySide = visualIndex === 0;
-    const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + 34;
+    const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + sideGap;
     drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16);
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
     rowOrder.forEach((row, index) => {
@@ -120,17 +122,23 @@ function drawRows(ctx, view, actions, state, topOffset) {
       const horn = state.rowHorn[playerIndex][row] ? " 号令" : "";
       fillRoundRect(ctx, 12, y, view.width - 24, rowH, 9, suppressed ? "#ecd6b4" : (isEnemySide ? "#efe6d2" : "#fffaf0"), suppressed ? "#c0392b" : "#d3b982");
       if (suppressed) fillRoundRect(ctx, 12, y, 4, rowH, 2, "#c0392b");
-      text(ctx, `${ROW_LABELS[row]}${horn}`, 22, y + rowH / 2 - (suppressed ? 6 : 0), 11, suppressed ? "#a8321f" : "#775c34");
+      text(ctx, `${ROW_LABELS[row]}${horn}`, 22, y + rowH / 2 - (suppressed ? 7 : 0), rowH >= 70 ? 12 : 11, suppressed ? "#a8321f" : "#775c34");
       if (suppressed) {
-        fillRoundRect(ctx, 22, y + rowH / 2 + 2, 44, 13, 6, "#c0392b");
-        text(ctx, "战力压1", 44, y + rowH / 2 + 8.5, 8, "#fff7d8", "center");
+        fillRoundRect(ctx, 22, y + rowH / 2 + 3, 48, 14, 7, "#c0392b");
+        text(ctx, "战力压1", 46, y + rowH / 2 + 10, 8, "#fff7d8", "center");
       }
-      text(ctx, `${rowScore(player, row)}`, view.width - 24, y + rowH / 2, 13, "#8f3c1f", "right");
+      text(ctx, `${rowScore(player, row)}`, view.width - 24, y + rowH / 2, rowH >= 70 ? 14 : 13, "#8f3c1f", "right");
       const cards = sortedFieldCards(player.board[row]).slice(-5);
+      const fieldX = 86;
+      const fieldRight = view.width - 54;
+      const cardGap = rowH >= 70 ? 8 : 6;
+      const cardH = Math.max(34, rowH - 10);
+      const maxCardW = cards.length ? Math.floor((fieldRight - fieldX - cardGap * Math.max(0, cards.length - 1)) / cards.length) : 0;
+      const cardW = Math.max(36, Math.min(64, Math.floor(cardH * 0.72), maxCardW));
       cards.forEach((item, cardIndex) => {
-        const x = 86 + cardIndex * 43;
-        if (x + 36 > view.width - 48) return;
-        const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, x, y: y + 5, w: 36, h: rowH - 10 };
+        const x = fieldX + cardIndex * (cardW + cardGap);
+        if (x + cardW > fieldRight) return;
+        const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, x, y: y + 5, w: cardW, h: cardH };
         actions.push(detail);
         drawFieldCard(ctx, item, detail, rowH, suppressed);
       });
@@ -146,15 +154,19 @@ const ACTION_BUTTON_BOTTOM_GAP = 4;
 const ACTION_BUTTON_BOTTOM_OFFSET = ACTION_BUTTON_H + ACTION_BUTTON_BOTTOM_GAP;
 
 function handSortGroup(card) {
-  if (card.category === "special" || card.category === "weather" || card.category === "leader") return 100;
-  const abilities = card.abilities || [];
-  if (abilities.includes("Commander's Horn")) return 10;
-  if (abilities.includes("Scorch") || abilities.includes("Muster")) return 11;
-  if (abilities.includes("Morale Boost")) return 12;
-  if ((card.row || []).includes("melee")) return 1;
-  if ((card.row || []).includes("ranged")) return 2;
-  if ((card.row || []).includes("siege")) return 3;
+  if (card.category === "special" || card.category === "weather") return 1;
+  if (card.category === "leader") return 2;
   return 0;
+}
+
+function handEffectKey(card) {
+  const abilities = (card.abilities || []).slice().sort().join("/");
+  if (abilities) return abilities;
+  return `${card.category || ""}:${card.abilityText || ""}:${(card.row || []).join("/")}`;
+}
+
+function handCardKey(card) {
+  return String(card.baseName || card.name || card.id || "");
 }
 
 function sortedHandCards(hand) {
@@ -162,11 +174,29 @@ function sortedHandCards(hand) {
     const groupA = handSortGroup(a.item);
     const groupB = handSortGroup(b.item);
     if (groupA !== groupB) return groupA - groupB;
-    const strDiff = (a.item.strength || 0) - (b.item.strength || 0);
-    if (strDiff !== 0) return strDiff;
-    const nameDiff = String(a.item.name || a.item.baseName || "").localeCompare(String(b.item.name || b.item.baseName || ""), "zh-Hans");
-    return nameDiff || a.index - b.index;
+    if (groupA === 0) {
+      const strengthDiff = (a.item.strength || 0) - (b.item.strength || 0);
+      if (strengthDiff !== 0) return strengthDiff;
+    }
+    const effectDiff = handEffectKey(a.item).localeCompare(handEffectKey(b.item), "zh-Hans");
+    if (effectDiff !== 0) return effectDiff;
+    const cardDiff = handCardKey(a.item).localeCompare(handCardKey(b.item), "zh-Hans");
+    if (cardDiff !== 0) return cardDiff;
+    const valueDiff = cardValue(a.item) - cardValue(b.item);
+    return valueDiff || a.index - b.index;
   }).map(entry => entry.item);
+}
+
+function orderedHandCards(hand, state, ui = {}) {
+  const sorted = sortedHandCards(hand || []);
+  if (!state?.mulligan?.active || !Array.isArray(ui.mulliganHandOrder)) return sorted;
+  const byUid = new Map((hand || []).map(item => [item.uid, item]));
+  const ordered = ui.mulliganHandOrder.map(uid => byUid.get(uid)).filter(Boolean);
+  const used = new Set(ordered.map(item => item.uid));
+  sorted.forEach(item => {
+    if (item.uid && !used.has(item.uid)) ordered.push(item);
+  });
+  return ordered;
 }
 
 function drawHand(ctx, view, actions, state, ui) {
@@ -174,7 +204,7 @@ function drawHand(ctx, view, actions, state, ui) {
   const player = state.players[ownerIndex] || state.players[0];
   const waiting = (state.mode === "ai" && state.current !== 0 || state.mode === "online" && !isLocalOnlineAction(state)) && !state.over;
   const pageSize = 5;
-  const sortedHand = sortedHandCards(player.hand);
+  const sortedHand = orderedHandCards(player.hand, state, ui);
   const page = Math.max(0, Math.min(ui.handPage || 0, Math.max(0, Math.ceil(sortedHand.length / pageSize) - 1)));
   const shown = sortedHand.slice(page * pageSize, page * pageSize + pageSize + 1);
   const gap = 6;
@@ -299,10 +329,10 @@ function visibleLeaderCards(state) {
   return [state.players[enemy]?.leader, state.players[local]?.leader].filter(Boolean);
 }
 
-function visibleHandDetailCards(state) {
+function visibleHandDetailCards(state, ui = {}) {
   const ownerIndex = handOwnerIndex(state);
   const player = state.players[ownerIndex] || state.players[0];
-  return sortedHandCards(player?.hand || []);
+  return orderedHandCards(player?.hand || [], state, ui);
 }
 
 function visibleDiscardDetailCards(state, ui = {}, fallbackOwner) {
@@ -326,7 +356,7 @@ function detailCardEntries(state, ui = {}, view = null) {
   if (context.zone === "board" && context.row) {
     return detailEntries(sortedFieldCards(state.players[context.playerIndex]?.board?.[context.row] || []).slice(-5));
   }
-  if (context.zone === "hand") return detailEntries(visibleHandDetailCards(state));
+  if (context.zone === "hand") return detailEntries(visibleHandDetailCards(state, ui));
   if (context.zone === "discard") return detailEntries(visibleDiscardDetailCards(state, ui, context.playerIndex));
   return [];
 }
@@ -412,8 +442,14 @@ function battlePowerEffectSections(state, context, fallbackCard) {
     boardContexts = collectBoardInstances(state, fallbackCard);
   }
   if (!boardContexts.length) return [];
-  const first = boardContexts[0].card;
-  if (!first || first.category === "weather" || first.category === "special") return [];
+  boardContexts = boardContexts.filter(item => {
+    const card = item.card;
+    if (!card || card.category === "weather" || card.category === "special") return false;
+    const base = card.strength || 0;
+    const current = card.effective == null ? base : card.effective;
+    return current !== base;
+  });
+  if (!boardContexts.length) return [];
 
   const blocks = [];
   boardContexts.forEach((ctx, idx) => {
@@ -455,8 +491,8 @@ function mulliganDetailSections(state, context) {
   const startLabel = state.mode === "online" ? "准备" : "不换开始";
   const lines = done
     ? "你已完成换牌，正在等待对方。"
-    : `当前可换牌 ${used}/${max}。\n点击空白处回到手牌，点击不想保留的手牌即可重抽；还可替换 ${left} 张。\n若不想换牌，可点击「${startLabel}」保留当前手牌。`;
-  return [{ title: "换牌提示", content: lines, color: "#f1d58a", lines: 4 }];
+    : `本局可换 ${max} 张：已换 ${used} 张，还可换 ${left} 张。\n点击当前卡牌可直接替换；也可点空白回到手牌后选择其它牌。\n不想换牌时，点击「${startLabel}」保留当前手牌。`;
+  return [{ title: "换牌说明", content: lines, color: "#8f3c1f", lines: 4 }];
 }
 
 function playerSideLabel(state, playerIndex) {
@@ -568,7 +604,6 @@ function drawDiscardPilePanel(ctx, view, actions, state, ui) {
       const rowName = (item.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略/时局";
       const strength = item.category === "weather" || item.category === "special" ? "策" : (item.strength ?? "");
       text(ctx, `${categoryLabel(item)} · ${rowName} · ${strength}`, x, detail.y + 31, 10, "#775c34");
-      text(ctx, "长按查看", detail.x + detail.w - 30, detail.y + 22, 10, "#8f3c1f", "center");
     });
     if (totalPages > 1) {
       const trackX = panelX + panelW - 12;
@@ -824,7 +859,6 @@ function draw(ctx, view, actions, state, ui = {}) {
   if (weatherNames.length) {
     text(ctx, `时局：${weatherNames.join("、")}`, view.width / 2, headerY + 40, 10, "#8a785f", "center");
   }
-  drawRows(ctx, view, actions, state, weatherNames.length ? 90 : 78);
   const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const logLineH = 14;
   const logTextW = view.width - 48;
@@ -834,6 +868,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   const compactLog = latestFitsOneLine && logEntries.length <= 1;
   const logH = compactLog ? 26 : 32;
   const logY = handY - logH - HAND_LOG_GAP;
+  drawRows(ctx, view, actions, state, weatherNames.length ? 90 : 78, logY - 10);
   const logAction = { id: "battleLog", x: 12, y: logY, w: view.width - 24, h: logH };
   actions.push(logAction);
   fillRoundRect(ctx, logAction.x, logAction.y, logAction.w, logAction.h, 9, "#efe6d2", "#d3b982");
@@ -854,7 +889,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   const w = (view.width - 44) / 3;
   let rightButton;
   if (state.over) rightButton = ["home", "首页", "#6b6b5f"];
-  else if (isMulligan) rightButton = isLocalOnlineAction(state) ? ["mulliganDone", "开始对局", "#2f6f57"] : ["noop", "等待", "#b6a98e"];
+  else if (isMulligan) rightButton = isLocalOnlineAction(state) ? ["mulliganDone", state.mode === "online" ? "准备" : "不换开始", "#2f6f57"] : ["noop", "等待", "#b6a98e"];
   else rightButton = ["surrenderMatch", "认输", "#6b6b5f"];
   const buttons = [
     ["auto", "自动", "#4f6d8a"],
@@ -878,16 +913,24 @@ function draw(ctx, view, actions, state, ui = {}) {
     const leftCard = currentIdx > 0 ? entries[currentIdx - 1].card : null;
     const rightCard = currentIdx >= 0 && currentIdx < entries.length - 1 ? entries[currentIdx + 1].card : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
-    const extraSections = mulliganDetailSections(state, detailContext).concat(battlePowerEffectSections(state, detailContext, detail));
+    const helpSections = mulliganDetailSections(state, detailContext);
+    const extraSections = battlePowerEffectSections(state, detailContext, detail);
     drawDetail(ctx, view, actions, detail, {
       title: isMulligan ? "换牌阶段" : "卡牌详情",
-      closeHint: isMulligan ? "点击空白处回到手牌" : "点击空白处返回对局",
+      closeHint: isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局",
       leftCard,
       rightCard,
       swipeOffset,
-      extraSections
+      extraSections,
+      helpAction: isMulligan ? { id: "mulliganHelp" } : null,
+      helpOpen: !!ui.mulliganHelpOpen,
+      helpSections,
+      anim: ui.mulliganSwapAnim ? { alpha: ui.mulliganSwapAnim.alpha, scale: ui.mulliganSwapAnim.scale } : null,
+      cardAction: isMulligan && detailContext?.zone === "hand" && isLocalOnlineAction(state)
+        ? { id: "mulliganDetailSwap", cardId: detail.id, cardUid: detail.uid }
+        : null
     });
   }
 }
 
-module.exports = { draw, detailCardEntries };
+module.exports = { draw, detailCardEntries, sortedHandCards };

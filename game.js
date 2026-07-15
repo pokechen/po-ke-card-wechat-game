@@ -6,6 +6,7 @@ const settingsScene = require("./js/scenes/settings");
 const deckBuilderScene = require("./js/scenes/deckBuilder");
 const historyScene = require("./js/scenes/history");
 const battleScene = require("./js/scenes/battleScene");
+const { sortedHandCards } = battleScene;
 const resultScene = require("./js/scenes/result");
 const pvpRoomScene = require("./js/scenes/pvpRoom");
 const pvpSetupScene = require("./js/scenes/pvpSetup");
@@ -39,6 +40,12 @@ const app = {
     battleCardDetailId: "",
     battleCardDetailUid: "",
     mulliganGuideShown: false,
+    mulliganHelpOpen: false,
+    mulliganHandOrder: null,
+    mulliganSwapAnim: null,
+    mulliganSwapQueue: null,
+    mulliganSwapIndex: 0,
+    mulliganReplacedUid: "",
     deckCardDetailId: "",
     settingCardDetailId: "",
     matchSetupCardDetailId: "",
@@ -70,6 +77,8 @@ const BATTLE_HAND_CARD_H = 96;
 const BATTLE_HAND_BOTTOM_OFFSET = 148;
 const BATTLE_HAND_SWIPE_TOP_PADDING = 26;
 const BATTLE_HAND_SWIPE_BOTTOM_PADDING = 10;
+const MULLIGAN_SWAP_OUT_MS = 260;
+const MULLIGAN_SWAP_IN_MS = 300;
 
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
@@ -160,16 +169,144 @@ function openMulliganGuideDetail() {
   const playerIndex = handOwnerIndex(app.match);
   const mulligan = app.match.mulligan;
   if (mulligan.done?.[playerIndex]) return;
-  const hand = app.match.players[playerIndex]?.hand || [];
+  const hand = sortedHandCards(app.match.players[playerIndex]?.hand || []);
   if (!hand.length) return;
-  const card = hand.slice().sort((a, b) => {
-    if (!!a.hero !== !!b.hero) return a.hero ? 1 : -1;
-    return cardValue(a) - cardValue(b);
-  })[0] || hand[0];
+  const card = hand[0];
+  app.ui.mulliganHandOrder = hand.map(item => item.uid).filter(Boolean);
   app.ui.battleCardDetailId = card.id || "";
   app.ui.battleCardDetailUid = card.uid || "";
   app.ui.detailSwipe = null;
+  app.ui.mulliganHelpOpen = false;
   app.ui.mulliganGuideShown = true;
+}
+
+function ensureMulliganHandOrder(playerIndex) {
+  const player = app.match?.players?.[playerIndex];
+  const hand = player?.hand || [];
+  const current = new Set(hand.map(item => item.uid));
+  const cached = Array.isArray(app.ui.mulliganHandOrder)
+    ? app.ui.mulliganHandOrder.filter(uid => current.has(uid))
+    : [];
+  sortedHandCards(hand).forEach(card => {
+    if (card.uid && !cached.includes(card.uid)) cached.push(card.uid);
+  });
+  app.ui.mulliganHandOrder = cached;
+  return cached;
+}
+
+function replaceMulliganHandOrderUid(oldUid, newUid, playerIndex) {
+  const order = Array.isArray(app.ui.mulliganHandOrder)
+    ? app.ui.mulliganHandOrder.slice()
+    : ensureMulliganHandOrder(playerIndex);
+  const index = order.indexOf(oldUid);
+  if (index >= 0 && newUid) order[index] = newUid;
+  else ensureMulliganHandOrder(playerIndex);
+  app.ui.mulliganHandOrder = index >= 0 ? order : app.ui.mulliganHandOrder;
+}
+
+function hasMulliganSwapLeft() {
+  const mulligan = app.match?.mulligan;
+  if (!mulligan?.active) return false;
+  const pi = handOwnerIndex(app.match);
+  return (mulligan.used?.[pi] || 0) < (mulligan.max || 0);
+}
+
+function performLocalMulliganSwap(uid) {
+  const state = app.match;
+  const pi = handOwnerIndex(state);
+  ensureMulliganHandOrder(pi);
+  const before = new Set((state.players[pi].hand || []).map(item => item.uid));
+  const ok = mulliganSwap(state, uid, pi);
+  if (!ok) {
+    app.ui.mulliganReplacedUid = "";
+    return null;
+  }
+  const after = state.players[pi].hand || [];
+  const newCard = after.find(item => item.uid && !before.has(item.uid));
+  if (newCard) replaceMulliganHandOrderUid(uid, newCard.uid, pi);
+  app.ui.mulliganReplacedUid = newCard ? newCard.uid : (after.length ? after[after.length - 1].uid : "");
+  return newCard || null;
+}
+
+function finishMulliganSwapSequence(closeDetail = true) {
+  app.ui.mulliganSwapAnim = null;
+  app.ui.mulliganSwapQueue = null;
+  app.ui.mulliganSwapIndex = 0;
+  app.ui.mulliganReplacedUid = "";
+  if (closeDetail) {
+    app.ui.battleCardDetailId = "";
+    app.ui.battleCardDetailUid = "";
+    app.ui.mulliganHelpOpen = false;
+  }
+  app.ui.handPage = 0;
+  afterHumanAction();
+}
+
+function runMulliganSwapStep(phase) {
+  const queue = app.ui.mulliganSwapQueue || [];
+  const index = app.ui.mulliganSwapIndex || 0;
+  const uid = queue[index];
+  if (!uid) return finishMulliganSwapSequence();
+  app.ui.mulliganSwapAnim = {
+    phase,
+    start: Date.now(),
+    alpha: phase === "out" ? 1 : 0,
+    scale: phase === "out" ? 1 : 0.82
+  };
+  const dur = phase === "out" ? MULLIGAN_SWAP_OUT_MS : MULLIGAN_SWAP_IN_MS;
+  function step() {
+    if (!app.ui.mulliganSwapAnim || app.ui.mulliganSwapAnim.phase !== phase) return;
+    const progress = Math.min(1, (Date.now() - app.ui.mulliganSwapAnim.start) / dur);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    if (phase === "out") {
+      app.ui.mulliganSwapAnim.alpha = 1 - eased;
+      app.ui.mulliganSwapAnim.scale = 1 - 0.16 * eased;
+    } else {
+      app.ui.mulliganSwapAnim.alpha = eased;
+      app.ui.mulliganSwapAnim.scale = 0.82 + 0.18 * eased;
+    }
+    render();
+    if (progress < 1) return requestFrame(step);
+    if (phase === "out") {
+      const curUid = queue[app.ui.mulliganSwapIndex];
+      const newCard = performLocalMulliganSwap(curUid);
+      if (!newCard) return finishMulliganSwapSequence();
+      app.ui.battleCardDetailUid = newCard.uid || "";
+      app.ui.battleCardDetailId = newCard.id || "";
+      app.ui.mulliganReplacedUid = "";
+      runMulliganSwapStep("in");
+    } else {
+      app.ui.mulliganSwapIndex += 1;
+      if (app.ui.mulliganSwapIndex < queue.length && hasMulliganSwapLeft()) {
+        app.ui.battleCardDetailUid = queue[app.ui.mulliganSwapIndex] || "";
+        app.ui.battleCardDetailId = "";
+        runMulliganSwapStep("out");
+      } else {
+        finishMulliganSwapSequence(!hasMulliganSwapLeft());
+      }
+    }
+  }
+  requestFrame(step);
+}
+
+function startMulliganSwapSequence(firstUid) {
+  const mulligan = app.match?.mulligan;
+  if (!mulligan?.active || !firstUid) return;
+  const pi = handOwnerIndex(app.match);
+  const used = mulligan.used?.[pi] || 0;
+  const remaining = Math.max(0, (mulligan.max || 0) - used);
+  if (remaining <= 0) {
+    app.ui.battleCardDetailId = "";
+    app.ui.battleCardDetailUid = "";
+    return render();
+  }
+  app.ui.mulliganSwapQueue = [firstUid];
+  app.ui.mulliganSwapIndex = 0;
+  app.ui.battleCardDetailUid = firstUid;
+  app.ui.battleCardDetailId = "";
+  app.ui.detailSwipe = null;
+  app.ui.mulliganSwapAnim = { phase: "out", start: Date.now(), alpha: 1, scale: 1 };
+  runMulliganSwapStep("out");
 }
 
 function setScene(scene) {
@@ -187,6 +324,12 @@ function startMatch(optionsPatch = {}) {
   app.ui.battleCardDetailId = "";
   app.ui.battleCardDetailUid = "";
   app.ui.mulliganGuideShown = false;
+  app.ui.mulliganHelpOpen = false;
+  app.ui.mulliganHandOrder = null;
+  app.ui.mulliganSwapAnim = null;
+  app.ui.mulliganSwapQueue = null;
+  app.ui.mulliganSwapIndex = 0;
+  app.ui.mulliganReplacedUid = "";
   app.ui.discardPileOwner = null;
   app.ui.discardPilePage = 0;
   app.ui.battleLogHistoryOpen = false;
@@ -1288,11 +1431,39 @@ function handleBattle(action) {
     return render();
   }
   if (action.id === "battleCardDetail") return render();
-  if (action.id === "detailPanel") return;
+  if (action.id === "detailPanel") {
+    if (app.ui.mulliganHelpOpen) {
+      app.ui.mulliganHelpOpen = false;
+      return render();
+    }
+    return;
+  }
+  if (action.id === "mulliganHelp") {
+    app.ui.mulliganHelpOpen = !app.ui.mulliganHelpOpen;
+    return render();
+  }
+  if (action.id === "mulliganHelpPanel") return render();
   if (action.id === "closeDetail") {
+    if (app.ui.mulliganHelpOpen) {
+      app.ui.mulliganHelpOpen = false;
+      return render();
+    }
     app.ui.battleCardDetailId = "";
     app.ui.battleCardDetailUid = "";
+    app.ui.mulliganHelpOpen = false;
     return render();
+  }
+  if (action.id === "mulliganDetailSwap") {
+    if (!app.match.mulligan?.active || !action.cardUid) return render();
+    if (isOnlineMatch()) {
+      app.ui.battleCardDetailId = "";
+      app.ui.battleCardDetailUid = "";
+      app.ui.detailSwipe = null;
+      app.ui.handPage = 0;
+      return submitPvpAction({ type: "mulliganSwap", cardUid: action.cardUid });
+    }
+    startMulliganSwapSequence(action.cardUid);
+    return;
   }
   if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return render();
   if (app.ui.battleLogHistoryOpen) return render();
@@ -1367,8 +1538,13 @@ function handleBattle(action) {
     return render();
   }
   if (app.match.mulligan?.active) {
-    if (action.id === "card") { mulliganSwap(app.match, action.cardUid); app.ui.handPage = 0; return afterHumanAction(); }
-    if (action.id === "mulliganDone") { finishMulligan(app.match); return afterHumanAction(); }
+    if (action.id === "card") {
+      performLocalMulliganSwap(action.cardUid);
+      app.ui.handPage = 0;
+      if (!app.match.mulligan?.active) app.ui.mulliganHandOrder = null;
+      return afterHumanAction();
+    }
+    if (action.id === "mulliganDone") { finishMulligan(app.match); app.ui.mulliganHandOrder = null; return afterHumanAction(); }
     return;
   }
   if (action.id === "leader") useLeader(app.match, app.match.current);
@@ -1380,6 +1556,7 @@ function handleBattle(action) {
 
 function handleAction(action) {
   vibrate();
+  if (app.ui.mulliganSwapAnim) return;
   if (app.scene === "menu") return handleMenu(action);
   if (app.scene === "pvpSetup") return handlePvpSetup(action);
   if (app.scene === "pvpRoom") return handlePvpRoom(action);
