@@ -181,7 +181,6 @@ function draw(ctx, view, actions) {
     actions.push(rect);
     button(ctx, { ...rect, label: item[1], fill: item[2], stroke: "#4b3d2d", size: 15 });
   });
-
 }
 
 module.exports = { draw };

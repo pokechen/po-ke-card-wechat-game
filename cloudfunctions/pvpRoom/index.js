@@ -122,6 +122,7 @@ function buildMatch(players) {
     aiCustomDeckIds: p1.customDeckIds
   });
   match.mode = "online";
+  match.matchId = `${now()}-${Math.floor(Math.random() * 1000000)}`;
   match.players[0].name = p0.name || "玩家一";
   match.players[1].name = p1.name || "玩家二";
   match.logs.unshift("双方已确认出战配置，联网对战开始。 ");
@@ -136,6 +137,9 @@ function pendingOwner(match) {
 
 function assertCanAct(match, playerIndex, actionType) {
   if (!match || match.over) throw new Error("牌局已结束");
+  // 认输是单方行为，对局进行中的任意阶段（换牌、选择目标、对方出牌时）均可发起
+  if (actionType === "surrender") return;
+  if (actionType === "continueRound") return;
   if (match.mulligan && match.mulligan.active) {
     if (actionType !== "mulliganSwap" && actionType !== "mulliganDone") throw new Error("请先完成换牌");
     if (match.mulligan.simultaneous && match.mode === "online") {
@@ -162,8 +166,8 @@ function applyBattleAction(match, playerIndex, action = {}) {
   if (type === "cancelPending") return battle.cancelPending(match);
   if (type === "card") return battle.playCard(match, action.cardUid, action.row);
   if (type === "pass") return battle.pass(match);
+  if (type === "continueRound") return match.roundTransition ? battle.continueRoundTransition(match) : true;
   if (type === "leader") return battle.useLeader(match, playerIndex);
-  if (type === "auto") return battle.autoPlayHuman(match);
   if (type === "surrender") return battle.surrender(match, playerIndex);
   throw new Error("未知行动");
 }
@@ -319,7 +323,9 @@ async function submitAction(event, openid) {
   const allowStaleMulligan = room.match?.mulligan?.active
     && room.match.mulligan.simultaneous
     && (actionType === "mulliganSwap" || actionType === "mulliganDone");
-  if (!allowStaleMulligan && Number.isFinite(Number(event.turnSeq)) && Number(event.turnSeq) !== Number(room.turnSeq || 0)) {
+  // 认输结果确定（仅标记该玩家为负），与当前轮次序号无关，允许用旧的 turnSeq 提交，避免对方刚出牌时被 STALE_TURN 拒绝
+  const allowStaleAction = actionType === "surrender" || actionType === "continueRound";
+  if (!allowStaleMulligan && !allowStaleAction && Number.isFinite(Number(event.turnSeq)) && Number(event.turnSeq) !== Number(room.turnSeq || 0)) {
     return fail("牌局已更新，请稍后再试", "STALE_TURN");
   }
   const match = room.match;

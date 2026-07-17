@@ -25,6 +25,14 @@ function selectedCount(ids, group) {
   return ids.filter(id => groupIds.has(id)).length;
 }
 
+function cardMetaText(card) {
+  const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/");
+  if (card.category === "weather" || card.category === "special") {
+    return [categoryLabel(card), rowName].filter(Boolean).join(" · ");
+  }
+  return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
+}
+
 function pageLayout(view) {
   const top = view.safeTop + 26;
   const toolY = top + 64;
@@ -106,8 +114,7 @@ function draw(ctx, view, actions, ui) {
       fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
       text(ctx, `${count}/${maxCount}`, x + 109, y + 15, 11, "#fff7d8", "center");
     }
-    const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略";
-    text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
+    text(ctx, cardMetaText(card), x, y + 34, 11, "#775c34");
     wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
   });
   ctx.restore();

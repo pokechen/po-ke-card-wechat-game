@@ -4,7 +4,8 @@ const { FACTION_KEYS, FACTION_LABELS, cardById, displayName } = require("../core
 const ERROR_PREVIEW_LINES = 5;
 
 function rulesOf(room = {}) {
-  const rules = room.rules || {};
+  const source = room && typeof room === "object" ? room : {};
+  const rules = source.rules && typeof source.rules === "object" ? source.rules : {};
   const faction = FACTION_KEYS.includes(rules.faction) ? rules.faction : FACTION_KEYS[0];
   return {
     factionMode: rules.factionMode === "fixed" ? "fixed" : "any",
@@ -28,7 +29,7 @@ function statusText(pvp) {
   if (pvp.room?.status === "playing") return "对战进行中";
   if (pvp.room?.status === "finished") return "本局已结束，可返回房间再开一局。";
   const players = pvp.room?.players || [];
-  if (players.length < 2) return "等待好友加入房间，好友加入后先准备，房主再开始。";
+  if (players.length < 2) return "等待好友加入。好友打开分享卡片后，点「联网对战」并输入上方房间号。";
   return players[1]?.ready ? "好友已准备，房主可开始选择卡牌。" : "好友查看规则后点击准备，房主随后开始。";
 }
 
@@ -65,7 +66,129 @@ function drawRuleRow(ctx, actions, rect, label, editable) {
   button(ctx, { ...rect, label, fill: editable ? "#fffaf0" : "#f2ead8", stroke: "#dcc48d", color: editable ? "#3b2b18" : "#775c34", size: 11, shadow: false });
 }
 
-function draw(ctx, view, actions, pvp = {}) {
+function factionRuleOptions() {
+  return [{ value: "any", label: "不限" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value })));
+}
+
+function drawFactionRuleDropdown(ctx, view, actions, anchor, rules) {
+  if (!anchor) return;
+  const options = factionRuleOptions();
+  const selected = rules.factionMode === "fixed" ? rules.faction : "any";
+  const itemH = 34;
+  const menuH = options.length * itemH;
+  const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
+  const menuY = Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8);
+  actions.push({ id: "closePvpRoomRuleDropdown", x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(38, 28, 18, 0.18)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+  fillRoundRect(ctx, menuX, menuY, anchor.w, menuH, 12, "#fffaf0", "#2f6f57");
+  options.forEach((option, index) => {
+    const y = menuY + index * itemH;
+    const active = option.value === selected;
+    actions.push({ id: "selectPvpRoomRuleFaction", value: option.value, x: menuX, y, w: anchor.w, h: itemH });
+    if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
+    else if (index > 0) {
+      ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
+      ctx.beginPath();
+      ctx.moveTo(menuX + 10, y);
+      ctx.lineTo(menuX + anchor.w - 10, y);
+      ctx.stroke();
+    }
+    text(ctx, short(option.label, 18), menuX + anchor.w / 2, y + itemH / 2, 12, active ? "#ffffff" : "#2f2417", "center");
+  });
+}
+
+function drawShareGuideOverlay(ctx, view, actions, roomId) {
+  actions.push({ id: "closePvpShareGuide", x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(24, 18, 12, 0.55)";
+  ctx.fillRect(0, 0, view.width, view.height);
+
+  // 右上角菜单按钮区域高亮
+  const menuW = 92;
+  const menuH = 38;
+  const menuX = view.width - menuW - 10;
+  const menuY = view.safeTop + 8;
+  fillRoundRect(ctx, menuX - 8, menuY - 8, menuW + 16, menuH + 16, 26, "rgba(255, 247, 216, 0.10)", "rgba(255, 216, 106, 0.70)");
+  fillRoundRect(ctx, menuX, menuY, menuW, menuH, 20, "rgba(255, 247, 216, 0.16)", "rgba(255, 247, 216, 0.62)");
+  text(ctx, "···", menuX + 28, menuY + 18, 22, "#fff7d8", "center");
+  text(ctx, "◎", menuX + 70, menuY + 19, 18, "#fff7d8", "center");
+
+  // 分享卡片暂不能稳定携带参数，明确提示好友按房间号手动加入。
+  const tipText = "记住房间号，再点击「···」转发";
+  ctx.font = "14px sans-serif";
+  const textMetrics = ctx.measureText(tipText);
+  const tipW = Math.max(textMetrics.width + 32, 240);
+  const tipH = 42;
+  const tipX = (view.width - tipW) / 2;
+  const tipY = menuY + menuH + 20;
+
+  fillRoundRect(ctx, tipX, tipY, tipW, tipH, 21, "rgba(255, 248, 225, 0.96)", "rgba(255, 216, 106, 0.95)");
+  text(ctx, tipText, tipX + tipW / 2, tipY + tipH / 2 + 1, 14, "#5f4727", "center");
+
+  // 绘制曲线箭头：从提示框右上角弯曲指向右上角 ··· 按钮
+  ctx.strokeStyle = "rgba(255, 180, 60, 0.9)";
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const arrowStartX = tipX + tipW - 30;
+  const arrowStartY = tipY + 6;
+  const arrowEndX = menuX + menuW / 2 + 12;
+  const arrowEndY = menuY + menuH - 2;
+
+  ctx.beginPath();
+  ctx.moveTo(arrowStartX, arrowStartY);
+  ctx.quadraticCurveTo(
+    arrowStartX + (arrowEndX - arrowStartX) * 0.6,
+    arrowEndY - (tipY + tipH - arrowEndY) * 0.3,
+    arrowEndX,
+    arrowEndY
+  );
+  ctx.stroke();
+
+  // 箭头头部
+  const arrowHeadLen = 8;
+  const angle = Math.atan2(arrowEndY - (arrowEndY - 6), arrowEndX - (arrowEndX - 6));
+  ctx.beginPath();
+  ctx.moveTo(arrowEndX, arrowEndY);
+  ctx.lineTo(
+    arrowEndX - arrowHeadLen * Math.cos(angle - Math.PI / 5),
+    arrowEndY - arrowHeadLen * Math.sin(angle - Math.PI / 5)
+  );
+  ctx.moveTo(arrowEndX, arrowEndY);
+  ctx.lineTo(
+    arrowEndX - arrowHeadLen * Math.cos(angle + Math.PI / 5),
+    arrowEndY - arrowHeadLen * Math.sin(angle + Math.PI / 5)
+  );
+  ctx.stroke();
+
+  const panelW = Math.min(view.width - 44, 330);
+  const panelH = 246;
+  const panelX = (view.width - panelW) / 2;
+  const panelY = Math.min(view.height - view.safeBottom - panelH - 92, Math.max(view.safeTop + 150, Math.floor(view.height * 0.32)));
+  actions.push({ id: "pvpShareGuidePanel", x: panelX, y: panelY, w: panelW, h: panelH });
+  fillRoundRect(ctx, panelX, panelY, panelW, panelH, 22, "rgba(255, 250, 240, 0.98)", "rgba(255, 216, 106, 0.92)");
+  fillRoundRect(ctx, panelX + 16, panelY + 16, 48, 48, 24, "rgba(47, 111, 87, 0.12)", "rgba(47, 111, 87, 0.26)");
+  text(ctx, "↗", panelX + 40, panelY + 40, 24, "#2f6f57", "center");
+  text(ctx, "把房间号发给好友", panelX + 78, panelY + 28, 18, "#2f2417");
+  text(ctx, "好友打开后需要手动输入", panelX + 78, panelY + 52, 12, "#775c34");
+
+  const roomChip = { x: panelX + 20, y: panelY + 78, w: panelW - 40, h: 42 };
+  fillRoundRect(ctx, roomChip.x, roomChip.y, roomChip.w, roomChip.h, 21, "rgba(47, 111, 87, 0.08)", "rgba(47, 111, 87, 0.28)");
+  text(ctx, `房间号 ${roomId}`, roomChip.x + roomChip.w / 2, roomChip.y + 21, 18, "#2f6f57", "center");
+
+  wrapText(ctx, `好友打开分享卡片后：首页点「联网对战」→「输入房间号加入」，输入 ${roomId}。`, panelX + 22, panelY + 140, panelW - 44, 20, 3, 13, "#5f4727");
+
+  const close = { id: "closePvpShareGuide", x: panelX + panelW - 104, y: panelY + panelH - 42, w: 82, h: 30 };
+  actions.push(close);
+  button(ctx, { ...close, label: "知道了", size: 12, fill: "#2f6f57", stroke: "#1d4f3c" });
+  ctx.restore();
+}
+
+function draw(ctx, view, actions, pvp = {}, ui = {}) {
   clear(ctx, view.width, view.height);
   const top = view.safeTop + 38;
   text(ctx, "联网房间", view.width / 2, top, 26, "#2f2417", "center");
@@ -73,32 +196,35 @@ function draw(ctx, view, actions, pvp = {}) {
 
   const roomId = String(pvp.roomId || "").replace(/\D/g, "").slice(0, 4);
   const hasError = !!pvp.error;
+  const hasRoom = !!(pvp.room && typeof pvp.room === "object");
   const panelH = hasError ? 250 : 278;
   const panel = { x: 20, y: top + 58, w: view.width - 40, h: panelH };
   fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18, "#fffaf0", "#dcc48d");
   text(ctx, roomId ? "房间号" : "联网对战", view.width / 2, panel.y + 24, 12, "#775c34", "center");
   text(ctx, roomId || "准备开始", view.width / 2, panel.y + 58, roomId ? 30 : 24, "#8f3c1f", "center");
 
+  let factionRuleAnchor = null;
+  let factionRuleDropdownRules = null;
   if (hasError) {
     drawErrorPanel(ctx, view, actions, panel, pvp);
   } else {
     wrapText(ctx, statusText(pvp), panel.x + 18, panel.y + 92, panel.w - 36, 18, 2, 12, "#2f6f57");
-    if (roomId) wrapText(ctx, ruleText(pvp.room), panel.x + 18, panel.y + 132, panel.w - 36, 16, 2, 11, "#8f3c1f");
+    if (roomId && hasRoom) wrapText(ctx, ruleText(pvp.room), panel.x + 18, panel.y + 132, panel.w - 36, 16, 2, 11, "#8f3c1f");
     const players = pvp.room?.players || [];
-    if (roomId && players.length) {
+    if (roomId && hasRoom && players.length) {
       text(ctx, playerSetupText(players[0], "玩家一", pvp.room?.status), panel.x + 18, panel.y + 174, 10, "#775c34");
       text(ctx, playerSetupText(players[1], "玩家二", pvp.room?.status), panel.x + 18, panel.y + 194, 10, "#775c34");
     }
 
-    if (roomId && pvp.playerIndex === 0 && (!pvp.room || pvp.room.status === "waiting" || pvp.room.status === "finished")) {
+    if (roomId && hasRoom && pvp.playerIndex === 0 && (pvp.room.status === "waiting" || pvp.room.status === "finished")) {
       const rules = rulesOf(pvp.room);
       const editable = pvp.room?.status !== "selecting" && pvp.room?.status !== "playing";
       const y = panel.y + 218;
-      drawRuleRow(ctx, actions, { id: "pvpRuleFactionMode", x: panel.x + 16, y, w: (panel.w - 42) / 2, h: 28 }, `阵营：${rules.factionMode === "fixed" ? "指定" : "不限"}`, editable);
+      factionRuleAnchor = { id: "pvpRoomRuleFaction", x: panel.x + 16, y, w: (panel.w - 42) / 2, h: 28 };
+      factionRuleDropdownRules = rules;
+      const factionLabel = rules.factionMode === "fixed" ? `阵营：${short(FACTION_LABELS[rules.faction] || rules.faction, 6)}` : "阵营：不限";
+      drawRuleRow(ctx, actions, factionRuleAnchor, `${factionLabel}${editable ? (ui.matchSetupDropdown === "pvpRoomRuleFaction" ? " ▴" : " ▾") : ""}`, editable);
       drawRuleRow(ctx, actions, { id: "pvpRuleDeckMode", x: panel.x + 26 + (panel.w - 42) / 2, y, w: (panel.w - 42) / 2, h: 28 }, `卡牌：${rules.deckMode === "autoOnly" ? "仅自动" : "不限"}`, editable);
-      if (rules.factionMode === "fixed") {
-        drawRuleRow(ctx, actions, { id: "pvpRuleFactionNext", x: panel.x + 16, y: y + 36, w: panel.w - 32, h: 28 }, `指定阵营：${FACTION_LABELS[rules.faction] || rules.faction}`, editable);
-      }
     }
   }
 
@@ -114,6 +240,20 @@ function draw(ctx, view, actions, pvp = {}) {
     button(ctx, { ...join, label: "输入房间号加入", fill: "#4f6d8a", stroke: "#36516a", size: 13 });
     if (copyError) button(ctx, { ...copyError, label: "复制错误信息", fill: "#8f3c1f", stroke: "#6d2d18", size: 12 });
     button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
+    return;
+  }
+
+  if (!hasRoom) {
+    const retry = { id: "pvpRetryJoin", x: 46, y: y0, w: view.width - 92, h: 42 };
+    const copy = { id: "pvpCopy", x: 46, y: y0 + 52, w: view.width - 92, h: 38 };
+    const copyError = hasError ? { id: "pvpCopyError", x: 46, y: y0 + 98, w: view.width - 92, h: 38 } : null;
+    const back = { id: "pvpBack", x: 46, y: y0 + (hasError ? 144 : 98), w: view.width - 92, h: 38 };
+    actions.push(copy, back);
+    if (hasError) actions.push(retry, copyError);
+    button(ctx, { ...retry, label: hasError ? "重新加入房间" : "正在加入房间...", fill: hasError ? "#2f6f57" : "#b6a98e", stroke: hasError ? "#1d4f3c" : "#a89a80", size: 13 });
+    button(ctx, { ...copy, label: "复制房间号", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
+    if (copyError) button(ctx, { ...copyError, label: "复制错误信息", fill: "#8f3c1f", stroke: "#6d2d18", size: 12 });
+    button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 12 });
     return;
   }
 
@@ -134,10 +274,12 @@ function draw(ctx, view, actions, pvp = {}) {
   actions.push(primaryRect, share, copy, back);
   if (copyError) actions.push(copyError);
   button(ctx, { ...primaryRect, label: primary.label, fill: primary.fill, stroke: primary.fill === "#b6a98e" ? "#a89a80" : "#1d4f3c", size: 13 });
-  button(ctx, { ...share, label: "转发邀请好友", fill: "#4f6d8a", stroke: "#36516a", size: 12 });
-  button(ctx, { ...copy, label: "复制房间号", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
+  button(ctx, { ...share, label: "转发房间号给好友", fill: "#4f6d8a", stroke: "#36516a", size: 12 });
+  button(ctx, { ...copy, label: "复制房间号发送", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
   if (copyError) button(ctx, { ...copyError, label: "复制错误信息", fill: "#8f3c1f", stroke: "#6d2d18", size: 12 });
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 12 });
+  if (ui.matchSetupDropdown === "pvpRoomRuleFaction") drawFactionRuleDropdown(ctx, view, actions, factionRuleAnchor, factionRuleDropdownRules || rulesOf(pvp.room));
+  if (ui.pvpShareGuideOpen) drawShareGuideOverlay(ctx, view, actions, roomId);
 }
 
 module.exports = { draw };

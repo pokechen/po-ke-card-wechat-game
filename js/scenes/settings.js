@@ -53,8 +53,7 @@ function pageLayout(view) {
   const bottomY = view.height - view.safeBottom - 48;
   const toolY = bottomY - 48;
   const listBottom = toolY - 20;
-  const pageSize = Math.max(3, Math.min(6, Math.floor((listBottom - listTop) / 68)));
-  return { top, factionY, leaderY, toolY, tabY, listTop, bottomY, listBottom, pageSize };
+  return { top, factionY, leaderY, toolY, tabY, listTop, bottomY, listBottom };
 }
 
 function filteredCardGroups(faction, tab) {
@@ -74,12 +73,20 @@ function selectedCount(ids, group) {
   return ids.filter(id => groupIds.has(id)).length;
 }
 
-function clampPage(view, ui, targetPage) {
-  const settings = loadSettings();
-  const { pageSize } = pageLayout(view);
-  const totalPages = Math.max(1, Math.ceil(filteredCardGroups(settings.humanFaction, ui.settingCardTab || "all").length / pageSize));
-  const page = targetPage == null ? (ui.settingDeckPage || 0) : targetPage;
-  return Math.max(0, Math.min(page, totalPages - 1));
+function cardMetaText(card) {
+  const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/");
+  if (card.category === "weather" || card.category === "special") {
+    return [categoryLabel(card), rowName].filter(Boolean).join(" · ");
+  }
+  return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
+}
+
+function scrollBounds(view, itemCount) {
+  const layout = pageLayout(view);
+  const rowH = 68;
+  const viewportH = Math.max(0, layout.listBottom - layout.listTop);
+  const contentH = itemCount * rowH;
+  return { ...layout, viewportH, contentH, maxScroll: Math.max(0, contentH - viewportH), rowH };
 }
 
 function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
@@ -159,35 +166,50 @@ function draw(ctx, view, actions, ui = {}) {
   const status = deckStatus(selectedIds, faction);
   const humanLeader = selectedLeader(settings, faction);
   const cardTab = ui.settingCardTab || "all";
-  const page = ui.settingDeckPage || 0;
-  const layout = pageLayout(view);
+  const scrollY = ui.settingDeckScroll || 0;
   const anchors = {};
   const groups = filteredCardGroups(faction, cardTab);
-  const totalPages = Math.max(1, Math.ceil(groups.length / layout.pageSize));
-  const safePage = Math.max(0, Math.min(page, totalPages - 1));
-  const list = groups.slice(safePage * layout.pageSize, safePage * layout.pageSize + layout.pageSize + 1);
-  const transitionY = ui.pageTransition?.scene === "settings" ? ui.pageTransition.offset || 0 : 0;
+  const bounds = scrollBounds(view, groups.length);
+  const safeScroll = Math.max(0, Math.min(scrollY || 0, bounds.maxScroll));
 
-  text(ctx, "我的牌组", view.width / 2, layout.top, 24, "#2f2417", "center");
-  text(ctx, `${FACTION_LABELS[faction]} · 自定义牌组 · ${safePage + 1}/${totalPages}`, view.width / 2, layout.top + 25, 12, "#775c34", "center");
-  drawFactionTabs(ctx, view, actions, faction, layout.factionY);
+  text(ctx, "我的牌组", view.width / 2, bounds.top, 24, "#2f2417", "center");
+  text(ctx, `${FACTION_LABELS[faction]} · 自定义牌组 · ${groups.length > 0 ? Math.min(groups.length, Math.floor(bounds.viewportH / bounds.rowH) + 1) : 0}/${groups.length}`, view.width / 2, bounds.top + 25, 12, "#775c34", "center");
+  drawFactionTabs(ctx, view, actions, faction, bounds.factionY);
 
-  const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: layout.leaderY, w: view.width - 36, h: 30 };
+  const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: bounds.leaderY, w: view.width - 36, h: 30 };
   anchors.humanLeader = leaderRect;
   actions.push(leaderRect);
   fillRoundRect(ctx, leaderRect.x, leaderRect.y, leaderRect.w, leaderRect.h, 10, "#7a5a95", "#1d4f3c");
   text(ctx, `领袖：${shortText(humanLeader ? displayName(humanLeader) : "未选择", 14)} ▾`, leaderRect.x + leaderRect.w / 2, leaderRect.y + 15, 12, "#ffffff", "center");
   if (humanLeader) text(ctx, "长按看详情", leaderRect.x + leaderRect.w - 10, leaderRect.y + 15, 10, "#e6dcff", "right");
 
-  drawCardTabs(ctx, view, actions, cardTab, layout.tabY);
+  drawCardTabs(ctx, view, actions, cardTab, bounds.tabY);
+
+  // 进度条
+  if (bounds.maxScroll > 0) {
+    const barW = Math.min(120, view.width - 80);
+    const barX = (view.width - barW) / 2;
+    const barY = bounds.listTop - 8;
+    const progress = bounds.maxScroll > 0 ? safeScroll / bounds.maxScroll : 0;
+    const thumbW = Math.max(20, barW * bounds.viewportH / (bounds.viewportH + bounds.maxScroll));
+    const thumbX = barX + progress * (barW - thumbW);
+    ctx.fillStyle = "rgba(119, 92, 52, 0.15)";
+    fillRoundRect(ctx, barX, barY, barW, 3, 2, "rgba(119, 92, 52, 0.15)");
+    fillRoundRect(ctx, thumbX, barY, thumbW, 3, 2, "#2f6f57");
+  }
 
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, layout.listTop - 4, view.width, layout.listBottom - layout.listTop + 4);
+  ctx.rect(0, bounds.listTop - 4, view.width, bounds.listBottom - bounds.listTop + 4);
   ctx.clip();
-  list.forEach((group, index) => {
+  const startIdx = Math.floor(safeScroll / bounds.rowH);
+  const offsetY = -(safeScroll % bounds.rowH);
+  const endIdx = Math.min(groups.length, startIdx + Math.ceil(bounds.viewportH / bounds.rowH) + 2);
+  for (let i = startIdx; i < endIdx; i++) {
+    const group = groups[i];
+    if (!group) continue;
     const card = group.card;
-    const y = layout.listTop + index * 68 + transitionY;
+    const y = bounds.listTop + (i - startIdx) * bounds.rowH + offsetY;
     const count = selectedCount(selectedIds, group);
     const selected = count > 0;
     const full = count >= group.cards.length;
@@ -206,29 +228,30 @@ function draw(ctx, view, actions, ui = {}) {
       fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
       text(ctx, `${count}/${maxCount}`, x + 109, y + 15, 11, "#fff7d8", "center");
     }
-    const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/") || "谋略/时局";
-    text(ctx, `${categoryLabel(card)} · ${rowName} · ${card.strength == null ? "策" : card.strength}`, x, y + 34, 11, "#775c34");
+    text(ctx, cardMetaText(card), x, y + 34, 11, "#775c34");
     wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
     text(ctx, "长按看详情", view.width - 22, y + 41, 10, "#9a8a6f", "right");
-  });
+  }
   ctx.restore();
-  if (safePage < totalPages - 1) {
+
+  // 底部渐变
+  if (bounds.maxScroll > 0 && safeScroll < bounds.maxScroll - 5) {
     ctx.save();
-    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, layout.listBottom - 30, 0, layout.listBottom) : null;
+    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, bounds.listBottom - 30, 0, bounds.listBottom) : null;
     if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
     else ctx.fillStyle = "rgba(255,250,240,0.72)";
-    ctx.fillRect(0, layout.listBottom - 30, view.width, 30);
+    ctx.fillRect(0, bounds.listBottom - 30, view.width, 30);
     ctx.restore();
   }
 
   const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
-  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, layout.toolY - 16, 12, statusColor, "center");
-  const auto = { id: "autoCustomDeck", x: 18, y: layout.toolY, w: (view.width - 42) / 2, h: 30 };
-  const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 6, y: layout.toolY, w: auto.w, h: 30 };
+  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, bounds.toolY - 16, 12, statusColor, "center");
+  const auto = { id: "autoCustomDeck", x: 18, y: bounds.toolY, w: (view.width - 42) / 2, h: 30 };
+  const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 6, y: bounds.toolY, w: auto.w, h: 30 };
   actions.push(auto, clearBtn);
   button(ctx, { ...auto, label: "随机推荐", fill: "#2f6f57", size: 11, r: 10 });
   button(ctx, { ...clearBtn, label: "清空", fill: "#8f3c1f", stroke: "#6d2d18", size: 11, r: 10 });
-  const back = { id: "back", x: 46, y: layout.bottomY, w: view.width - 92, h: 40 };
+  const back = { id: "back", x: 46, y: bounds.bottomY, w: view.width - 92, h: 40 };
   actions.push(back);
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
@@ -260,4 +283,4 @@ function nextLeaderId(current, faction) {
   return leaders[(idx + 1 + leaders.length) % leaders.length].id;
 }
 
-module.exports = { draw, clampPage, nextFaction, nextDifficulty, nextLeaderId };
+module.exports = { draw, scrollBounds, nextFaction, nextDifficulty, nextLeaderId };

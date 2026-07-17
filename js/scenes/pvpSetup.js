@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById, factionPerkSummary } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
 function shortText(value, max) {
@@ -41,7 +41,10 @@ function detailLeaderCards(settings, pvp) {
 function setupOptions(settings, field, forcedFaction = null) {
   const faction = forcedFaction || currentFaction(settings);
   if (field === "pvpFaction") {
-    return [{ value: "random", label: "随机" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value })));
+    return [{ value: "random", label: "随机", hint: "开局随机确定阵营被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
+  }
+  if (field === "pvpRuleFaction") {
+    return [{ value: "any", label: "不限", hint: "双方各自选择阵营并触发对应被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
   }
   if (field === "pvpLeader") {
     if (faction === "random") return [{ value: "random", label: "随机", hint: leaderSkill(null) }];
@@ -65,13 +68,19 @@ function drawRow(ctx, actions, spec, opened, anchors) {
   if (spec.cardId) rect.cardId = spec.cardId;
   anchors[spec.id] = rect;
   if (!spec.disabled) actions.push(rect);
-  button(ctx, { ...rect, label: spec.card ? "" : `${spec.value} ${spec.disabled ? "" : (opened ? "▴" : "▾")}`, fill: spec.disabled ? "#b6a98e" : (spec.fill || "#2f6f57"), size: 12, r: spec.r });
-  if (spec.card) {
-    const avatar = { x: rect.x + 9, y: rect.y + 7, w: 34, h: rect.h - 14 };
-    drawCardImage(ctx, { ...spec.card, imageFill: true, imageX: avatar.x, imageY: avatar.y, imageW: avatar.w, imageH: avatar.h });
-    const textX = avatar.x + avatar.w + 10;
-    text(ctx, shortText(spec.value, 14), textX, rect.y + 18, 12, "#ffffff");
-    text(ctx, shortText(spec.subtitle || "", 20), textX, rect.y + 36, 9, "#efe6ff");
+  const rich = spec.card || (spec.subtitle && rectH > 38);
+  button(ctx, { ...rect, label: rich ? "" : `${spec.value} ${spec.disabled ? "" : (opened ? "▴" : "▾")}`, fill: spec.disabled ? "#b6a98e" : (spec.fill || "#2f6f57"), size: 12, r: spec.r });
+  if (rich) {
+    let textX = rect.x + 18;
+    if (spec.card) {
+      const avatarSize = Math.min(26, rect.h - 8);
+      const avatar = { x: rect.x + 10, y: rect.y + (rect.h - avatarSize) / 2, w: avatarSize, h: avatarSize };
+      drawCardImage(ctx, { ...spec.card, imageFill: true, imageX: avatar.x, imageY: avatar.y, imageW: avatar.w, imageH: avatar.h });
+      textX = avatar.x + avatar.w + 10;
+    }
+    const textY = spec.subtitle && rectH > 40 ? rect.y + 18 : rect.y + rect.h / 2;
+    text(ctx, shortText(spec.value, spec.card ? 14 : 16), textX, textY, 12, "#ffffff");
+    if (spec.subtitle && rectH > 40) text(ctx, shortText(spec.subtitle || "", spec.card ? 20 : 24), textX, rect.y + 36, 9, "#efe6ff");
     text(ctx, spec.disabled ? "锁" : (opened ? "▴" : "▾"), rect.x + rect.w - 24, rect.y + rect.h / 2, 12, "#fff7d8", "center");
   }
 }
@@ -82,33 +91,39 @@ function drawDropdown(ctx, view, actions, settings, field, anchors, forcedFactio
   const options = setupOptions(settings, field, forcedFaction);
   if (!options.length) return;
   const faction = forcedFaction || currentFaction(settings);
-  const selected = field === "pvpFaction" ? faction : selectedLeaderValue(settings, faction);
-  const isLeader = field === "pvpLeader";
-  const itemH = isLeader ? 42 : 34;
+  const ruleFaction = settings.pvpRuleFactionMode === "fixed" && FACTION_KEYS.includes(settings.pvpRuleFaction) ? settings.pvpRuleFaction : "any";
+  const selected = field === "pvpFaction" ? faction : (field === "pvpRuleFaction" ? ruleFaction : selectedLeaderValue(settings, faction));
+  const showHint = options.some(option => option.hint);
+  const itemH = showHint ? 68 : 38;
+  const menuW = showHint ? Math.min(view.width - 36, anchor.w + 72) : anchor.w;
   const menuH = options.length * itemH;
-  const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
-  const menuY = Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8);
+  const menuX = Math.max(8, Math.min(anchor.x - (menuW - anchor.w), view.width - menuW - 8));
+  const menuY = Math.max(view.safeTop + 8, Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8));
 
   actions.push({ id: "closePvpSetupDropdown", x: 0, y: 0, w: view.width, h: view.height });
   ctx.save();
   ctx.fillStyle = "rgba(38, 28, 18, 0.2)";
   ctx.fillRect(0, 0, view.width, view.height);
   ctx.restore();
-  fillRoundRect(ctx, menuX, menuY, anchor.w, menuH, 12, "#fffaf0", "#2f6f57");
+  fillRoundRect(ctx, menuX, menuY, menuW, menuH, 12, "#fffaf0", "#2f6f57");
   options.forEach((option, index) => {
     const y = menuY + index * itemH;
     const active = option.value === selected;
-    actions.push({ id: "selectPvpSetupOption", field, value: option.value, cardId: option.cardId || "", x: menuX, y, w: anchor.w, h: itemH });
-    if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
+    actions.push({ id: "selectPvpSetupOption", field, value: option.value, cardId: option.cardId || "", x: menuX, y, w: menuW, h: itemH });
+    if (active) fillRoundRect(ctx, menuX + 4, y + 3, menuW - 8, itemH - 6, 9, "#2f6f57");
     else if (index > 0) {
       ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
       ctx.beginPath();
       ctx.moveTo(menuX + 10, y);
-      ctx.lineTo(menuX + anchor.w - 10, y);
+      ctx.lineTo(menuX + menuW - 10, y);
       ctx.stroke();
     }
-    text(ctx, shortText(option.label, isLeader ? 16 : 18), menuX + anchor.w / 2, y + (isLeader ? 15 : itemH / 2), 12, active ? "#ffffff" : "#2f2417", "center");
-    if (isLeader) text(ctx, shortText(option.hint, 24), menuX + anchor.w / 2, y + 31, 9, active ? "#efe6ff" : "#775c34", "center");
+    if (showHint) {
+      text(ctx, shortText(option.label, 18), menuX + 16, y + 20, 13, active ? "#ffffff" : "#2f2417");
+      wrapText(ctx, option.hint || "", menuX + 16, y + 40, menuW - 32, 14, 2, 10, active ? "#efe6ff" : "#775c34");
+    } else {
+      text(ctx, shortText(option.label, 18), menuX + menuW / 2, y + itemH / 2, 13, active ? "#ffffff" : "#2f2417", "center");
+    }
   });
 }
 
@@ -131,37 +146,41 @@ function drawPrepareScreen(ctx, view, actions, ui, pvp, settings) {
   const panelH = Math.max(260, bottom - panelY);
   const contentX = panelX + 20;
   const rowW = panelW - 40;
+  const dropdownField = ui.matchSetupDropdown || "";
+  const anchors = {};
 
-  text(ctx, "对战准备", view.width / 2, top, 24, "#2f2417", "center");
-  text(ctx, pvp.pendingRoomId ? `准备加入房间 ${pvp.pendingRoomId}` : "先设置房间规则，进房后再选阵营与卡牌", view.width / 2, top + 26, 12, "#775c34", "center");
+  text(ctx, "联网对战", view.width / 2, top, 24, "#2f2417", "center");
+  text(ctx, pvp.pendingRoomId ? `准备加入房间 ${pvp.pendingRoomId}` : "输入房间号加入好友，或设置规则后创建房间", view.width / 2, top + 26, 12, "#775c34", "center");
 
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "rgba(255, 250, 240, 0.94)", "#dcc48d");
-  drawSectionTitle(ctx, "阵营规则", contentX, panelY + 28);
-  wrapText(ctx, "不限：双方各自选择；指定：所有人使用同一阵营，仍可各自选主将。", contentX, panelY + 44, rowW, 15, 2, 11, "#775c34");
-  const ruleY = panelY + 82;
+  drawSectionTitle(ctx, "创建房间 · 阵营规则", contentX, panelY + 28);
+  wrapText(ctx, rules.factionMode === "fixed"
+    ? `指定阵营：${FACTION_LABELS[rules.faction] || rules.faction}｜${factionPerkSummary(rules.faction)}`
+    : "不限：双方各自选择；指定阵营会套用对应阵营被动。", contentX, panelY + 44, rowW, 15, 2, 11, "#775c34");
+  const ruleY = panelY + 78;
   const halfW = (rowW - 10) / 2;
-  drawModeButton(ctx, actions, { id: "pvpRuleFactionMode", value: "any", x: contentX, y: ruleY, w: halfW, h: 36 }, rules.factionMode === "any", "阵营不限", "#2f6f57");
-  drawModeButton(ctx, actions, { id: "pvpRuleFactionMode", value: "fixed", x: contentX + halfW + 10, y: ruleY, w: halfW, h: 36 }, rules.factionMode === "fixed", "指定阵营", "#2f6f57");
-  if (rules.factionMode === "fixed") {
-    const factionRule = { id: "pvpRuleFactionNext", x: contentX, y: ruleY + 44, w: rowW, h: 34 };
-    actions.push(factionRule);
-    button(ctx, { ...factionRule, label: `指定：${FACTION_LABELS[rules.faction] || rules.faction}（点击切换）`, fill: "#fffaf0", stroke: "#dcc48d", color: "#3b2b18", size: 12, shadow: false });
-  }
+  const factionRule = { id: "pvpRuleFaction", x: contentX, y: ruleY, w: rowW, h: 38 };
+  anchors.pvpRuleFaction = factionRule;
+  actions.push(factionRule);
+  const factionRuleLabel = rules.factionMode === "fixed" ? `指定：${FACTION_LABELS[rules.faction] || rules.faction}` : "阵营不限";
+  button(ctx, { ...factionRule, label: `${factionRuleLabel} ${dropdownField === "pvpRuleFaction" ? "▴" : "▾"}`, fill: "#fffaf0", stroke: "#dcc48d", color: "#3b2b18", size: 12, shadow: false });
 
-  const deckSectionY = rules.factionMode === "fixed" ? ruleY + 96 : ruleY + 60;
+  const deckSectionY = ruleY + 62;
   drawSectionTitle(ctx, "卡牌规则", contentX, deckSectionY);
   wrapText(ctx, "不限：可选自动卡牌或自定义牌组；仅自动：本局所有人只能用系统自动卡牌。", contentX, deckSectionY + 16, rowW, 15, 2, 11, "#775c34");
   const deckY = deckSectionY + 54;
   drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "any", x: contentX, y: deckY, w: halfW, h: 36 }, rules.deckMode === "any", "卡牌不限", "#8d6840");
   drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "autoOnly", x: contentX + halfW + 10, y: deckY, w: halfW, h: 36 }, rules.deckMode === "autoOnly", "仅自动卡牌", "#8d6840");
 
-  const create = { id: "pvpCreatePrepared", x: 46, y: bottom + 22, w: view.width - 92, h: 46 };
-  const join = { id: "pvpJoinPrepared", x: 46, y: bottom + 78, w: view.width - 92, h: 42 };
+  const join = { id: "pvpJoinPrepared", x: 46, y: bottom + 22, w: view.width - 92, h: 46 };
+  const create = { id: "pvpCreatePrepared", x: 46, y: bottom + 78, w: view.width - 92, h: 42 };
   const back = { id: "back", x: 46, y: bottom + 130, w: view.width - 92, h: 42 };
-  actions.push(create, join, back);
-  button(ctx, { ...create, label: "开房间邀请好友", fill: "#2f6f57", stroke: "#1d4f3c", size: 14 });
-  button(ctx, { ...join, label: pvp.pendingRoomId ? `加入房间 ${pvp.pendingRoomId}` : "输入房间号加入", fill: "#4f6d8a", stroke: "#36516a", size: 13 });
+  actions.push(join, create, back);
+  button(ctx, { ...join, label: pvp.pendingRoomId ? `加入房间 ${pvp.pendingRoomId}` : "输入房间号加入好友", fill: "#4f6d8a", stroke: "#36516a", size: 14 });
+  button(ctx, { ...create, label: "按以上规则创建房间", fill: "#2f6f57", stroke: "#1d4f3c", size: 13 });
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
+
+  drawDropdown(ctx, view, actions, settings, dropdownField, anchors);
 }
 
 function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
@@ -209,7 +228,6 @@ function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
     x: contentX,
     y: panelY + 108,
     w: rowW,
-    h: 42,
     fill: "#7a5a95"
   }, dropdownField === "pvpLeader", anchors);
 

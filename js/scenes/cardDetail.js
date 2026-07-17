@@ -31,7 +31,7 @@ function cleanEffectText(content) {
     .replace(/，系统会选择或让你选择收益最高的位置[。，]?\s*$/, "")
     .trim();
   if (!value || !hasChineseText(value)) return "";
-  if (["人物", "谋略", "主将技能", "无特殊能力"].includes(value)) return "";
+  if (["无", "人物", "谋略", "主将技能", "无特殊能力"].includes(value)) return "";
   if (/^普通人物[：:]/.test(value) || /提供基础影响力/.test(value)) return "";
   return value;
 }
@@ -155,10 +155,18 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     // 主卡牌外框（高亮边框）
     ctx.save();
     ctx.globalAlpha = anim ? anim.alpha : (1 - Math.abs(progress) * 0.5);
-    ctx.shadowColor = "rgba(43, 28, 12, 0.22)";
-    ctx.shadowBlur = 12;
+    ctx.shadowColor = card.hero ? "rgba(255, 202, 61, 0.62)" : "rgba(43, 28, 12, 0.22)";
+    ctx.shadowBlur = card.hero ? 18 : 12;
     ctx.shadowOffsetY = 3;
-    fillRoundRect(ctx, mcx - mainCardW/2 - 5, mcy - 5, mainCardW + 10, mainCardH + 10, 16, "#f6ecd8", card.hero ? "#f6d27a" : "#d1ad6a");
+    fillRoundRect(ctx, mcx - mainCardW/2 - 6, mcy - 6, mainCardW + 12, mainCardH + 12, 16, card.hero ? "#20170d" : "#f6ecd8", card.hero ? "#f4b63d" : "#d1ad6a");
+    if (card.hero) {
+      ctx.strokeStyle = "#f4b63d";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(mcx - mainCardW / 2 - 3, mcy - 3, mainCardW + 6, mainCardH + 6);
+      ctx.strokeStyle = "rgba(127, 214, 255, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(mcx - mainCardW / 2 + 3, mcy + 3, mainCardW - 6, mainCardH - 6);
+    }
     ctx.restore();
 
     // 绘制卡牌图片
@@ -173,8 +181,8 @@ function drawDetail(ctx, view, actions, card, options = {}) {
 
     // 卡牌名称
     const nameStripH = 26;
-    fillRoundRect(ctx, mcx - mainCardW/2 + 4, mcy + mainCardH - nameStripH - 6, mainCardW - 8, nameStripH, 7, "rgba(255, 249, 235, 0.96)", "#e2cc9c");
-    text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, "#2f2417", "center");
+    fillRoundRect(ctx, mcx - mainCardW/2 + 4, mcy + mainCardH - nameStripH - 6, mainCardW - 8, nameStripH, 7, card.hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)", card.hero ? "#f4b63d" : "#e2cc9c");
+    text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, card.hero ? "#fff1a8" : "#2f2417", "center");
 
     // 战力icon
     if (options.cardAction) {
@@ -187,23 +195,22 @@ function drawDetail(ctx, view, actions, card, options = {}) {
       });
     }
 
-    if (card.strength != null) {
+    const isStrategy = card.category === "weather" || card.category === "special";
+    if (card.strength != null && !isStrategy) {
       const bs = 30;
       const bx = mcx - mainCardW/2 + 6;
       const by = mcy + 6;
-      const isStrategy = card.category === "weather" || card.category === "special";
       const displayStrength = card.effective != null && card.effective !== card.strength ? card.effective : card.strength;
-      const boosted = !isStrategy && card.effective != null && card.effective > (card.strength || 0);
-      const reduced = !isStrategy && card.effective != null && card.effective < (card.strength || 0);
+      const boosted = card.effective != null && card.effective > (card.strength || 0);
+      const reduced = card.effective != null && card.effective < (card.strength || 0);
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.35)";
       ctx.shadowBlur = 4;
       ctx.shadowOffsetY = 1;
-      const badgeFill = isStrategy ? "#7a5a95"
-        : (boosted ? "#2f6f57" : (reduced ? "#c0392b" : (card.hero ? "#b5892f" : "#8f3c1f")));
-      fillRoundRect(ctx, bx, by, bs, bs, bs / 2, badgeFill, "rgba(255,247,216,0.88)");
+      const badgeFill = boosted ? "#2f6f57" : (reduced ? "#c0392b" : (card.hero ? "#1f2f4f" : "#8f3c1f"));
+      fillRoundRect(ctx, bx, by, bs, bs, bs / 2, badgeFill, card.hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
       ctx.restore();
-      text(ctx, String(displayStrength), bx + bs / 2, by + bs / 2, isStrategy ? 13 : 15, "#fff7d8", "center");
+      text(ctx, String(displayStrength), bx + bs / 2, by + bs / 2, 15, card.hero ? "#ffe27a" : "#fff7d8", "center");
     }
     ctx.restore();
     ctx.restore();

@@ -20,14 +20,14 @@ const DATA = {
       "displayName": "百家争鸣",
       "theme": "思想、学派、改革与文化影响",
       "perkName": "先声夺人",
-      "perkText": "可以决定先手；当前引擎中体现为该派默认先手。",
+      "perkText": "第一小局开始前，可以选择自己先出牌还是对手先出牌。",
       "originalEngineRole": "Scoia'tael"
     },
     "Monsters": {
       "displayName": "草莽星火",
       "theme": "义军、豪杰、民间号召与不灭火种",
       "perkName": "星火不灭",
-      "perkText": "每回合结束后随机保留 1 张非出使单位到下一回合。",
+      "perkText": "小局结束清场时，随机留下自己场上一张单位牌到下一局。",
       "originalEngineRole": "Monsters"
     },
     "Skellige": {
@@ -178,9 +178,9 @@ const DATA = {
         "Commander's Horn"
       ],
       "abilityDisplayNames": [
-        "号令"
+        "鼓舞"
       ],
-      "abilityText": "号令",
+      "abilityText": "鼓舞",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -201,7 +201,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -222,7 +222,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -270,7 +270,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -295,7 +295,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策",
+      "abilityText": "奇策：若对方疆场总战力达到 10 或以上，摧毁其疆场当前战力最高的非传世人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -320,7 +320,7 @@ const DATA = {
       "abilityDisplayNames": [
         "召唤啸天犬"
       ],
-      "abilityText": "召唤啸天犬（杨戬离开战场后，下一回合开始召唤一张战力 8 的啸天犬）",
+      "abilityText": "召唤啸天犬：杨戬每次离开战场后，都会在下一回合开始时于己方「疆场」阵线召唤一张啸天犬（战力 8），可多张并存。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -345,7 +345,9 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有孟尝君。",
+      "musterTarget": "孟尝君",
+      "musterTargetDisplayName": "孟尝君",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -370,7 +372,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -395,7 +397,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -420,7 +422,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -769,8 +771,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0179",
-      "name": "天下檄文",
-      "baseName": "天下檄文",
+      "name": "战鼓齐鸣",
+      "baseName": "战鼓齐鸣",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "special",
@@ -781,19 +783,19 @@ const DATA = {
         "Commander's Horn"
       ],
       "abilityDisplayNames": [
-        "号令"
+        "鼓舞"
       ],
-      "abilityText": "号令：选择己方一条阵线，该线人物战力翻倍。",
+      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/天下檄文.webp"
+      "imageUrl": "assets/card-icons/战鼓齐鸣.webp"
     },
     {
       "id": "zhangyu-0180",
-      "name": "天下檄文",
-      "baseName": "天下檄文",
+      "name": "战鼓齐鸣",
+      "baseName": "战鼓齐鸣",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "special",
@@ -804,19 +806,19 @@ const DATA = {
         "Commander's Horn"
       ],
       "abilityDisplayNames": [
-        "号令"
+        "鼓舞"
       ],
-      "abilityText": "号令：选择己方一条阵线，该线人物战力翻倍。",
+      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/天下檄文.webp"
+      "imageUrl": "assets/card-icons/战鼓齐鸣.webp"
     },
     {
       "id": "zhangyu-0181",
-      "name": "天下檄文",
-      "baseName": "天下檄文",
+      "name": "战鼓齐鸣",
+      "baseName": "战鼓齐鸣",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "special",
@@ -827,14 +829,14 @@ const DATA = {
         "Commander's Horn"
       ],
       "abilityDisplayNames": [
-        "号令"
+        "鼓舞"
       ],
-      "abilityText": "号令：选择己方一条阵线，该线人物战力翻倍。",
+      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/天下檄文.webp"
+      "imageUrl": "assets/card-icons/战鼓齐鸣.webp"
     },
     {
       "id": "zhangyu-0185",
@@ -976,7 +978,7 @@ const DATA = {
       "strength": 1,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -997,7 +999,7 @@ const DATA = {
       "strength": 1,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -1193,7 +1195,7 @@ const DATA = {
       "strength": 1,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1214,7 +1216,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1310,7 +1312,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1331,7 +1333,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1352,7 +1354,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1398,7 +1400,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1444,7 +1446,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1465,7 +1467,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1486,7 +1488,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -1507,7 +1509,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1528,7 +1530,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -1749,7 +1751,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1845,7 +1847,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1866,7 +1868,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1887,7 +1889,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1908,7 +1910,7 @@ const DATA = {
       "strength": 10,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1929,7 +1931,7 @@ const DATA = {
       "strength": 10,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -1950,7 +1952,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -1971,7 +1973,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2042,7 +2044,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2063,7 +2065,7 @@ const DATA = {
       "strength": 10,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2236,7 +2238,7 @@ const DATA = {
       "strength": 3,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2357,7 +2359,7 @@ const DATA = {
       "strength": 3,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2378,7 +2380,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2399,7 +2401,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2420,7 +2422,7 @@ const DATA = {
       "strength": 3,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2466,7 +2468,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2537,7 +2539,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2583,7 +2585,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2629,7 +2631,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2700,7 +2702,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2773,7 +2775,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2794,7 +2796,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2897,7 +2899,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -2922,7 +2924,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -2947,7 +2949,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -2997,7 +2999,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3022,7 +3024,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -3047,7 +3049,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -3173,7 +3175,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3198,7 +3200,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -3223,7 +3225,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -3244,7 +3246,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3321,7 +3323,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3346,7 +3348,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -3371,7 +3373,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -3396,7 +3398,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 4,
@@ -3421,7 +3423,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 5,
@@ -3467,7 +3469,7 @@ const DATA = {
       "strength": 1,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3513,7 +3515,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3534,7 +3536,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3637,7 +3639,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策",
+      "abilityText": "奇策：若对方文脉总战力达到 10 或以上，摧毁其文脉当前战力最高的非传世人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3662,7 +3664,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3687,7 +3689,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -3712,7 +3714,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -3737,7 +3739,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3758,7 +3760,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3805,7 +3807,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3830,7 +3832,14 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出刘备、关羽、张飞中的同组关联牌。",
+      "musterGroup": "taoyuan-brothers",
+      "musterGroupDisplayName": "桃园三杰",
+      "musterGroupMembers": [
+        "刘备",
+        "关羽",
+        "张飞"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3855,7 +3864,14 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出刘备、关羽、张飞中的同组关联牌。",
+      "musterGroup": "taoyuan-brothers",
+      "musterGroupDisplayName": "桃园三杰",
+      "musterGroupMembers": [
+        "刘备",
+        "关羽",
+        "张飞"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3864,8 +3880,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0113",
-      "name": "赵云",
-      "baseName": "赵云",
+      "name": "刘备",
+      "baseName": "刘备",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "unit",
@@ -3880,12 +3896,19 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出刘备、关羽、张飞中的同组关联牌。",
+      "musterGroup": "taoyuan-brothers",
+      "musterGroupDisplayName": "桃园三杰",
+      "musterGroupMembers": [
+        "刘备",
+        "关羽",
+        "张飞"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/赵云.webp"
+      "imageUrl": "assets/card-icons/刘备.webp"
     },
     {
       "id": "zhangyu-0107",
@@ -3926,7 +3949,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3947,7 +3970,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3968,7 +3991,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -3989,7 +4012,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4010,7 +4033,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4031,7 +4054,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4052,7 +4075,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4073,7 +4096,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4098,7 +4121,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4123,7 +4146,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -4148,7 +4171,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -4169,7 +4192,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4190,7 +4213,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4237,7 +4260,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4301,8 +4324,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0298",
-      "name": "刘备",
-      "baseName": "刘备",
+      "name": "赵云",
+      "baseName": "赵云",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "hero",
@@ -4322,7 +4345,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/刘备.webp"
+      "imageUrl": "assets/card-icons/赵云.webp"
     },
     {
       "id": "zhangyu-0299",
@@ -4342,7 +4365,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4367,7 +4390,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -4392,7 +4415,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -4413,7 +4436,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4438,7 +4461,16 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出星火五雄的同组关联牌（陈胜、吴广、彭越、项梁、刘秀）。",
+      "musterGroup": "xinghuo-five",
+      "musterGroupDisplayName": "星火五雄",
+      "musterGroupMembers": [
+        "陈胜",
+        "吴广",
+        "彭越",
+        "项梁",
+        "刘秀"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4463,7 +4495,16 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出星火五雄的同组关联牌（陈胜、吴广、彭越、项梁、刘秀）。",
+      "musterGroup": "xinghuo-five",
+      "musterGroupDisplayName": "星火五雄",
+      "musterGroupMembers": [
+        "陈胜",
+        "吴广",
+        "彭越",
+        "项梁",
+        "刘秀"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4488,7 +4529,16 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出星火五雄的同组关联牌（陈胜、吴广、彭越、项梁、刘秀）。",
+      "musterGroup": "xinghuo-five",
+      "musterGroupDisplayName": "星火五雄",
+      "musterGroupMembers": [
+        "陈胜",
+        "吴广",
+        "彭越",
+        "项梁",
+        "刘秀"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4513,7 +4563,16 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出星火五雄的同组关联牌（陈胜、吴广、彭越、项梁、刘秀）。",
+      "musterGroup": "xinghuo-five",
+      "musterGroupDisplayName": "星火五雄",
+      "musterGroupMembers": [
+        "陈胜",
+        "吴广",
+        "彭越",
+        "项梁",
+        "刘秀"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4538,7 +4597,16 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出星火五雄的同组关联牌（陈胜、吴广、彭越、项梁、刘秀）。",
+      "musterGroup": "xinghuo-five",
+      "musterGroupDisplayName": "星火五雄",
+      "musterGroupMembers": [
+        "陈胜",
+        "吴广",
+        "彭越",
+        "项梁",
+        "刘秀"
+      ],
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4559,7 +4627,7 @@ const DATA = {
       "strength": 5,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4580,7 +4648,7 @@ const DATA = {
       "strength": 2,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4605,7 +4673,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策",
+      "abilityText": "奇策：若对方朝堂总战力达到 10 或以上，摧毁其朝堂当前战力最高的非传世人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4630,7 +4698,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奋起"
       ],
-      "abilityText": "奋起",
+      "abilityText": "奋起：被破釜触发后转化为 14 点振势人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4676,7 +4744,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4703,7 +4771,7 @@ const DATA = {
         "传世",
         "召唤岳家军"
       ],
-      "abilityText": "传世：战力恒为 10，不受时局、号令、振势、同盟等影响，也不会被奇策、请辞、济世选中。\n召唤岳家军：打出后从己方手牌和牌库中把所有「岳家军」一起部署到「疆场」阵线。",
+      "abilityText": "传世：战力恒为 10，不受时局、鼓舞、振势、同盟等影响，也不会被奇策、请辞、济世选中。\n召唤岳家军：打出后从己方手牌和牌库中把所有「岳家军」一起部署到「疆场」阵线。",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
@@ -4799,7 +4867,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4820,7 +4888,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -4841,7 +4909,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -4866,7 +4934,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策",
+      "abilityText": "奇策：若对方朝堂总战力达到 10 或以上，摧毁其朝堂当前战力最高的非传世人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4962,7 +5030,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -4983,7 +5051,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5004,7 +5072,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5027,9 +5095,9 @@ const DATA = {
         "Commander's Horn"
       ],
       "abilityDisplayNames": [
-        "号令"
+        "鼓舞"
       ],
-      "abilityText": "号令",
+      "abilityText": "鼓舞",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5056,7 +5124,7 @@ const DATA = {
         "传世",
         "破釜"
       ],
-      "abilityText": "传世、破釜",
+      "abilityText": "传世、破釜：打出后触发所在朝堂线奋起人物转化。",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
@@ -5102,7 +5170,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5125,9 +5193,9 @@ const DATA = {
         "Summon Avenger"
       ],
       "abilityDisplayNames": [
-        "召唤复仇者"
+        "召唤陆抗"
       ],
-      "abilityText": "召唤复仇者",
+      "abilityText": "召唤陆抗：陆逊每次离开战场时，召唤一张 11 点传世「陆抗」顶替；若因小局清场离场，则在下一局开始入场。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5152,7 +5220,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5177,7 +5245,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -5202,7 +5270,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤",
+      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -5223,7 +5291,7 @@ const DATA = {
       "strength": 6,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5246,7 +5314,7 @@ const DATA = {
       "abilityDisplayNames": [
         "破釜"
       ],
-      "abilityText": "破釜：触发同一线奋起人物转化。",
+      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5269,7 +5337,7 @@ const DATA = {
       "abilityDisplayNames": [
         "破釜"
       ],
-      "abilityText": "破釜：触发同一线奋起人物转化。",
+      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -5292,7 +5360,7 @@ const DATA = {
       "abilityDisplayNames": [
         "破釜"
       ],
-      "abilityText": "破釜：触发同一线奋起人物转化。",
+      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -5341,7 +5409,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5362,7 +5430,7 @@ const DATA = {
       "strength": 4,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "普通人物：提供基础影响力。",
+      "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5462,7 +5530,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奋起"
       ],
-      "abilityText": "奋起",
+      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -5487,7 +5555,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奋起"
       ],
-      "abilityText": "奋起",
+      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
@@ -5512,7 +5580,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奋起"
       ],
-      "abilityText": "奋起",
+      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
@@ -5940,30 +6008,56 @@ const DATA = {
   ],
   "tokens": [
     {
-      "id": "token-transformed-bear",
-      "baseName": "Transformed Bear",
+      "id": "token-transformed-vildkaarl",
+      "baseName": "Transformed Vildkaarl",
       "name": "背水死士",
       "displayName": "背水死士",
-      "faction": "Neutral",
-      "factionDisplayName": "天下共识",
-      "category": "hero",
+      "faction": "Skellige",
+      "factionDisplayName": "遗策复兴",
+      "category": "unit",
       "row": [
         "melee"
       ],
       "rowDisplayName": "疆场",
-      "strength": 8,
+      "strength": 14,
       "abilities": [
-        "Hero"
+        "Morale Boost"
       ],
       "abilityDisplayNames": [
-        "传世"
+        "振势"
       ],
-      "abilityText": "破釜沉舟后觉醒的死士，战力固定为 8，视为传世人物。",
+      "abilityText": "奋起转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。",
       "leaderAbility": "",
-      "hero": true,
+      "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/背水先锋.webp"
+      "imageUrl": ""
+    },
+    {
+      "id": "token-transformed-young-vildkaarl",
+      "baseName": "Transformed Young Vildkaarl",
+      "name": "背水锐卒",
+      "displayName": "背水锐卒",
+      "faction": "Skellige",
+      "factionDisplayName": "遗策复兴",
+      "category": "unit",
+      "row": [
+        "ranged"
+      ],
+      "rowDisplayName": "朝堂",
+      "strength": 8,
+      "abilities": [
+        "Tight Bond"
+      ],
+      "abilityDisplayNames": [
+        "同盟"
+      ],
+      "abilityText": "奋起转化：战力 8；同名背水锐卒在同一阵线并列时战力倍增。",
+      "leaderAbility": "",
+      "hero": false,
+      "copyIndex": 1,
+      "copyLabel": "",
+      "imageUrl": ""
     },
     {
       "id": "token-howling-sky-hound",
@@ -5980,12 +6074,38 @@ const DATA = {
       "strength": 8,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "杨戬离开战场后于下一回合召唤的灵犬，战力固定为 8。",
+      "abilityText": "杨戬每次离开战场后于下一回合召唤的灵犬，战力固定为 8；可多张并存。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
       "imageUrl": "assets/card-icons/啸天犬.webp"
+    },
+    {
+      "id": "token-hemdall",
+      "baseName": "Hemdall",
+      "name": "陆抗",
+      "displayName": "陆抗",
+      "faction": "Skellige",
+      "factionDisplayName": "遗策复兴",
+      "category": "hero",
+      "row": [
+        "melee"
+      ],
+      "rowDisplayName": "疆场",
+      "strength": 11,
+      "abilities": [
+        "Hero"
+      ],
+      "abilityDisplayNames": [
+        "传世"
+      ],
+      "abilityText": "陆逊离开战场后召唤的继承者；陆抗为 11 点传世人物，不受时局、奇策、请辞、鼓舞、振势、同盟等特殊效果影响。",
+      "leaderAbility": "",
+      "hero": true,
+      "copyIndex": 1,
+      "copyLabel": "",
+      "imageUrl": ""
     }
   ]
 };

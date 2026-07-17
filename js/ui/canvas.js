@@ -163,17 +163,28 @@ function setImageRenderHook(fn) {
   imageRenderHook = typeof fn === "function" ? fn : null;
 }
 
+function isWeatherCategory(category) {
+  return category === "时局" || category === "weather";
+}
+
+function isSpecialCategory(category) {
+  return category === "谋略" || category === "策略" || category === "special";
+}
+
+function isStrategyCategory(category) {
+  return isWeatherCategory(category) || isSpecialCategory(category);
+}
+
 function categoryMark(spec) {
-  if (spec.category === "时局" || spec.category === "weather") return "局";
-  if (spec.category === "谋略" || spec.category === "special") return "策";
+  if (isWeatherCategory(spec.category)) return "局";
+  if (isSpecialCategory(spec.category)) return "谋";
   if (spec.category === "主将" || spec.category === "leader") return "";
-  if (spec.hero || spec.category === "传世" || spec.category === "hero") return "传";
   return "";
 }
 
 function categoryBadgeStyle(mark) {
   if (mark === "局") return ["rgba(79,109,138,0.88)", "rgba(255,247,216,0.72)"];
-  if (mark === "策") return ["rgba(122,90,149,0.88)", "rgba(255,247,216,0.72)"];
+  if (mark === "谋" || mark === "策") return ["rgba(122,90,149,0.88)", "rgba(255,247,216,0.72)"];
   if (mark === "将") return ["rgba(47,111,87,0.90)", "rgba(255,247,216,0.72)"];
   if (mark === "传") return ["rgba(143,60,31,0.90)", THEME.gold];
   return ["rgba(38,28,18,0.70)", "rgba(255,247,216,0.60)"];
@@ -188,26 +199,35 @@ const ABILITY_MARKS = {
   Muster: "集贤",
   Agile: "通才",
   Scorch: "奇策",
-  "Commander's Horn": "号令",
-  "Summon Shield Maidens": "召唤岳家军",
-  "Summon Avenger": "召唤复仇者",
-  "Summon Sky Hound": "召唤啸天",
+  "Commander's Horn": "鼓舞",
+  "Summon Shield Maidens": "召唤",
+  "Summon Avenger": "召唤",
+  "Summon Sky Hound": "召唤",
   Berserker: "奋起",
   Mardroeme: "破釜"
 };
 
+function abilityIconLabel(label) {
+  const value = String(label || "").trim();
+  if (!value) return "";
+  if (value.startsWith("召唤")) return "召唤";
+  return /^[\u4e00-\u9fff]+$/.test(value) && value.length > 2 ? value.slice(0, 2) : value;
+}
+
 function abilityMark(spec) {
+  if (isStrategyCategory(spec.category)) return "";
   const labels = (spec.abilityDisplayNames && spec.abilityDisplayNames.length)
     ? spec.abilityDisplayNames
     : (spec.abilities || []).map(name => ABILITY_MARKS[name] || name);
-  return labels.filter(Boolean).find(label => label !== "传世") || "";
+  const label = labels.filter(Boolean).find(item => item !== "传世") || "";
+  return abilityIconLabel(label);
 }
 
 function abilityBadgeStyle(label) {
   if (label === "出使") return ["rgba(79,109,138,0.92)", "rgba(255,247,216,0.76)"];
   if (label === "济世") return ["rgba(47,111,87,0.92)", "rgba(255,247,216,0.76)"];
   if (label === "奇策") return ["rgba(143,60,31,0.92)", "rgba(255,247,216,0.76)"];
-  if (label === "号令") return ["rgba(181,137,47,0.94)", "rgba(255,247,216,0.78)"];
+  if (label === "鼓舞") return ["rgba(181,137,47,0.94)", "rgba(255,247,216,0.78)"];
   return ["rgba(38,28,18,0.78)", "rgba(255,247,216,0.62)"];
 }
 
@@ -221,6 +241,60 @@ function drawImageBadge(ctx, label, x, y, w, h, radius, fill, stroke) {
   if (!label) return;
   fillRoundRect(ctx, x, y, w, h, radius, fill, stroke);
   text(ctx, label, x + w / 2, y + h / 2 + 0.5, Math.min(10, h - 4), THEME.creamText, "center");
+}
+
+function heroFrameStroke(ctx, x, y, w, h, r, strong = false) {
+  const gradient = ctx.createLinearGradient ? ctx.createLinearGradient(x, y, x + w, y + h) : null;
+  if (gradient) {
+    gradient.addColorStop(0, "#fff7b8");
+    gradient.addColorStop(0.28, "#f4b63d");
+    gradient.addColorStop(0.68, "#0e2d4f");
+    gradient.addColorStop(1, "#78d6ff");
+  }
+  ctx.save();
+  ctx.shadowColor = "rgba(255, 202, 61, 0.78)";
+  ctx.shadowBlur = strong ? 18 : 11;
+  ctx.lineWidth = strong ? 4 : 3;
+  ctx.strokeStyle = gradient || "#f4b63d";
+  roundRect(ctx, x, y, w, h, r);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  if (w > 10 && h > 10) {
+    ctx.lineWidth = strong ? 2 : 1.4;
+    ctx.strokeStyle = "rgba(15, 32, 54, 0.96)";
+    roundRect(ctx, x + 2, y + 2, w - 4, h - 4, Math.max(0, r - 2));
+    ctx.stroke();
+  }
+  if (w > 16 && h > 16) {
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 252, 218, 0.96)";
+    roundRect(ctx, x + 4, y + 4, w - 8, h - 8, Math.max(0, r - 4));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawHeroCornerMarks(ctx, x, y, w, h) {
+  const len = Math.max(8, Math.min(18, Math.floor(Math.min(w, h) * 0.22)));
+  ctx.save();
+  ctx.lineCap = "round";
+  [[x + 5, y + 5, 1, 1], [x + w - 5, y + 5, -1, 1], [x + 5, y + h - 5, 1, -1], [x + w - 5, y + h - 5, -1, -1]].forEach(([cx, cy, sx, sy]) => {
+    ctx.strokeStyle = "rgba(255, 224, 104, 0.98)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + sy * len);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + sx * len, cy);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(108, 211, 255, 0.95)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * 3, cy + sy * (len - 3));
+    ctx.lineTo(cx + sx * 3, cy + sy * 3);
+    ctx.lineTo(cx + sx * (len - 3), cy + sy * 3);
+    ctx.stroke();
+  });
+  ctx.restore();
 }
 
 function defaultImageUrl(spec) {
@@ -337,6 +411,10 @@ function drawGeneratedCardArt(ctx, spec, x, y, w, h) {
     fill.addColorStop(1, palette[1]);
   }
   fillRoundRect(ctx, x, y, w, h, Math.min(9, Math.floor(h / 4)), fill || palette[0], spec.hero ? "#f6d27a" : "#c6954b");
+  if (spec.hero) {
+    ctx.fillStyle = "rgba(255, 240, 170, 0.14)";
+    ctx.fillRect(x, y, w, h);
+  }
   ctx.fillStyle = "rgba(255,255,255,0.16)";
   ctx.fillRect(x + w * 0.08, y + h * 0.12, w * 0.24, h * 0.76);
   ctx.fillRect(x + w * 0.58, y + h * 0.12, w * 0.1, h * 0.76);
@@ -366,10 +444,10 @@ function drawCardImage(ctx, spec) {
   const cacheKey = sources.join("|");
   const entry = cacheKey ? (imageCache[cacheKey] || (imageCache[cacheKey] = createLocalImage(sources))) : null;
   const radius = Math.min(10, Math.floor(h / 4));
-  const border = spec.hero ? THEME.gold : "rgba(198,149,75,0.86)";
+  const border = spec.hero ? "#f0b83f" : "rgba(198,149,75,0.86)";
   ctx.save();
-  ctx.shadowColor = "rgba(43, 28, 12, 0.14)";
-  ctx.shadowBlur = Math.min(8, Math.max(3, h / 12));
+  ctx.shadowColor = spec.hero ? "rgba(246, 210, 122, 0.36)" : "rgba(43, 28, 12, 0.14)";
+  ctx.shadowBlur = spec.hero ? Math.min(12, Math.max(5, h / 8)) : Math.min(8, Math.max(3, h / 12));
   ctx.shadowOffsetY = 1;
   fillRoundRect(ctx, x, y, w, h, radius, "#1f1a14", border);
   ctx.restore();
@@ -387,11 +465,20 @@ function drawCardImage(ctx, spec) {
     } else {
       ctx.drawImage(entry.img, x, y, w, h);
     }
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillStyle = spec.hero ? "rgba(255, 242, 170, 0.14)" : "rgba(255,255,255,0.08)";
     ctx.fillRect(x, y, w, Math.max(4, h * 0.22));
+    if (spec.hero) {
+      ctx.fillStyle = "rgba(255, 217, 90, 0.12)";
+      ctx.fillRect(x, y, w, h);
+    }
     ctx.restore();
   } else {
     drawGeneratedCardArt(ctx, spec, x, y, w, h);
+  }
+
+  if (spec.hero) {
+    heroFrameStroke(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius, w >= 80 || h >= 100);
+    if (w >= 44 && h >= 58) drawHeroCornerMarks(ctx, x, y, w, h);
   }
 
   const rows = (spec.row || []).map(row => ROW_MARKS[row]).filter(Boolean).join("");
@@ -409,14 +496,14 @@ function drawCardImage(ctx, spec) {
 }
 
 function card(ctx, spec) {
-  const stroke = spec.hero ? THEME.gold : (spec.stroke || "#b98a45");
+  const stroke = spec.hero ? "#f4b63d" : (spec.stroke || "#b98a45");
   ctx.save();
-  ctx.shadowColor = "rgba(43, 28, 12, 0.16)";
-  ctx.shadowBlur = 8;
+  ctx.shadowColor = spec.hero ? "rgba(255, 202, 61, 0.55)" : "rgba(43, 28, 12, 0.16)";
+  ctx.shadowBlur = spec.hero ? 16 : 8;
   ctx.shadowOffsetY = 2;
-  fillRoundRect(ctx, spec.x, spec.y, spec.w, spec.h, 11, spec.fill || THEME.card, stroke);
+  fillRoundRect(ctx, spec.x, spec.y, spec.w, spec.h, 11, spec.fill || (spec.hero ? "#20170d" : THEME.card), stroke);
   ctx.restore();
-  const pad = 4;
+  const pad = spec.hero ? 5 : 4;
   const stripH = 17;
   const artX = spec.x + pad;
   const artY = spec.y + pad;
@@ -424,12 +511,18 @@ function card(ctx, spec) {
   const artH = spec.h - pad - stripH - 3;
   drawCardImage(ctx, { ...spec, imageFill: true, imageX: artX, imageY: artY, imageW: artW, imageH: artH });
   const nameW = spec.w - 4;
-  fillRoundRect(ctx, spec.x + 2, spec.y + spec.h - stripH - 1, nameW, stripH, 6, "rgba(255, 249, 235, 0.96)", "#e2cc9c");
-  text(ctx, short(spec.name, spec.nameMax || 4), spec.x + spec.w / 2, spec.y + spec.h - stripH / 2 - 1, 10, "#3b2b18", "center");
-  const isStrategy = spec.strength === "策" || spec.strength === "局" || spec.category === "weather" || spec.category === "special" || spec.category === "谋略" || spec.category === "时局";
-  const bs = 22;
-  fillRoundRect(ctx, spec.x + 3, spec.y + 3, bs, bs, bs / 2, isStrategy ? THEME.purple : (spec.hero ? "#b5892f" : THEME.rust), "rgba(255,247,216,0.88)");
-  text(ctx, String(spec.strength == null ? "-" : spec.strength), spec.x + 3 + bs / 2, spec.y + 3 + bs / 2, isStrategy ? 11 : 13, THEME.creamText, "center");
+  const nameFill = spec.hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)";
+  const nameStroke = spec.hero ? "#f4b63d" : "#e2cc9c";
+  const nameColor = spec.hero ? "#fff1a8" : "#3b2b18";
+  fillRoundRect(ctx, spec.x + 2, spec.y + spec.h - stripH - 1, nameW, stripH, 6, nameFill, nameStroke);
+  text(ctx, short(spec.name, spec.nameMax || 4), spec.x + spec.w / 2, spec.y + spec.h - stripH / 2 - 1, 10, nameColor, "center");
+  const isStrategy = isStrategyCategory(spec.category) || spec.strength === "策" || spec.strength === "局" || spec.strength === "谋";
+  if (!isStrategy) {
+    const bs = 22;
+    fillRoundRect(ctx, spec.x + 3, spec.y + 3, bs, bs, bs / 2, spec.hero ? "#1f2f4f" : THEME.rust, spec.hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
+    text(ctx, String(spec.strength == null ? "-" : spec.strength), spec.x + 3 + bs / 2, spec.y + 3 + bs / 2, 13, spec.hero ? "#ffe27a" : THEME.creamText, "center");
+  }
+  if (spec.hero) heroFrameStroke(ctx, spec.x + 1, spec.y + 1, spec.w - 2, spec.h - 2, 10, true);
 }
 
 function hit(point, rect) {

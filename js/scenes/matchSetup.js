@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById, factionPerkSummary } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
 function selectedLeader(settings, side, faction) {
@@ -21,10 +21,10 @@ function leaderSkill(card) {
 
 function setupOptions(settings, field, slots, faction) {
   if (field === "humanFaction") {
-    return FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value }));
+    return FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) }));
   }
   if (field === "aiFaction") {
-    return [{ value: "random", label: "随机" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value })));
+    return [{ value: "random", label: "随机", hint: "开局随机确定阵营被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
   }
   if (field === "humanLeader") {
     return leadersFor(settings.humanFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }));
@@ -84,13 +84,14 @@ function drawRow(ctx, actions, spec, opened, anchors) {
   if (rich) {
     let textX = rect.x + 18;
     if (spec.card) {
-      const avatar = { x: rect.x + 9, y: rect.y + 7, w: 34, h: rect.h - 14 };
+      const avatarSize = Math.min(26, rect.h - 8);
+      const avatar = { x: rect.x + 10, y: rect.y + (rect.h - avatarSize) / 2, w: avatarSize, h: avatarSize };
       drawCardImage(ctx, { ...spec.card, imageFill: true, imageX: avatar.x, imageY: avatar.y, imageW: avatar.w, imageH: avatar.h });
       textX = avatar.x + avatar.w + 10;
     }
-    const textY = spec.subtitle ? rect.y + 18 : rect.y + rect.h / 2;
+    const textY = spec.subtitle && rectH > 40 ? rect.y + 18 : rect.y + rect.h / 2;
     text(ctx, shortText(spec.value, spec.card ? 14 : 16), textX, textY, 12, "#ffffff");
-    if (spec.subtitle) text(ctx, shortText(spec.subtitle, spec.card ? 20 : 24), textX, rect.y + 36, 9, "#efe6ff");
+    if (spec.subtitle && rectH > 40) text(ctx, shortText(spec.subtitle, spec.card ? 20 : 24), textX, rect.y + 36, 9, "#efe6ff");
     text(ctx, opened ? "▴" : "▾", rect.x + rect.w - 24, rect.y + rect.h / 2, 12, "#fff7d8", "center");
   }
 }
@@ -101,33 +102,37 @@ function drawSetupDropdown(ctx, view, actions, settings, field, anchors) {
   const options = setupOptions(settings, field);
   if (!options.length) return;
   const selected = selectedValue(settings, field);
+  const showHint = options.some(option => option.hint);
   const isLeader = field.includes("Leader");
-  const itemH = isLeader ? 42 : 34;
+  const itemH = showHint ? 68 : 38;
+  const menuW = showHint ? Math.min(view.width - 36, anchor.w + 72) : anchor.w;
   const menuH = options.length * itemH;
-  const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
-  const menuY = Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8);
+  const menuX = Math.max(8, Math.min(anchor.x - (menuW - anchor.w), view.width - menuW - 8));
+  const menuY = Math.max(view.safeTop + 8, Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8));
 
   actions.push({ id: "closeMatchSetupDropdown", x: 0, y: 0, w: view.width, h: view.height });
   ctx.save();
   ctx.fillStyle = "rgba(38, 28, 18, 0.2)";
   ctx.fillRect(0, 0, view.width, view.height);
   ctx.restore();
-  fillRoundRect(ctx, menuX, menuY, anchor.w, menuH, 12, "#fffaf0", "#2f6f57");
+  fillRoundRect(ctx, menuX, menuY, menuW, menuH, 12, "#fffaf0", "#2f6f57");
   options.forEach((option, index) => {
     const y = menuY + index * itemH;
     const active = option.value === selected;
-    actions.push({ id: "selectMatchSetupOption", field, value: option.value, cardId: isLeader && option.value !== "random" ? option.value : "", x: menuX, y, w: anchor.w, h: itemH });
-    if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
+    actions.push({ id: "selectMatchSetupOption", field, value: option.value, cardId: isLeader && option.value !== "random" ? option.value : "", x: menuX, y, w: menuW, h: itemH });
+    if (active) fillRoundRect(ctx, menuX + 4, y + 3, menuW - 8, itemH - 6, 9, "#2f6f57");
     else if (index > 0) {
       ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
       ctx.beginPath();
       ctx.moveTo(menuX + 10, y);
-      ctx.lineTo(menuX + anchor.w - 10, y);
+      ctx.lineTo(menuX + menuW - 10, y);
       ctx.stroke();
     }
-    text(ctx, shortText(option.label, isLeader ? 16 : 18), menuX + anchor.w / 2, y + (isLeader ? 15 : itemH / 2), 12, active ? "#ffffff" : "#2f2417", "center");
-    if (isLeader) {
-      text(ctx, shortText(option.hint, 24), menuX + anchor.w / 2, y + 31, 9, active ? "#efe6ff" : "#775c34", "center");
+    if (showHint) {
+      text(ctx, shortText(option.label, 18), menuX + 16, y + 20, 13, active ? "#ffffff" : "#2f2417");
+      wrapText(ctx, option.hint || "", menuX + 16, y + 40, menuW - 32, 14, 2, 10, active ? "#efe6ff" : "#775c34");
+    } else {
+      text(ctx, shortText(option.label, 18), menuX + menuW / 2, y + itemH / 2, 13, active ? "#ffffff" : "#2f2417", "center");
     }
   });
 }
@@ -176,7 +181,6 @@ function draw(ctx, view, actions, ui = {}) {
     x: contentX,
     y: panelY + 106,
     w: rowW,
-    h: 42,
     fill: "#7a5a95"
   }, dropdownField === "humanLeader", anchors);
 
@@ -209,7 +213,6 @@ function draw(ctx, view, actions, ui = {}) {
     x: contentX,
     y: panelY + 344,
     w: rowW,
-    h: 42,
     fill: "#7a5a95"
   }, dropdownField === "aiLeader", anchors);
   drawRow(ctx, actions, { id: "difficulty", label: "难度", value: DIFFICULTY_LABELS[settings.difficulty], x: contentX, y: panelY + 390, w: rowW, fill: "#8d6840" }, dropdownField === "difficulty", anchors);
