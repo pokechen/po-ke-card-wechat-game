@@ -41,10 +41,13 @@ function detailLeaderCards(settings, pvp) {
 function setupOptions(settings, field, forcedFaction = null) {
   const faction = forcedFaction || currentFaction(settings);
   if (field === "pvpFaction") {
-    return [{ value: "random", label: "随机", hint: "开局随机确定阵营被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
+    return [{ value: "random", label: "随机阵容", hint: "阵营、主将、卡牌均在开局时随机确定" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
   }
   if (field === "pvpRuleFaction") {
-    return [{ value: "any", label: "不限", hint: "双方各自选择阵营并触发对应被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
+    return [
+      { value: "random", label: "随机阵容", hint: "双方的阵营、主将、卡牌均在开局时随机确定" },
+      { value: "any", label: "不限", hint: "双方各自选择阵营并触发对应被动" }
+    ].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
   }
   if (field === "pvpLeader") {
     if (faction === "random") return [{ value: "random", label: "随机", hint: leaderSkill(null) }];
@@ -91,7 +94,9 @@ function drawDropdown(ctx, view, actions, settings, field, anchors, forcedFactio
   const options = setupOptions(settings, field, forcedFaction);
   if (!options.length) return;
   const faction = forcedFaction || currentFaction(settings);
-  const ruleFaction = settings.pvpRuleFactionMode === "fixed" && FACTION_KEYS.includes(settings.pvpRuleFaction) ? settings.pvpRuleFaction : "any";
+  const ruleFaction = settings.pvpRuleFactionMode === "random"
+    ? "random"
+    : (settings.pvpRuleFactionMode === "fixed" && FACTION_KEYS.includes(settings.pvpRuleFaction) ? settings.pvpRuleFaction : "any");
   const selected = field === "pvpFaction" ? faction : (field === "pvpRuleFaction" ? ruleFaction : selectedLeaderValue(settings, faction));
   const showHint = options.some(option => option.hint);
   const itemH = showHint ? 68 : 38;
@@ -134,7 +139,7 @@ function drawModeButton(ctx, actions, rect, active, label, fill) {
 
 function drawPrepareScreen(ctx, view, actions, ui, pvp, settings) {
   const rules = {
-    factionMode: settings.pvpRuleFactionMode === "fixed" ? "fixed" : "any",
+    factionMode: ["fixed", "random"].includes(settings.pvpRuleFactionMode) ? settings.pvpRuleFactionMode : "any",
     faction: FACTION_KEYS.includes(settings.pvpRuleFaction) ? settings.pvpRuleFaction : FACTION_KEYS[0],
     deckMode: settings.pvpRuleDeckMode === "autoOnly" ? "autoOnly" : "any"
   };
@@ -154,23 +159,32 @@ function drawPrepareScreen(ctx, view, actions, ui, pvp, settings) {
 
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "rgba(255, 250, 240, 0.94)", "#dcc48d");
   drawSectionTitle(ctx, "创建房间 · 阵营规则", contentX, panelY + 28);
-  wrapText(ctx, rules.factionMode === "fixed"
-    ? `指定阵营：${FACTION_LABELS[rules.faction] || rules.faction}｜${factionPerkSummary(rules.faction)}`
-    : "不限：双方各自选择；指定阵营会套用对应阵营被动。", contentX, panelY + 44, rowW, 15, 2, 11, "#775c34");
+  const factionRuleDescription = rules.factionMode === "random"
+    ? "随机阵容：双方的阵营、主将、卡牌均在开局时随机确定。"
+    : (rules.factionMode === "fixed"
+      ? `指定阵营：${FACTION_LABELS[rules.faction] || rules.faction}｜${factionPerkSummary(rules.faction)}`
+      : "不限：双方各自选择；指定阵营会套用对应阵营被动。");
+  wrapText(ctx, factionRuleDescription, contentX, panelY + 44, rowW, 15, 2, 11, "#775c34");
   const ruleY = panelY + 78;
   const halfW = (rowW - 10) / 2;
   const factionRule = { id: "pvpRuleFaction", x: contentX, y: ruleY, w: rowW, h: 38 };
   anchors.pvpRuleFaction = factionRule;
   actions.push(factionRule);
-  const factionRuleLabel = rules.factionMode === "fixed" ? `指定：${FACTION_LABELS[rules.faction] || rules.faction}` : "阵营不限";
+  const factionRuleLabel = rules.factionMode === "random" ? "随机阵容" : (rules.factionMode === "fixed" ? `指定：${FACTION_LABELS[rules.faction] || rules.faction}` : "阵营不限");
   button(ctx, { ...factionRule, label: `${factionRuleLabel} ${dropdownField === "pvpRuleFaction" ? "▴" : "▾"}`, fill: "#fffaf0", stroke: "#dcc48d", color: "#3b2b18", size: 12, shadow: false });
 
   const deckSectionY = ruleY + 62;
   drawSectionTitle(ctx, "卡牌规则", contentX, deckSectionY);
-  wrapText(ctx, "不限：可选自动卡牌或自定义牌组；仅自动：本局所有人只能用系统自动卡牌。", contentX, deckSectionY + 16, rowW, 15, 2, 11, "#775c34");
+  wrapText(ctx, rules.factionMode === "random"
+    ? "随机阵容已包含随机卡牌，双方不能使用自定义牌组。"
+    : "不限：可选自动卡牌或自定义牌组；仅自动：本局所有人只能用系统自动卡牌。", contentX, deckSectionY + 16, rowW, 15, 2, 11, "#775c34");
   const deckY = deckSectionY + 54;
-  drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "any", x: contentX, y: deckY, w: halfW, h: 36 }, rules.deckMode === "any", "卡牌不限", "#8d6840");
-  drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "autoOnly", x: contentX + halfW + 10, y: deckY, w: halfW, h: 36 }, rules.deckMode === "autoOnly", "仅自动卡牌", "#8d6840");
+  if (rules.factionMode === "random") {
+    button(ctx, { id: "pvpRandomDeckRule", x: contentX, y: deckY, w: rowW, h: 36, label: "随机阵容 · 随机卡牌", fill: "#b6a98e", stroke: "#a89a80", size: 12 });
+  } else {
+    drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "any", x: contentX, y: deckY, w: halfW, h: 36 }, rules.deckMode === "any", "卡牌不限", "#8d6840");
+    drawModeButton(ctx, actions, { id: "pvpRuleDeckMode", value: "autoOnly", x: contentX + halfW + 10, y: deckY, w: halfW, h: 36 }, rules.deckMode === "autoOnly", "仅自动卡牌", "#8d6840");
+  }
 
   const join = { id: "pvpJoinPrepared", x: 46, y: bottom + 22, w: view.width - 92, h: 46 };
   const create = { id: "pvpCreatePrepared", x: 46, y: bottom + 78, w: view.width - 92, h: 42 };
@@ -186,13 +200,13 @@ function drawPrepareScreen(ctx, view, actions, ui, pvp, settings) {
 function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
   const roomRules = pvp.room?.rules || {};
   const rules = {
-    factionMode: roomRules.factionMode === "fixed" ? "fixed" : "any",
+    factionMode: ["fixed", "random"].includes(roomRules.factionMode) ? roomRules.factionMode : "any",
     faction: FACTION_KEYS.includes(roomRules.faction) ? roomRules.faction : FACTION_KEYS[0],
     deckMode: roomRules.deckMode === "autoOnly" ? "autoOnly" : "any"
   };
-  const factionLocked = rules.factionMode === "fixed";
-  const deckLocked = rules.deckMode === "autoOnly";
-  const faction = factionLocked ? rules.faction : currentFaction(settings);
+  const factionLocked = rules.factionMode !== "any";
+  const deckLocked = rules.deckMode === "autoOnly" || rules.factionMode === "random";
+  const faction = rules.factionMode === "random" ? "random" : (factionLocked ? rules.faction : currentFaction(settings));
   const concreteFaction = faction !== "random";
   const selectedIds = concreteFaction ? getActiveCustomDeckIds(settings, faction) : [];
   const status = concreteFaction ? deckStatus(selectedIds, faction) : { valid: false, total: 0, units: 0, specials: 0, ids: [] };
@@ -212,44 +226,65 @@ function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
   const anchors = {};
 
   text(ctx, "选择出战配置", view.width / 2, top, 24, "#2f2417", "center");
-  const ruleTip = `规则：阵营${factionLocked ? `指定${FACTION_LABELS[rules.faction] || rules.faction}` : "不限"}；卡牌${deckLocked ? "仅自动" : "不限"}`;
+  const factionRuleTip = rules.factionMode === "random" ? "随机阵容" : (factionLocked ? `指定${FACTION_LABELS[rules.faction] || rules.faction}` : "不限");
+  const deckRuleTip = rules.factionMode === "random" ? "随机" : (deckLocked ? "仅自动" : "不限");
+  const ruleTip = `规则：阵营${factionRuleTip}；卡牌${deckRuleTip}`;
   text(ctx, ruleTip, view.width / 2, top + 26, 12, "#8f3c1f", "center");
 
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "rgba(255, 250, 240, 0.94)", "#dcc48d");
   drawSectionTitle(ctx, "我的出战配置", contentX, panelY + 28);
-  drawRow(ctx, actions, { id: "pvpFaction", label: "阵营", value: faction === "random" ? "随机" : (FACTION_LABELS[faction] || faction), x: contentX, y: panelY + 58, w: rowW, fill: "#2f6f57", disabled: factionLocked }, dropdownField === "pvpFaction" && !factionLocked, anchors);
+  drawRow(ctx, actions, {
+    id: "pvpFaction",
+    label: "阵营",
+    value: faction === "random" ? "随机阵容" : (FACTION_LABELS[faction] || faction),
+    subtitle: faction === "random" ? "阵营、主将、卡牌均随机" : factionPerkSummary(faction),
+    x: contentX,
+    y: panelY + 58,
+    w: rowW,
+    h: 52,
+    fill: "#2f6f57",
+    disabled: factionLocked
+  }, dropdownField === "pvpFaction" && !factionLocked, anchors);
   drawRow(ctx, actions, {
     id: "pvpLeader",
     label: "主将",
     value: leaderLabel,
-    subtitle: leader ? cardSummary(leader) : "开局时随机确定",
+    subtitle: leader ? `技能：${cardSummary(leader)}` : "技能：开局时随机确定",
     card: leader,
     cardId: leader?.id,
     x: contentX,
-    y: panelY + 108,
+    y: panelY + 116,
     w: rowW,
-    fill: "#7a5a95"
-  }, dropdownField === "pvpLeader", anchors);
+    h: 52,
+    fill: "#7a5a95",
+    disabled: rules.factionMode === "random"
+  }, dropdownField === "pvpLeader" && rules.factionMode !== "random", anchors);
 
-  const statusText = deckLocked
-    ? "房间规则为仅自动卡牌，本局不能选择自定义牌组。"
-    : (faction === "random"
-      ? "随机阵营会在开局时确定，并使用随机卡牌。选择具体阵营后可使用自定义牌组。"
-      : (status.valid
-        ? `自定义牌组已完成：${status.total}张；本局${useCustom ? "使用自定义卡牌" : "使用随机卡牌"}。`
-        : `自定义牌组未完成：${status.total}/40张；可编辑卡牌，或直接使用随机卡牌。`));
+  const statusText = rules.factionMode === "random"
+    ? "房间规则为随机阵容，本局阵营、主将与卡牌均由系统随机确定。"
+    : (deckLocked
+      ? "房间规则为仅自动卡牌，本局不能选择自定义牌组。"
+      : (faction === "random"
+        ? "随机阵容会在开局时随机确定阵营、主将与卡牌。选择具体阵营后可使用自定义牌组。"
+        : (status.valid
+          ? `自定义牌组已完成：${status.total}张；本局${useCustom ? "使用自定义卡牌" : "使用随机卡牌"}。`
+          : `自定义牌组未完成：${status.total}/40张；可编辑卡牌，或直接使用随机卡牌。`)));
   fillRoundRect(ctx, contentX, panelY + 160, rowW, 62, 12, "rgba(255, 249, 235, 0.88)", "rgba(216, 189, 131, 0.7)");
   wrapText(ctx, statusText, contentX + 12, panelY + 178, rowW - 24, 16, 3, 11, useCustom ? "#2f6f57" : "#8d6840");
 
   drawSectionTitle(ctx, "卡牌模式", contentX, panelY + 252);
-  const randomBtn = { id: "pvpDeckMode", value: "random", x: contentX, y: panelY + 274, w: (rowW - 10) / 2, h: 38 };
-  const customBtn = { id: "pvpDeckMode", value: "custom", x: randomBtn.x + randomBtn.w + 10, y: randomBtn.y, w: randomBtn.w, h: 38 };
-  drawModeButton(ctx, actions, randomBtn, !useCustom, "随机卡牌", "#8d6840");
-  drawModeButton(ctx, actions, customBtn, useCustom, "自定义卡牌", "#2f6f57");
+  if (rules.factionMode === "random") {
+    button(ctx, { id: "pvpRandomDeckMode", x: contentX, y: panelY + 274, w: rowW, h: 38, label: "随机阵容 · 随机卡牌", fill: "#b6a98e", stroke: "#a89a80", size: 12 });
+  } else {
+    const randomBtn = { id: "pvpDeckMode", value: "random", x: contentX, y: panelY + 274, w: (rowW - 10) / 2, h: 38 };
+    const customBtn = { id: "pvpDeckMode", value: "custom", x: randomBtn.x + randomBtn.w + 10, y: randomBtn.y, w: randomBtn.w, h: 38 };
+    drawModeButton(ctx, actions, randomBtn, !useCustom, "随机卡牌", "#8d6840");
+    drawModeButton(ctx, actions, customBtn, useCustom, "自定义卡牌", "#2f6f57");
+  }
 
   const edit = { id: "editPvpCustomDeck", x: contentX, y: panelY + 326, w: rowW, h: 38 };
-  actions.push(edit);
-  button(ctx, { ...edit, label: deckLocked ? "房间仅自动卡牌" : (concreteFaction ? "编辑该阵营卡牌" : "先选择具体阵营"), fill: concreteFaction && !deckLocked ? "#8f3c1f" : "#b6a98e", stroke: concreteFaction && !deckLocked ? "#6d2d18" : "#a89a80", size: 13 });
+  if (rules.factionMode !== "random") actions.push(edit);
+  button(ctx, { ...edit, label: rules.factionMode === "random" ? "随机阵容已锁定" : (deckLocked ? "房间仅自动卡牌" : (concreteFaction ? "编辑该阵营卡牌" : "先选择具体阵营")), fill: concreteFaction && !deckLocked ? "#8f3c1f" : "#b6a98e", stroke: concreteFaction && !deckLocked ? "#6d2d18" : "#a89a80", size: 13 });
 
   const me = pvp.room?.players?.[pvp.playerIndex] || {};
   const submit = { id: "pvpSubmitSetup", x: 46, y: bottom + 34, w: view.width - 92, h: 48 };

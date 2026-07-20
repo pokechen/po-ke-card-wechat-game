@@ -28,11 +28,12 @@ const historyScene = require("./js/scenes/history");
 const battleScene = require("./js/scenes/battleScene");
 const { sortedHandCards } = battleScene;
 const resultScene = require("./js/scenes/result");
+const battleCardsScene = require("./js/scenes/battleCards");
 const pvpRoomScene = require("./js/scenes/pvpRoom");
 const pvpSetupScene = require("./js/scenes/pvpSetup");
 const pvpClient = require("./js/core/pvpClient");
 const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
-const { cardById, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue } = require("./js/core/cards");
+const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue } = require("./js/core/cards");
 const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
@@ -55,10 +56,14 @@ const app = {
     submitting: false,
     error: "",
     recordedResultKey: "",
-    lastSeenRuleVersion: 0
+    lastSeenRuleVersion: 0,
+    readyRuleVersion: 0,
+    rulePromptOpen: false,
+    pendingRulePrompt: null,
+    dissolvedNoticeRoomId: ""
   },
   ui: {
-    handPage: 0,
+    handScroll: 0,
     deckPage: 0,
     battleCardDetailId: "",
     battleCardDetailUid: "",
@@ -81,15 +86,25 @@ const app = {
     settingDeckScroll: 0,
     matchSetupDropdown: "",
     deckSlotDropdown: "",
-    historyPage: 0,
+    historyScroll: 0,
     historyLeaderDetailId: "",
+    battleCardsSide: "mine",
+    battleCardsScrolls: [0, 0],
+    battleCardsDetailId: "",
+    battleCardsHelpOpen: false,
     dismissedRecentPlaySeq: 0,
+    dismissedLeaderRevealKey: "",
     discardPileOwner: null,
     discardPilePage: 0,
     battleLogHistoryOpen: false,
     battleLogHistoryScroll: 0,
     battleRowScrolls: {},
     pvpShareGuideOpen: false,
+    pvpShareCodeLoading: false,
+    pvpShareCodePath: "",
+    pvpShareCodeError: "",
+    pvpShareCodeRoomId: "",
+    pvpShareCodeEnvVersion: "",
     pageTransition: null,
     detailSwipe: null
   }
@@ -211,7 +226,7 @@ function continueBattleRoundTransition() {
   app.ui.dismissedRecentPlaySeq = Math.max(app.ui.dismissedRecentPlaySeq || 0, seq);
   if (isOnlineMatch()) return submitPvpAction({ type: "continueRound" });
   if (!continueRoundTransition(app.match)) return render();
-  app.ui.handPage = clampHandPage(app.ui.handPage);
+  app.ui.handScroll = clampHandScroll(app.ui.handScroll);
   if (app.match.over) return setScene("result");
   render();
   if (!app.match.pending) scheduleAi();
@@ -338,7 +353,7 @@ function finishOnlineMulliganSwapAfterOut() {
     clearPendingPvpMulliganSwap();
     if (!app.match?.mulligan?.active) app.ui.mulliganHandOrder = null;
     closeBattleCardDetail();
-    app.ui.handPage = 0;
+    app.ui.handScroll = 0;
     return render();
   }
 
@@ -357,7 +372,7 @@ function finishOnlineMulliganSwapAfterOut() {
     render();
     if (progress < 1) return requestFrame(step);
     clearPendingPvpMulliganSwap();
-    app.ui.handPage = 0;
+    app.ui.handScroll = 0;
     render();
   }
   requestFrame(step);
@@ -399,7 +414,7 @@ function prepareOnlineMulliganSwap(uid, keepDetail) {
     newCard: null,
     closeWhenReady: false
   };
-  app.ui.handPage = 0;
+  app.ui.handScroll = 0;
   if (keepDetail) {
     app.ui.battleCardDetailUid = uid;
     app.ui.battleCardDetailId = "";
@@ -441,7 +456,7 @@ function handleMulliganSwap(cardUid, keepDetail = false) {
   }
   if (keepDetail) return startMulliganSwapSequence(cardUid);
   performLocalMulliganSwap(cardUid);
-  app.ui.handPage = 0;
+  app.ui.handScroll = 0;
   if (!app.match.mulligan?.active) app.ui.mulliganHandOrder = null;
   return afterHumanAction();
 }
@@ -452,7 +467,7 @@ function finishMulliganSwapSequence(closeDetail = true) {
   app.ui.mulliganSwapIndex = 0;
   app.ui.mulliganReplacedUid = "";
   if (closeDetail) closeBattleCardDetail();
-  app.ui.handPage = 0;
+  app.ui.handScroll = 0;
   afterHumanAction();
 }
 
@@ -535,7 +550,7 @@ function setScene(scene) {
 
 function startMatch(optionsPatch = {}) {
   clearAiTimer();
-  app.ui.handPage = 0;
+  app.ui.handScroll = 0;
   app.ui.battleCardDetailId = "";
   app.ui.battleCardDetailUid = "";
   app.ui.mulliganGuideShown = false;
@@ -552,6 +567,7 @@ function startMatch(optionsPatch = {}) {
   app.ui.battleLogHistoryScroll = 0;
   app.ui.battleRowScrolls = {};
   app.ui.dismissedRecentPlaySeq = 0;
+  app.ui.dismissedLeaderRevealKey = "";
   clearRecentPlayTimer();
   const settings = { ...loadSettings(), ...optionsPatch };
   app.match = createMatch(settings);
@@ -576,6 +592,7 @@ function render() {
     battleScene.draw(ctx, view, app.actions, app.match, app.ui);
   }
   if (app.scene === "result") resultScene.draw(ctx, view, app.actions, app.match);
+  if (app.scene === "battleCards") battleCardsScene.draw(ctx, view, app.actions, app.match, app.ui);
   scheduleRecentPlayAutoDismiss();
   scheduleRoundTransitionAutoContinue();
 }
@@ -590,7 +607,7 @@ function scheduleAi() {
       setScene("result");
       return;
     }
-    app.ui.handPage = clampHandPage(app.ui.handPage);
+    app.ui.handScroll = clampHandScroll(app.ui.handScroll);
     render();
     scheduleAi();
   }, 600);
@@ -647,7 +664,7 @@ function getSharePayload() {
     queryParams.deckMode = rules.deckMode;
   }
   const normal = {
-    title: roomId ? `章鱼牌房间 ${roomId}｜打开后输入房间号加入` : "来盘章鱼牌吧",
+    title: roomId ? `章鱼牌房间 ${roomId}｜打开后自动加入` : "来盘章鱼牌吧",
     query: encodeShareQuery(queryParams)
   };
   console.log("[share-debug] 生成分享参数:", debugJson({
@@ -750,6 +767,465 @@ function setupShare() {
   showGameShareMenu(api, "游戏启动");
 }
 
+function loadPvpShareCode(roomId, force = false) {
+  const safeRoomId = normalizePvpRoomId(roomId);
+  if (!safeRoomId) return;
+  app.ui.pvpShareCodeRoomId = safeRoomId;
+  app.ui.pvpShareCodeLoading = true;
+  app.ui.pvpShareCodeError = "";
+  if (force) {
+    app.ui.pvpShareCodePath = "";
+    app.ui.pvpShareCodeEnvVersion = "";
+  }
+  render();
+  pvpClient.getRoomCode(safeRoomId, force).then(result => {
+    if (app.ui.pvpShareCodeRoomId !== safeRoomId) return;
+    app.ui.pvpShareCodePath = result.filePath;
+    app.ui.pvpShareCodeEnvVersion = result.envVersion;
+    app.ui.pvpShareCodeLoading = false;
+    app.ui.pvpShareCodeError = "";
+    render();
+  }).catch(err => {
+    if (app.ui.pvpShareCodeRoomId !== safeRoomId) return;
+    app.ui.pvpShareCodePath = "";
+    app.ui.pvpShareCodeEnvVersion = "";
+    app.ui.pvpShareCodeLoading = false;
+    app.ui.pvpShareCodeError = err.message || "二维码生成失败";
+    render();
+  });
+}
+
+const ALBUM_SCOPE = "scope.writePhotosAlbum";
+
+function readAlbumAuth(api, callback) {
+  if (!api?.getSetting) return callback(undefined);
+  api.getSetting({
+    success: res => callback(res.authSetting?.[ALBUM_SCOPE]),
+    fail: () => callback(undefined)
+  });
+}
+
+function openAlbumSetting(api, filePath) {
+  if (!api?.showModal || !api?.openSetting) return toast("请在设置中允许保存图片到相册");
+  api.showModal({
+    title: "需要相册权限",
+    content: "请在设置中允许保存图片到相册。",
+    confirmText: "去设置",
+    success: modal => {
+      if (!modal.confirm) return;
+      api.openSetting({
+        success: () => {
+          setTimeout(() => {
+            readAlbumAuth(api, status => {
+              if (status === true) savePvpShareCode(filePath);
+              else toast("未开启相册权限");
+            });
+          }, 300);
+        }
+      });
+    }
+  });
+}
+
+function albumSaveErrorTip(message) {
+  const text = String(message || "");
+  if (/112|not declared|privacy agreement|announce your privacy usage|1025|1026/i.test(text)) return "后台未声明相册权限，请检查用户隐私保护指引";
+  if (/104|privacy permission is not authorized|privacy/i.test(text)) return "请先同意隐私保护指引";
+  if (/system permission|system.*denied/i.test(text)) return "系统相册权限未开启，请在系统设置中允许微信访问照片";
+  return "保存失败，请稍后重试";
+}
+
+function doSavePvpShareCode(api, filePath) {
+  api.saveImageToPhotosAlbum({
+    filePath,
+    success: () => toast("分享图已保存到相册"),
+    fail: err => {
+      const message = String(err?.errMsg || err || "");
+      console.warn("[pvp-share] saveImageToPhotosAlbum failed", err);
+      readAlbumAuth(api, status => {
+        if (status !== true && /auth|authorize|permission|deny/i.test(message) && !/privacy/i.test(message)) return openAlbumSetting(api, filePath);
+        return toast(albumSaveErrorTip(message));
+      });
+    }
+  });
+}
+
+const POSTER_W = 750;
+const POSTER_H = 1200;
+const STATIC_CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
+const POSTER_ARTS = {
+  "Northern Realms": "assets/card-art/northern.webp",
+  "Nilfgaardian Empire": "assets/card-art/nilfgaard.webp",
+  "Scoia'tael": "assets/card-art/scoiatael.webp",
+  Monsters: "assets/card-art/monsters.webp",
+  Skellige: "assets/card-art/skellige.webp",
+  Neutral: "assets/card-art/neutral.webp",
+  special: "assets/card-art/special.webp",
+  weather: "assets/card-art/weather.webp"
+};
+
+function posterSeed(roomId) {
+  const textValue = String(roomId || "0000");
+  return textValue.split("").reduce((sum, ch, index) => sum + ch.charCodeAt(0) * (index + 7), 131);
+}
+
+function posterCardHash(card, seed) {
+  const textValue = `${card?.id || ""}${card?.baseName || card?.name || ""}`;
+  let value = seed || 1;
+  for (let i = 0; i < textValue.length; i++) value = (value * 33 + textValue.charCodeAt(i)) % 1000003;
+  return value;
+}
+
+function posterSortedCards(cards, seed) {
+  return cards
+    .filter(card => card && card.category !== "weather" && card.category !== "special")
+    .slice()
+    .sort((a, b) => posterCardHash(a, seed) - posterCardHash(b, seed));
+}
+
+function posterPickCards(roomId, faction) {
+  const seed = posterSeed(roomId);
+  const sourceFaction = FACTION_KEYS.includes(faction) ? faction : FACTION_KEYS[seed % FACTION_KEYS.length];
+  const primary = posterSortedCards(eligibleCards(sourceFaction), seed);
+  const fallback = posterSortedCards(FACTION_KEYS.flatMap(key => eligibleCards(key)), seed + 97);
+  const picked = [];
+  primary.concat(fallback).forEach(card => {
+    if (picked.length >= 5) return;
+    if (!picked.some(item => item.id === card.id)) picked.push(card);
+  });
+  while (picked.length < 5 && picked.length > 0) picked.push(picked[picked.length % picked.length]);
+  return picked;
+}
+
+function posterFileNameFromImageUrl(imageUrl) {
+  const value = String(imageUrl || "");
+  const cleanValue = value.split("?")[0].split("#")[0];
+  const fileName = cleanValue.split("/").filter(Boolean).pop() || "";
+  try { return decodeURIComponent(fileName); } catch (err) { return fileName; }
+}
+
+function posterCleanImageFileName(fileName) {
+  return String(fileName || "")
+    .trim()
+    .replace(/^特殊卡牌_/, "")
+    .replace(/^领袖牌_/, "")
+    .replace(/^单位牌_/, "")
+    .replace(/^[^_/]+阵营_/, "");
+}
+
+function posterNormalizeWebpFileName(fileName) {
+  const value = posterCleanImageFileName(fileName).replace(/[：:].*$/, "");
+  if (!value || value === ".webp") return "";
+  return /\.[^/.]+$/.test(value) ? value.replace(/\.[^/.]+$/, ".webp") : `${value}.webp`;
+}
+
+function posterStaticCardImageUrl(card) {
+  const rawFileName = posterFileNameFromImageUrl(card?.imageUrl) || `${card?.baseName || card?.name || ""}.webp`;
+  const fileName = posterNormalizeWebpFileName(rawFileName);
+  return fileName ? encodeURI(`${STATIC_CARD_IMAGE_BASE_URL}/${fileName}`) : "";
+}
+
+function posterCardImageSources(card) {
+  return [posterStaticCardImageUrl(card), POSTER_ARTS[card?.category], POSTER_ARTS[card?.faction], POSTER_ARTS.Neutral].filter((src, index, arr) => src && arr.indexOf(src) === index);
+}
+
+function posterLoadImage(api, sources) {
+  return new Promise(resolve => {
+    if (!api?.createImage) return resolve(null);
+    const queue = (Array.isArray(sources) ? sources : [sources]).filter(Boolean);
+    if (!queue.length) return resolve(null);
+    const img = api.createImage();
+    let index = 0;
+    const loadNext = () => {
+      const src = queue[index];
+      img.onload = () => resolve(img);
+      img.onerror = () => {
+        index += 1;
+        if (index >= queue.length) resolve(null);
+        else loadNext();
+      };
+      img.src = src;
+    };
+    loadNext();
+  });
+}
+
+function posterRoundRect(ctx2, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r || 0, w / 2, h / 2));
+  ctx2.beginPath();
+  ctx2.moveTo(x + radius, y);
+  ctx2.lineTo(x + w - radius, y);
+  ctx2.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx2.lineTo(x + w, y + h - radius);
+  ctx2.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx2.lineTo(x + radius, y + h);
+  ctx2.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx2.lineTo(x, y + radius);
+  ctx2.quadraticCurveTo(x, y, x + radius, y);
+  ctx2.closePath();
+}
+
+function posterFillRoundRect(ctx2, x, y, w, h, r, fill, stroke) {
+  posterRoundRect(ctx2, x, y, w, h, r);
+  if (fill) {
+    ctx2.fillStyle = fill;
+    ctx2.fill();
+  }
+  if (stroke) {
+    ctx2.strokeStyle = stroke;
+    ctx2.lineWidth = 2;
+    ctx2.stroke();
+  }
+}
+
+function posterText(ctx2, value, x, y, size, color = "#2f2417", align = "left", weight = "400") {
+  ctx2.save();
+  ctx2.font = `${weight} ${size}px sans-serif`;
+  ctx2.textAlign = align;
+  ctx2.textBaseline = "middle";
+  ctx2.fillStyle = color;
+  ctx2.fillText(String(value || ""), x, y);
+  ctx2.restore();
+}
+
+function posterWrapText(ctx2, value, x, y, maxW, lineH, maxLines, size, color = "#2f2417", weight = "400") {
+  const chars = String(value || "").split("");
+  let line = "";
+  let lineCount = 0;
+  ctx2.save();
+  ctx2.font = `${weight} ${size}px sans-serif`;
+  ctx2.fillStyle = color;
+  ctx2.textBaseline = "top";
+  for (let i = 0; i < chars.length; i++) {
+    const test = line + chars[i];
+    if (ctx2.measureText(test).width > maxW && line) {
+      ctx2.fillText(line, x, y + lineCount * lineH);
+      line = chars[i];
+      lineCount += 1;
+      if (lineCount >= maxLines) break;
+    } else {
+      line = test;
+    }
+  }
+  if (line && lineCount < maxLines) {
+    ctx2.fillText(line, x, y + lineCount * lineH);
+    lineCount += 1;
+  }
+  ctx2.restore();
+  return Math.max(1, lineCount);
+}
+
+function posterDrawImageContain(ctx2, img, x, y, w, h, radius = 0) {
+  if (!img) return false;
+  const iw = img.width || w;
+  const ih = img.height || h;
+  const scale = Math.min(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  ctx2.save();
+  if (radius) {
+    posterRoundRect(ctx2, x, y, w, h, radius);
+    ctx2.clip();
+  }
+  ctx2.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx2.restore();
+  return true;
+}
+
+function posterDrawImageCover(ctx2, img, x, y, w, h, radius = 0) {
+  if (!img) return false;
+  const iw = img.width || w;
+  const ih = img.height || h;
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  ctx2.save();
+  if (radius) {
+    posterRoundRect(ctx2, x, y, w, h, radius);
+    ctx2.clip();
+  }
+  ctx2.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx2.restore();
+  return true;
+}
+
+function posterDrawBattleBackdrop(ctx2) {
+  posterFillRoundRect(ctx2, 40, 74, POSTER_W - 80, 810, 26, "rgba(255,250,240,0.58)", "rgba(216,189,131,0.58)");
+  ["文脉", "朝堂", "疆场", "疆场", "朝堂", "文脉"].forEach((label, index) => {
+    const y = 112 + index * 112;
+    posterFillRoundRect(ctx2, 60, y, POSTER_W - 120, 78, 16, "rgba(255,255,255,0.46)", "rgba(216,189,131,0.58)");
+    posterText(ctx2, label, 86, y + 39, 26, "rgba(119,92,52,0.42)");
+    posterText(ctx2, "0分", POSTER_W - 104, y + 39, 24, "rgba(143,60,31,0.45)", "center", "600");
+  });
+}
+
+function posterDrawCard(ctx2, card, img, x, y, w, h, angle) {
+  ctx2.save();
+  ctx2.translate(x + w / 2, y + h / 2);
+  ctx2.rotate(angle);
+  ctx2.shadowColor = "rgba(64, 42, 19, 0.25)";
+  ctx2.shadowBlur = 14;
+  ctx2.shadowOffsetY = 8;
+  posterFillRoundRect(ctx2, -w / 2, -h / 2, w, h, 16, "#fffaf0", "#d8bd83");
+  ctx2.shadowBlur = 0;
+  const artX = -w / 2 + 12;
+  const artY = -h / 2 + 12;
+  const artW = w - 24;
+  const artH = h - 46;
+  if (!posterDrawImageCover(ctx2, img, artX, artY, artW, artH, 12)) {
+    const fill = ctx2.createLinearGradient ? ctx2.createLinearGradient(artX, artY, artX + artW, artY + artH) : null;
+    if (fill) {
+      fill.addColorStop(0, "#f6d27a");
+      fill.addColorStop(1, "#d8bd83");
+    }
+    posterFillRoundRect(ctx2, artX, artY, artW, artH, 12, fill || "#f0ddaa", "#d8bd83");
+    posterText(ctx2, displayName(card).slice(0, 1), 0, -6, Math.min(52, h * 0.28), "rgba(95,71,39,0.72)", "center", "800");
+  }
+  posterFillRoundRect(ctx2, -w / 2 + 10, h / 2 - 34, w - 20, 24, 10, "rgba(255,250,240,0.92)");
+  posterText(ctx2, displayName(card).slice(0, 5), 0, h / 2 - 22, 18, "#5f4727", "center", "600");
+  ctx2.restore();
+}
+
+function posterCardLayout(roomId) {
+  const layouts = [
+    [
+      { x: 86, y: 470, w: 138, h: 176, a: -0.22 },
+      { x: 194, y: 430, w: 138, h: 176, a: -0.08 },
+      { x: 306, y: 414, w: 138, h: 176, a: 0.04 },
+      { x: 420, y: 430, w: 138, h: 176, a: 0.15 },
+      { x: 528, y: 472, w: 138, h: 176, a: 0.24 }
+    ],
+    [
+      { x: 78, y: 426, w: 132, h: 170, a: -0.08 },
+      { x: 218, y: 426, w: 132, h: 170, a: 0.04 },
+      { x: 358, y: 426, w: 132, h: 170, a: -0.04 },
+      { x: 498, y: 426, w: 132, h: 170, a: 0.08 },
+      { x: 288, y: 508, w: 132, h: 170, a: 0 }
+    ],
+    [
+      { x: 102, y: 500, w: 132, h: 166, a: -0.18 },
+      { x: 210, y: 432, w: 136, h: 174, a: 0.1 },
+      { x: 328, y: 486, w: 132, h: 166, a: -0.04 },
+      { x: 442, y: 420, w: 136, h: 174, a: 0.18 },
+      { x: 540, y: 506, w: 128, h: 162, a: -0.14 }
+    ]
+  ];
+  return layouts[posterSeed(roomId) % layouts.length];
+}
+
+function posterDrawCardFan(ctx2, cards, images, roomId) {
+  const specs = posterCardLayout(roomId);
+  cards.forEach((card, index) => {
+    const spec = specs[index] || specs[0];
+    posterDrawCard(ctx2, card, images[index], spec.x, spec.y, spec.w, spec.h, spec.a);
+  });
+}
+
+function posterSkillLine(rules, faction) {
+  if (rules.factionMode === "fixed") return `阵营技能：${factionPerkSummary(faction) || "按指定阵营结算。"}`;
+  if (rules.factionMode === "random") return "阵营技能：开局随机阵营后，按随机结果生效。";
+  return "阵营技能：双方按各自选择的阵营生效。";
+}
+
+function generatePvpSharePoster(api, qrPath) {
+  return new Promise((resolve, reject) => {
+    if (!api?.createCanvas) return reject(new Error("当前环境不支持生成分享图"));
+    const posterCanvas = api.createCanvas();
+    posterCanvas.width = POSTER_W;
+    posterCanvas.height = POSTER_H;
+    const ctx2 = posterCanvas.getContext("2d");
+    const roomId = normalizePvpRoomId(app.pvp.roomId || app.pvp.room?.roomId || app.pvp.room?._id) || "0000";
+    const rules = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
+    const faction = rules.factionMode === "random" ? FACTION_KEYS[posterSeed(roomId) % FACTION_KEYS.length] : (rules.factionMode === "fixed" ? rules.faction : resolvePvpFaction(loadSettings()));
+    const cards = posterPickCards(roomId, faction);
+    const imageSources = [qrPath].concat(cards.map(posterCardImageSources));
+    Promise.all(imageSources.map(src => posterLoadImage(api, src))).then(images => {
+      const qr = images[0];
+      const cardImages = images.slice(1);
+      const bg = ctx2.createLinearGradient ? ctx2.createLinearGradient(0, 0, 0, POSTER_H) : null;
+      if (bg) {
+        bg.addColorStop(0, "#fbf2df");
+        bg.addColorStop(0.55, "#fffaf0");
+        bg.addColorStop(1, "#ead8ad");
+      }
+      ctx2.fillStyle = bg || "#f7f1e5";
+      ctx2.fillRect(0, 0, POSTER_W, POSTER_H);
+      posterDrawBattleBackdrop(ctx2);
+      posterText(ctx2, "来盘章鱼牌吧", POSTER_W / 2, 174, 54, "#3a1d12", "center", "800");
+      posterText(ctx2, `房间 ${roomId} · 扫码直接加入`, POSTER_W / 2, 228, 25, "#775c34", "center", "600");
+      posterDrawCardFan(ctx2, cards, cardImages, roomId);
+
+      posterFillRoundRect(ctx2, 58, 680, POSTER_W - 116, 260, 22, "rgba(255,250,240,0.92)", "rgba(216,189,131,0.82)");
+      const lines = [
+        { text: "最多三小局两胜，未打出的手牌跨小局保留。", weight: "700", color: "#3a1d12" },
+        { text: `规则：${pvpRuleSummary(rules)}` },
+        { text: posterSkillLine(rules, faction) },
+        { text: "时局压制对应线；号令、同盟、振势会提升战力。" },
+        { text: "好友扫码进入房间，确认出战后即可开局。" }
+      ];
+      let lineY = 718;
+      lines.forEach(item => {
+        const used = posterWrapText(ctx2, item.text, 94, lineY, POSTER_W - 188, 30, 2, 23, item.color || "#5f4727", item.weight || "500");
+        lineY += used * 30 + 10;
+      });
+
+      posterFillRoundRect(ctx2, 254, 924, 242, 242, 22, "#ffffff", "#d8bd83");
+      if (!posterDrawImageContain(ctx2, qr, 273, 943, 204, 204, 0)) return reject(new Error("二维码图片加载失败"));
+      posterText(ctx2, "快来加入战斗，一起打出高分！", POSTER_W / 2, 1180, 22, "#3a1d12", "center", "700");
+      if (!posterCanvas.toTempFilePath) return reject(new Error("当前环境不支持导出分享图"));
+      posterCanvas.toTempFilePath({
+        x: 0,
+        y: 0,
+        width: POSTER_W,
+        height: POSTER_H,
+        destWidth: POSTER_W,
+        destHeight: POSTER_H,
+        fileType: "png",
+        success: res => resolve(res.tempFilePath),
+        fail: err => reject(new Error(err?.errMsg || "分享图导出失败"))
+      });
+    }).catch(reject);
+  });
+}
+
+function savePvpSharePoster(api, qrPath) {
+  if (api.showLoading) api.showLoading({ title: "生成分享图...", mask: true });
+  generatePvpSharePoster(api, qrPath).then(posterPath => {
+    if (api.hideLoading) api.hideLoading();
+    doSavePvpShareCode(api, posterPath);
+  }).catch(err => {
+    if (api.hideLoading) api.hideLoading();
+    console.warn("[pvp-share] generate poster failed", err);
+    toast("分享图生成失败，改存二维码");
+    doSavePvpShareCode(api, qrPath);
+  });
+}
+
+function savePvpShareCode(filePathOverride = "") {
+  const filePath = filePathOverride || app.ui.pvpShareCodePath;
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!filePath) return toast(app.ui.pvpShareCodeLoading ? "二维码正在生成" : "请先重新生成二维码");
+  if (!api?.saveImageToPhotosAlbum) return toast("当前环境不支持保存到相册");
+  const afterPrivacy = () => readAlbumAuth(api, status => {
+    if (status === true) return savePvpSharePoster(api, filePath);
+    if (status === false) return openAlbumSetting(api, filePath);
+    if (!api.authorize) return savePvpSharePoster(api, filePath);
+    api.authorize({
+      scope: ALBUM_SCOPE,
+      success: () => savePvpSharePoster(api, filePath),
+      fail: () => openAlbumSetting(api, filePath)
+    });
+  });
+  if (!api.requirePrivacyAuthorize) return afterPrivacy();
+  api.requirePrivacyAuthorize({
+    success: afterPrivacy,
+    fail: err => {
+      console.warn("[pvp-share] requirePrivacyAuthorize failed", err);
+      toast(albumSaveErrorTip(err?.errMsg || err || "privacy permission is not authorized"));
+    }
+  });
+}
+
 function guideShare() {
   const roomId = normalizePvpRoomId(app.pvp.roomId);
   console.log("[share-debug] 点击转发邀请按钮:", debugJson({
@@ -759,15 +1235,15 @@ function guideShare() {
     roomObject: app.pvp.room ? { roomId: app.pvp.room.roomId, _id: app.pvp.room._id, status: app.pvp.room.status } : null,
     resolvedRoomId: currentShareRoomId()
   }));
-  if (!roomId) return toast("房间创建后才能转发邀请");
+  if (!roomId) return toast("房间创建后才能分享邀请");
   const api = typeof wx !== "undefined" ? wx : null;
-  registerShareHandler(api, `点击房间转发按钮-${roomId}`);
-  showGameShareMenu(api, `点击房间转发按钮-${roomId}`);
+  registerShareHandler(api, `点击房间分享按钮-${roomId}`);
+  showGameShareMenu(api, `点击房间分享按钮-${roomId}`);
   const preview = getSharePayload();
-  console.warn("[share-debug] 转发前即时 payload 预览:", debugJson(preview));
-  console.warn(`[share-debug] 请确认稍后出现回调日志；若没有出现，则微信没有调用 onShareAppMessage。预期 query=${preview.query}`);
+  console.warn("[share-debug] 分享前即时 payload 预览:", debugJson(preview));
+  if (app.ui.pvpShareCodeRoomId !== roomId) app.ui.pvpShareCodePath = "";
   app.ui.pvpShareGuideOpen = true;
-  render();
+  loadPvpShareCode(roomId);
 }
 
 function normalizePvpRoomId(value) {
@@ -775,20 +1251,16 @@ function normalizePvpRoomId(value) {
   return digits.length === 4 ? digits : "";
 }
 
-function randomItem(list, fallback) {
-  return list.length ? list[Math.floor(Math.random() * list.length)] : fallback;
-}
-
 function resolvePvpFaction(settings) {
   const value = settings.pvpFaction || settings.humanFaction || FACTION_KEYS[0];
-  if (value === "random") return randomItem(FACTION_KEYS, FACTION_KEYS[0]);
-  return FACTION_KEYS.includes(value) ? value : FACTION_KEYS[0];
+  return value === "random" || FACTION_KEYS.includes(value) ? value : FACTION_KEYS[0];
 }
 
 function resolvePvpLeaderId(settings, faction) {
+  if (faction === "random") return "random";
   const leaders = leadersFor(faction);
   const stored = settings.pvpLeaderIds?.[faction] ?? settings.humanLeaderIds?.[faction];
-  if (stored === "random") return randomItem(leaders, null)?.id || "";
+  if (stored === "random") return "random";
   return (leaders.find(card => card.id === stored) || leaders[0])?.id || "";
 }
 
@@ -796,7 +1268,7 @@ function normalizePvpRules(rules = {}) {
   const fallback = FACTION_KEYS[0];
   const faction = FACTION_KEYS.includes(rules.faction) ? rules.faction : fallback;
   return {
-    factionMode: rules.factionMode === "fixed" ? "fixed" : "any",
+    factionMode: ["fixed", "random"].includes(rules.factionMode) ? rules.factionMode : "any",
     faction,
     deckMode: rules.deckMode === "autoOnly" ? "autoOnly" : "any",
     version: Number(rules.version || 0) || 0
@@ -805,35 +1277,72 @@ function normalizePvpRules(rules = {}) {
 
 function pvpRuleSummary(rules = {}) {
   const safe = normalizePvpRules(rules);
-  const faction = safe.factionMode === "fixed" ? `指定${FACTION_LABELS[safe.faction] || safe.faction}` : "不限";
-  const deck = safe.deckMode === "autoOnly" ? "仅自动卡牌" : "不限，可自定义/自动";
+  const faction = safe.factionMode === "random" ? "随机阵容" : (safe.factionMode === "fixed" ? `指定${FACTION_LABELS[safe.faction] || safe.faction}` : "不限");
+  const deck = safe.factionMode === "random" ? "随机卡牌" : (safe.deckMode === "autoOnly" ? "仅自动卡牌" : "不限，可自定义/自动");
   return `阵营${faction}；卡牌${deck}`;
 }
 
-function promptPvpRuleChanged(previousRules, nextRules) {
+function pvpRuleFactionSkillLines(rules) {
+  const safe = normalizePvpRules(rules);
+  return safe.factionMode === "fixed"
+    ? [`阵营技能：${factionPerkSummary(safe.faction)}`]
+    : [];
+}
+
+function queuePvpRuleChanged(previousRules, nextRules, roomId) {
+  const nextVersion = Number(nextRules?.version || 0) || 0;
+  if (app.pvp.rulePromptOpen) {
+    const pending = app.pvp.pendingRulePrompt;
+    app.pvp.pendingRulePrompt = {
+      roomId,
+      previousRules: pending?.previousRules || previousRules,
+      nextRules,
+      version: nextVersion
+    };
+    return;
+  }
+  promptPvpRuleChanged(previousRules, nextRules, roomId);
+}
+
+function promptPvpRuleChanged(previousRules, nextRules, roomId) {
+  const shownVersion = Number(nextRules?.version || 0) || 0;
   const content = [
     `修改前：${pvpRuleSummary(previousRules)}`,
     `修改后：${pvpRuleSummary(nextRules)}`,
+    ...pvpRuleFactionSkillLines(nextRules),
     "",
     "房主修改规则后，需要再点一下准备。"
   ].join("\n");
   const api = typeof wx !== "undefined" ? wx : null;
   if (api && api.showModal) {
+    app.pvp.rulePromptOpen = true;
     api.showModal({
       title: "规则已修改",
       content,
       confirmText: "直接准备",
       confirmColor: "#2f6f57",
       cancelText: "稍后",
-      success: res => {
-        if (res.confirm) setPvpReady(true);
-        else render();
-      },
-      fail: () => render()
+      success: res => finishPvpRulePrompt(res.confirm, roomId, shownVersion),
+      fail: () => finishPvpRulePrompt(false, roomId, shownVersion)
     });
     return;
   }
   toast("房主修改了规则，请重新准备");
+}
+
+function finishPvpRulePrompt(confirmed, roomId, shownVersion) {
+  app.pvp.rulePromptOpen = false;
+  const pending = app.pvp.pendingRulePrompt;
+  app.pvp.pendingRulePrompt = null;
+  const currentRoomId = normalizePvpRoomId(app.pvp.roomId);
+  const currentVersion = Number(app.pvp.room?.rules?.version || 0) || 0;
+  if (pending && pending.roomId === currentRoomId && pending.version > shownVersion) {
+    return promptPvpRuleChanged(pending.previousRules, pending.nextRules, pending.roomId);
+  }
+  if (confirmed && roomId === currentRoomId && currentVersion === shownVersion && app.pvp.room?.status === "waiting") {
+    return setPvpReady(true);
+  }
+  render();
 }
 
 function currentRulesFromSettings() {
@@ -857,10 +1366,11 @@ function rememberPvpRules(rules) {
 function currentPlayerSetup(ruleOverride = null) {
   const settings = loadSettings();
   const rules = ruleOverride ? normalizePvpRules(ruleOverride) : normalizePvpRules(app.pvp.room?.rules || {});
-  const faction = rules.factionMode === "fixed" ? rules.faction : resolvePvpFaction(settings);
-  const selectedIds = getActiveCustomDeckIds(settings, faction);
-  const status = deckStatus(selectedIds, faction);
-  const useCustomDeck = rules.deckMode !== "autoOnly" && settings.pvpDeckMode === "custom" && status.valid;
+  const faction = rules.factionMode === "random" ? "random" : (rules.factionMode === "fixed" ? rules.faction : resolvePvpFaction(settings));
+  const randomLineup = faction === "random";
+  const selectedIds = randomLineup ? [] : getActiveCustomDeckIds(settings, faction);
+  const status = randomLineup ? { valid: false, ids: [] } : deckStatus(selectedIds, faction);
+  const useCustomDeck = !randomLineup && rules.deckMode !== "autoOnly" && settings.pvpDeckMode === "custom" && status.valid;
   // 不预设name，由云函数根据座位号分配 玩家一/玩家二
   return {
     faction,
@@ -874,6 +1384,25 @@ function decorateOnlineMatch(match) {
   match.mode = "online";
   match.localPlayerIndex = app.pvp.playerIndex;
   return match;
+}
+
+function pvpPlayerReady(room, index) {
+  if (!Number.isInteger(index) || index < 0) return false;
+  const players = room?.players || [];
+  const readyPlayers = Array.isArray(room?.readyPlayers) ? room.readyPlayers : [];
+  return !!(players[index]?.ready || readyPlayers[index]);
+}
+
+function pvpReadyDebug(room) {
+  const players = Array.isArray(room?.players) ? room.players : [];
+  return {
+    status: room?.status || "",
+    turnSeq: Number(room?.turnSeq || 0),
+    readySeq: Number(room?.readySeq || 0),
+    playerCount: players.length,
+    playerReady: players.map(player => !!player?.ready),
+    readyPlayers: Array.isArray(room?.readyPlayers) ? room.readyPlayers.map(Boolean) : []
+  };
 }
 
 function cardLabel(card) {
@@ -931,6 +1460,8 @@ function recordOnlineMatch(match) {
     aiLeader: cardLabel(opp.leader),
     humanLeaderId: me.leader?.id || "",
     aiLeaderId: opp.leader?.id || "",
+    humanDeckMode: me.deckMode || "random",
+    aiDeckMode: opp.deckMode || "random",
     difficulty: "pvp",
     mode: "online",
     endReason: match.endReason || "normal"
@@ -941,42 +1472,80 @@ function recordOnlineMatch(match) {
 function applyRoomUpdate(room, playerIndex) {
   if (!room) return;
   const roomId = normalizePvpRoomId(room.roomId || room._id || app.pvp.roomId);
-  console.log("[pvp] applyRoomUpdate: status=", room.status, "playerIndex=", playerIndex,
-    "roomId=", roomId, "players=", (room.players || []).length, "currentScene=", app.scene);
+  console.log("[pvp-ready-debug] applyRoomUpdate", {
+    roomId,
+    incomingPlayerIndex: playerIndex,
+    currentPlayerIndex: app.pvp.playerIndex,
+    scene: app.scene,
+    submitting: app.pvp.submitting,
+    room: pvpReadyDebug(room)
+  });
   const previousRoom = app.pvp.room;
-  const effectivePlayerIndex = Number.isInteger(playerIndex) ? playerIndex : app.pvp.playerIndex;
-  const prevVersion = previousRoom?.rules?.version || 0;
-  const nextVersion = room.rules?.version || 0;
-  const wasReadyBeforeRuleChange = effectivePlayerIndex === 1 && !!previousRoom?.players?.[effectivePlayerIndex]?.ready;
+  const previousPendingType = app.match?.pending?.type || "";
+  const nextPlayerIndex = Number.isInteger(playerIndex) ? playerIndex : app.pvp.playerIndex;
+  if (room.status === "dissolved" && nextPlayerIndex === 1) {
+    if (app.pvp.dissolvedNoticeRoomId === roomId) return;
+    return showPvpRoomDissolvedNotice(roomId);
+  }
+  const nextVersion = Number(room.rules?.version || 0) || 0;
+  const seenVersion = Number(app.pvp.lastSeenRuleVersion || previousRoom?.rules?.version || 0) || 0;
+  const currentTurnSeq = Number(previousRoom?.turnSeq || 0) || 0;
+  const nextTurnSeq = Number(room.turnSeq || 0) || 0;
+  if (previousRoom && nextTurnSeq && currentTurnSeq && nextTurnSeq < currentTurnSeq) {
+    console.warn("[pvp-ready-debug] ignore stale room", { incoming: pvpReadyDebug(room), current: pvpReadyDebug(previousRoom) });
+    return;
+  }
+  if (previousRoom && nextVersion < Number(previousRoom.rules?.version || 0)) {
+    console.warn("[pvp-ready-debug] preserve newer local rules but accept room state", {
+      nextVersion,
+      currentVersion: previousRoom.rules?.version,
+      incoming: pvpReadyDebug(room),
+      current: pvpReadyDebug(previousRoom)
+    });
+    room = { ...room, rules: previousRoom.rules };
+  }
+  const shouldPromptRuleChange = nextPlayerIndex === 1
+    && !!previousRoom
+    && nextVersion > seenVersion
+    && room.status === "waiting";
   app.pvp.room = room;
   if (roomId) app.pvp.roomId = roomId;
   if (Number.isInteger(playerIndex)) app.pvp.playerIndex = playerIndex;
-  if (room.match) app.match = decorateOnlineMatch(room.match);
-  else if (room.status !== "finished") app.match = null;
+  if (room.match) {
+    app.match = decorateOnlineMatch(room.match);
+    if (["revive", "leaderDiscard"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
+  } else if (room.status !== "finished") app.match = null;
   app.pvp.loading = false;
   app.pvp.submitting = false;
   app.pvp.error = "";
-  if (app.pvp.playerIndex === 1 && wasReadyBeforeRuleChange && prevVersion && nextVersion > prevVersion && room.status === "waiting" && !room.players?.[app.pvp.playerIndex]?.ready) {
-    promptPvpRuleChanged(previousRoom.rules, room.rules);
+  app.pvp.lastSeenRuleVersion = Math.max(seenVersion, nextVersion);
+  if (shouldPromptRuleChange) {
+    app.pvp.readyRuleVersion = 0;
+    console.log("[pvp] 玩家2检测到规则变更，加入提示队列:", seenVersion, "->", nextVersion);
+    queuePvpRuleChanged(previousRoom?.rules || {}, room.rules, roomId);
   }
-  app.pvp.lastSeenRuleVersion = nextVersion || app.pvp.lastSeenRuleVersion || 0;
   if (room.status === "playing" && app.match) {
     if (app.scene !== "battle") app.ui.mulliganGuideShown = false;
-    app.ui.handPage = clampHandPage(app.ui.handPage);
+    app.ui.handScroll = clampHandScroll(app.ui.handScroll);
     syncPendingPvpMulliganSwap();
     openMulliganGuideDetail();
     if (app.scene !== "battle") return setScene("battle");
   }
   if (room.status === "finished" && app.match) {
     recordOnlineMatch(app.match);
-    if (app.scene !== "result") return setScene("result");
+    if (!["result", "battleCards"].includes(app.scene)) return setScene("result");
   }
   if (room.status === "selecting") {
     app.ui.matchSetupDropdown = "";
     app.ui.matchSetupCardDetailId = "";
     if (app.scene !== "pvpSetup") return setScene("pvpSetup");
   }
-  if (room.status === "waiting" && ["battle", "result", "pvpSetup"].includes(app.scene)) return setScene("pvpRoom");
+  if (room.status === "waiting" && ["battle", "result", "battleCards", "pvpSetup"].includes(app.scene)) {
+    app.ui.battleCardsDetailId = "";
+    app.ui.battleCardsHelpOpen = false;
+    app.ui.detailSwipe = null;
+    return setScene("pvpRoom");
+  }
   render();
 }
 
@@ -984,7 +1553,7 @@ function watchPvpRoom(roomId) {
   try {
     pvpClient.watchRoom(roomId, room => applyRoomUpdate(room), err => {
       console.warn("[pvp] watch failed", err);
-      app.pvp.error = "房间同步断开，请返回后重试";
+      app.pvp.error = "房间同步断开，正在尝试恢复";
       app.pvp.loading = false;
       render();
     });
@@ -995,12 +1564,92 @@ function watchPvpRoom(roomId) {
   }
 }
 
+function resumePvpRoomSync(source = "foreground") {
+  const roomId = normalizePvpRoomId(app.pvp.roomId);
+  if (!roomId || !app.pvp.room || app.pvp.room.status === "dissolved") return false;
+  console.log("[pvp] 恢复房间同步, source=", source, "roomId=", roomId);
+  watchPvpRoom(roomId);
+  pvpClient.fetchRoom(roomId).then(result => {
+    if (normalizePvpRoomId(app.pvp.roomId) !== roomId) return;
+    applyRoomUpdate(result.room, result.playerIndex);
+  }).catch(err => {
+    console.warn("[pvp] 恢复房间同步失败", source, err);
+  });
+  return true;
+}
+
 function resetPvpState() {
   pvpClient.closeRoomWatch();
   app.ui.pvpShareGuideOpen = false;
+  app.ui.pvpShareCodeLoading = false;
+  app.ui.pvpShareCodePath = "";
+  app.ui.pvpShareCodeError = "";
+  app.ui.pvpShareCodeRoomId = "";
+  app.ui.pvpShareCodeEnvVersion = "";
   clearPendingPvpMulliganSwap();
   clearRoundTransitionTimer();
-  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0 };
+  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0, readyRuleVersion: 0, rulePromptOpen: false, pendingRulePrompt: null, dissolvedNoticeRoomId: "" };
+}
+
+function showPvpRoomDissolvedNotice(roomId) {
+  resetPvpState();
+  app.pvp.playerIndex = 1;
+  app.pvp.dissolvedNoticeRoomId = roomId;
+  app.match = null;
+  setScene("menu");
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (api && api.showModal) {
+    api.showModal({
+      title: "房间已解散",
+      content: "房主已离开并解散房间。",
+      showCancel: false,
+      confirmText: "知道了"
+    });
+    return;
+  }
+  toast("房主已解散房间");
+}
+
+function dissolvePvpRoom() {
+  const roomId = app.pvp.roomId;
+  if (!roomId || app.pvp.submitting) return;
+  app.pvp.submitting = true;
+  render();
+  pvpClient.leaveRoom(roomId).then(() => {
+    resetPvpState();
+    app.match = null;
+    setScene("menu");
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "解散房间失败");
+    render();
+  });
+}
+
+function confirmDissolvePvpRoom() {
+  if (app.pvp.playerIndex !== 0 || !app.pvp.roomId) {
+    resetPvpState();
+    app.match = null;
+    return setScene("menu");
+  }
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (api && api.showModal) {
+    api.showModal({
+      title: "确认解散房间",
+      content: "解散后将通知玩家二，双方都无法继续使用该房间。",
+      confirmText: "解散",
+      confirmColor: "#8f3c1f",
+      cancelText: "取消",
+      success: res => {
+        if (res.confirm) dissolvePvpRoom();
+        else render();
+      },
+      fail: () => render()
+    });
+    return;
+  }
+  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm("确定解散房间吗？")) return render();
+  return dissolvePvpRoom();
 }
 
 function enterPvpSetup(roomId) {
@@ -1361,6 +2010,7 @@ function handleLaunchRoom() {
       if (handleSharedRoomId(onShowRoomId, "onShow")) return;
       if (handleSharedRoute(onShowRoute, "onShow")) return;
       if (handleSharedCardJoinFallback(options, "onShow")) return;
+      resumePvpRoomSync("wx.onShow");
       // 只在入口 query 明显带有 room/scene 关键字时才走兜底解析，避免正常切前台产生噪音
       if (!hasRoomHint(options) && !hasShareRouteHint(options)) return;
       setTimeout(() => {
@@ -1369,6 +2019,11 @@ function handleLaunchRoom() {
         console.log("[launch] onShow 检测到分享相关参数但未解析到有效目标，保持当前场景");
         render();
       }, 300);
+    });
+  }
+  if (api.onNetworkStatusChange) {
+    api.onNetworkStatusChange(status => {
+      if (status?.isConnected) resumePvpRoomSync("network-reconnected");
     });
   }
 }
@@ -1414,16 +2069,31 @@ function submitPvpAction(battleAction) {
   return true;
 }
 
-function clampHandPage(page) {
-  if (!app.match) return 0;
+function handScrollBounds() {
+  if (!app.match) return { maxScroll: 0 };
   const current = app.match.players[handOwnerIndex(app.match)] || app.match.players[0];
-  const total = Math.max(1, Math.ceil(current.hand.length / 5));
-  return Math.max(0, Math.min(page, total - 1));
+  return battleScene.handScrollBounds(view, current?.hand?.length || 0);
+}
+
+function clampHandScroll(value) {
+  const { maxScroll } = handScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollHandBy(deltaX) {
+  if (app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner != null) return false;
+  const before = app.ui.handScroll || 0;
+  const next = clampHandScroll(before - deltaX);
+  if (Math.abs(next - before) > 0.1) {
+    app.ui.handScroll = next;
+    render();
+  }
+  return true;
 }
 
 function afterHumanAction() {
   if (!app.match) return;
-  app.ui.handPage = clampHandPage(app.ui.handPage);
+  app.ui.handScroll = clampHandScroll(app.ui.handScroll);
   if (app.match.over) setScene("result");
   else {
     render();
@@ -1443,6 +2113,45 @@ function performPass() {
   if (isOnlineMatch()) return submitPvpAction({ type: "pass" });
   pass(app.match);
   return afterHumanAction();
+}
+
+function resolveLeaderDiscardChoice(cardUid) {
+  if (!app.match?.pending || app.match.pending.type !== "leaderDiscard" || !cardUid) return render();
+  if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
+  resolvePending(app.match, { uid: cardUid });
+  if (!app.match.pending) closeBattleCardDetail();
+  return afterHumanAction();
+}
+
+function confirmLeaderDiscardChoice(cardUid) {
+  const pending = app.match?.pending;
+  if (!pending || pending.type !== "leaderDiscard" || !cardUid) return render();
+  const selectedUids = Array.isArray(pending.selectedUids) ? pending.selectedUids : [];
+  const card = (pending.candidates || []).find(item => item.uid === cardUid);
+  if (!card) return render();
+  if (selectedUids.includes(cardUid) || selectedUids.length < 1) return resolveLeaderDiscardChoice(cardUid);
+  const first = (pending.candidates || []).find(item => item.uid === selectedUids[0]);
+  const firstName = first?.name || first?.baseName || "已选手牌";
+  const secondName = card.name || card.baseName || "当前手牌";
+  const api = typeof wx !== "undefined" ? wx : null;
+  const content = `将弃置「${firstName}」和「${secondName}」，并抽 1 张牌。`;
+  if (api && api.showModal) {
+    api.showModal({
+      title: "确认弃置？",
+      content,
+      confirmText: "弃置",
+      confirmColor: "#8f3c1f",
+      cancelText: "继续选择",
+      success: res => {
+        if (res.confirm) resolveLeaderDiscardChoice(cardUid);
+        else render();
+      },
+      fail: () => render()
+    });
+    return;
+  }
+  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm(content)) return render();
+  return resolveLeaderDiscardChoice(cardUid);
 }
 
 function performSkipRevivePending() {
@@ -1529,7 +2238,7 @@ function handleMenu(action) {
     return setScene("settings");
   }
   if (action.id === "history") {
-    app.ui.historyPage = 0;
+    app.ui.historyScroll = 0;
     app.ui.historyLeaderDetailId = "";
     setScene("history");
   }
@@ -1544,9 +2253,11 @@ function applyMatchSetupOption(action) {
   app.ui.matchSetupDropdown = "";
   if (field === "humanFaction") {
     app.ui.deckPage = 0;
-    saveSettings({ humanFaction: value });
+    saveSettings(value === "random"
+      ? { humanLineupMode: "random", customDeckEnabled: false }
+      : { humanLineupMode: "selected", humanFaction: value });
   }
-  if (field === "humanLeader") {
+  if (field === "humanLeader" && settings.humanLineupMode !== "random") {
     saveSettings({ humanLeaderIds: { ...(settings.humanLeaderIds || {}), [settings.humanFaction]: value } });
   }
   if (field === "aiFaction") saveSettings({ aiFaction: value, aiOpponentRemembered: true });
@@ -1582,10 +2293,11 @@ function handleMatchSetup(action) {
 
   app.ui.matchSetupDropdown = "";
   const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const selectedIds = getActiveCustomDeckIds(settings, faction);
-  const status = deckStatus(selectedIds, faction);
-  const useCustomDeck = status.valid && settings.customDeckEnabled;
+  const faction = settings.humanLineupMode === "random" ? "random" : settings.humanFaction;
+  const randomLineup = faction === "random";
+  const selectedIds = randomLineup ? [] : getActiveCustomDeckIds(settings, faction);
+  const status = randomLineup ? { valid: false, ids: [] } : deckStatus(selectedIds, faction);
+  const useCustomDeck = !randomLineup && status.valid && settings.customDeckEnabled;
   if (action.id === "togglePreparedDeckMode") {
     if (!status.valid) return render();
     saveSettings({ customDeckEnabled: !useCustomDeck });
@@ -1599,8 +2311,8 @@ function handleMatchSetup(action) {
   }
   if (action.id === "startPrepared") {
     const startOptions = useCustomDeck
-      ? { mode: "ai", customDeckEnabled: true, humanCustomDeckIds: status.ids }
-      : { mode: "ai", customDeckEnabled: false };
+      ? { mode: "ai", humanFaction: faction, customDeckEnabled: true, humanCustomDeckIds: status.ids }
+      : { mode: "ai", humanFaction: faction, customDeckEnabled: false };
     saveSettings({ mode: "ai", customDeckEnabled: useCustomDeck });
     return startMatch(startOptions);
   }
@@ -1625,6 +2337,7 @@ function applyPvpSetupOption(action) {
   }
   if (field === "pvpRuleFaction") {
     if (value === "any") saveSettings({ pvpRuleFactionMode: "any", pvpRuleFaction: settings.pvpRuleFaction || settings.pvpFaction || settings.humanFaction });
+    else if (value === "random") saveSettings({ pvpRuleFactionMode: "random" });
     else saveSettings({ pvpRuleFactionMode: "fixed", pvpRuleFaction: value });
   }
   render();
@@ -1633,9 +2346,10 @@ function applyPvpSetupOption(action) {
 function handlePvpSetup(action) {
   const selectingOnline = app.pvp.room?.status === "selecting";
   const rules = normalizePvpRules(app.pvp.room?.rules || {});
-  const factionLocked = selectingOnline && rules.factionMode === "fixed";
-  const deckLocked = selectingOnline && rules.deckMode === "autoOnly";
-  const selectFields = factionLocked ? ["pvpLeader"] : ["pvpFaction", "pvpLeader"];
+  const randomLineupLocked = selectingOnline && rules.factionMode === "random";
+  const factionLocked = selectingOnline && rules.factionMode !== "any";
+  const deckLocked = selectingOnline && (rules.deckMode === "autoOnly" || randomLineupLocked);
+  const selectFields = randomLineupLocked ? [] : (factionLocked ? ["pvpLeader"] : ["pvpFaction", "pvpLeader"]);
   if (!selectingOnline) selectFields.push("pvpRuleFaction");
   if (action.id === "matchSetupCardDetail") {
     app.ui.matchSetupDropdown = "";
@@ -1672,14 +2386,15 @@ function handlePvpSetup(action) {
     return render();
   }
   if (!selectingOnline && action.id === "pvpRuleDeckMode") {
+    if (currentRulesFromSettings().factionMode === "random") return render();
     saveSettings({ pvpRuleDeckMode: action.value === "autoOnly" ? "autoOnly" : "any" });
     return render();
   }
   const settings = loadSettings();
-  const faction = factionLocked ? rules.faction : (settings.pvpFaction || settings.humanFaction);
+  const faction = randomLineupLocked ? "random" : (factionLocked ? rules.faction : (settings.pvpFaction || settings.humanFaction));
   if (action.id === "pvpDeckMode") {
     if (deckLocked && action.value === "custom") return toast("本房间仅允许自动卡牌");
-    if (action.value === "custom" && faction === "random") return toast("随机阵营将使用随机卡牌");
+    if (action.value === "custom" && faction === "random") return toast("随机阵容将使用随机卡牌");
     saveSettings({ pvpDeckMode: action.value === "custom" ? "custom" : "random" });
     return render();
   }
@@ -1906,16 +2621,25 @@ function updatePvpRoomRules(patch) {
 }
 
 function setPvpReady(ready) {
+  console.log("[pvp-ready-debug] setPvpReady click", {
+    roomId: app.pvp.roomId,
+    playerIndex: app.pvp.playerIndex,
+    ready: !!ready,
+    submitting: app.pvp.submitting,
+    room: pvpReadyDebug(app.pvp.room)
+  });
   if (!app.pvp.roomId || app.pvp.submitting) {
-    console.log("[pvp] setPvpReady 被跳过: roomId=", app.pvp.roomId, "submitting=", app.pvp.submitting);
+    console.warn("[pvp-ready-debug] setPvpReady skipped", { roomId: app.pvp.roomId, submitting: app.pvp.submitting });
     return;
   }
-  console.log("[pvp] setPvpReady:", ready, "roomId=", app.pvp.roomId);
   app.pvp.submitting = true;
-  pvpClient.setReady(app.pvp.roomId, ready).then(result => {
-    console.log("[pvp] setReady 成功, room.status=", result.room?.status);
+  pvpClient.setReadyConfirmed(app.pvp.roomId, ready).then(result => {
+    const readyVersion = Number(result.room?.rules?.version || app.pvp.room?.rules?.version || 0) || 0;
+    app.pvp.readyRuleVersion = ready ? readyVersion : 0;
+    console.log("[pvp-ready-debug] setPvpReady success", { playerIndex: result.playerIndex, readyVersion, room: pvpReadyDebug(result.room) });
     applyRoomUpdate(result.room, result.playerIndex);
   }).catch(err => {
+    console.error("[pvp-ready-debug] setPvpReady failed", { code: err?.code || "", message: err?.message || String(err), room: pvpReadyDebug(app.pvp.room) });
     app.pvp.submitting = false;
     toast(err.message || "准备失败");
     render();
@@ -1923,9 +2647,29 @@ function setPvpReady(ready) {
 }
 
 function startPvpSelection() {
+  console.log("[pvp-ready-debug] startPvpSelection click", {
+    roomId: app.pvp.roomId,
+    playerIndex: app.pvp.playerIndex,
+    submitting: app.pvp.submitting,
+    opponentReady: pvpPlayerReady(app.pvp.room, 1),
+    room: pvpReadyDebug(app.pvp.room)
+  });
   if (!app.pvp.roomId || app.pvp.submitting) {
-    console.log("[pvp] startPvpSelection 被跳过: roomId=", app.pvp.roomId, "submitting=", app.pvp.submitting);
+    console.warn("[pvp-ready-debug] startPvpSelection skipped", { roomId: app.pvp.roomId, submitting: app.pvp.submitting });
     return;
+  }
+  if (app.pvp.playerIndex === 0 && app.pvp.room?.status === "waiting" && !pvpPlayerReady(app.pvp.room, 1)) {
+    app.pvp.submitting = true;
+    return pvpClient.fetchRoom(app.pvp.roomId).then(result => {
+      applyRoomUpdate(result.room, result.playerIndex);
+      if (pvpPlayerReady(app.pvp.room, 1)) return startPvpSelection();
+      toast("等待好友准备");
+      render();
+    }).catch(err => {
+      app.pvp.submitting = false;
+      toast(err.message || "刷新房间失败");
+      render();
+    });
   }
   console.log("[pvp] startPvpSelection, roomId=", app.pvp.roomId);
   app.pvp.submitting = true;
@@ -1970,6 +2714,8 @@ function handlePvpRoom(action) {
     app.ui.pvpShareGuideOpen = false;
     return render();
   }
+  if (action.id === "savePvpShareCode") return savePvpShareCode();
+  if (action.id === "retryPvpShareCode") return loadPvpShareCode(app.pvp.roomId, true);
   if (action.id === "pvpShareGuidePanel") return render();
   if (app.ui.pvpShareGuideOpen) return render();
   if (action.id === "closePvpRoomRuleDropdown") {
@@ -1981,7 +2727,9 @@ function handlePvpRoom(action) {
     const current = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
     return updatePvpRoomRules(action.value === "any"
       ? { factionMode: "any", faction: current.faction }
-      : { factionMode: "fixed", faction: action.value });
+      : (action.value === "random"
+        ? { factionMode: "random", faction: current.faction }
+        : { factionMode: "fixed", faction: action.value }));
   }
   if (action.id === "pvpRoomRuleFaction") {
     app.ui.matchSetupDropdown = app.ui.matchSetupDropdown === "pvpRoomRuleFaction" ? "" : "pvpRoomRuleFaction";
@@ -1996,12 +2744,6 @@ function handlePvpRoom(action) {
   if (action.id === "pvpCopy") {
     if (pvpClient.copyRoomId(app.pvp.roomId)) toast("房间号已复制");
     else toast(app.pvp.roomId || "暂无房间号");
-    return render();
-  }
-  if (action.id === "pvpCopyError") {
-    const message = [`房间号：${app.pvp.roomId || "无"}`, `错误信息：${app.pvp.error || "无"}`].join("\n");
-    if (pvpClient.copyText(message)) toast("错误信息已复制");
-    else toast(app.pvp.error || "暂无错误信息");
     return render();
   }
   if (action.id === "pvpJoin") return promptJoinPvpRoom();
@@ -2019,12 +2761,14 @@ function handlePvpRoom(action) {
     const current = normalizePvpRules(app.pvp.room?.rules || currentRulesFromSettings());
     return updatePvpRoomRules({ deckMode: current.deckMode === "autoOnly" ? "any" : "autoOnly" });
   }
-  if (action.id === "pvpReady") return setPvpReady(!app.pvp.room?.players?.[app.pvp.playerIndex]?.ready);
+  if (action.id === "pvpReady") return setPvpReady(!pvpPlayerReady(app.pvp.room, app.pvp.playerIndex));
   if (action.id === "pvpStartSelection") return startPvpSelection();
   if (action.id === "pvpGoSetup") return setScene("pvpSetup");
   if (action.id === "pvpReturnRoom") return returnPvpRoom();
   if (action.id === "pvpBack") {
+    if (app.pvp.roomId && app.pvp.room && app.pvp.playerIndex === 0) return confirmDissolvePvpRoom();
     resetPvpState();
+    app.match = null;
     return setScene("menu");
   }
   render();
@@ -2037,6 +2781,12 @@ function handleBattle(action) {
     return render();
   }
   if (!app.match) return;
+  if (action.id === "dismissLeaderReveal") {
+    const local = app.match.mode === "online" && Number.isInteger(app.match.localPlayerIndex) ? app.match.localPlayerIndex : 0;
+    app.ui.dismissedLeaderRevealKey = action.revealKey || `${app.match.matchId || "local"}:${app.match.leaderReveals?.[local]?.seq || 0}`;
+    return render();
+  }
+  if (action.id === "leaderRevealPanel") return render();
   if (action.id === "battleLog") return openBattleLogHistory();
   if (action.id === "closeBattleLogHistory") {
     app.ui.battleLogHistoryOpen = false;
@@ -2072,6 +2822,12 @@ function handleBattle(action) {
     if (app.match.pending?.type === "revive" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return confirmSkipRevivePending();
     }
+    if (app.match.pending?.type === "leaderDiscard" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
+      closeBattleCardDetail();
+      if (isOnlineMatch()) return submitPvpAction({ type: "cancelPending" });
+      cancelPending(app.match);
+      return afterHumanAction();
+    }
     app.ui.battleCardDetailId = "";
     app.ui.battleCardDetailUid = "";
     app.ui.mulliganHelpOpen = false;
@@ -2079,6 +2835,7 @@ function handleBattle(action) {
     return render();
   }
   if (action.id === "mulliganDetailSwap") return handleMulliganSwap(action.cardUid, true);
+  if (action.id === "targetChoice" && app.match.pending?.type === "leaderDiscard") return confirmLeaderDiscardChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "revive") {
     closeBattleCardDetail();
     if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: action.cardUid } });
@@ -2169,6 +2926,32 @@ function handleBattle(action) {
   afterHumanAction();
 }
 
+function handleBattleCards(action) {
+  if (action.id === "detailPanel" || action.id === "battleCardsHelpPanel") return;
+  if (action.id === "closeDetail") {
+    app.ui.battleCardsDetailId = "";
+    app.ui.detailSwipe = null;
+    return render();
+  }
+  if (app.ui.battleCardsDetailId) return render();
+  if (action.id === "battleCardsHelp") {
+    app.ui.battleCardsHelpOpen = true;
+    return render();
+  }
+  if (action.id === "closeBattleCardsHelp") {
+    app.ui.battleCardsHelpOpen = false;
+    return render();
+  }
+  if (app.ui.battleCardsHelpOpen) return render();
+  if (action.id === "switchBattleCardsSide") {
+    app.ui.battleCardsSide = action.side === "enemy" ? "enemy" : "mine";
+    app.ui.detailSwipe = null;
+    return render();
+  }
+  if (action.id === "backBattleCards") return setScene("result");
+  render();
+}
+
 function handleAction(action) {
   vibrate();
   if (app.ui.mulliganSwapAnim) return;
@@ -2181,13 +2964,26 @@ function handleAction(action) {
   if (app.scene === "deckBuilder") return handleDeckBuilder(action);
   if (app.scene === "history") return handleHistory(action);
   if (app.scene === "battle") return handleBattle(action);
+  if (app.scene === "battleCards") return handleBattleCards(action);
   if (app.scene === "result") {
+    if (action.id === "viewBattleCards") {
+      app.ui.battleCardDetailId = "";
+      app.ui.battleCardDetailUid = "";
+      app.ui.battleCardsSide = "mine";
+      app.ui.battleCardsScrolls = [0, 0];
+      app.ui.battleCardsDetailId = "";
+      app.ui.battleCardsHelpOpen = false;
+      app.ui.detailSwipe = null;
+      return setScene("battleCards");
+    }
     if (action.id === "restart") {
       if (isOnlineMatch()) return returnPvpRoom();
       return startMatch();
     }
     if (action.id === "home") {
+      if (isOnlineMatch() && app.pvp.playerIndex === 0) return confirmDissolvePvpRoom();
       if (isOnlineMatch()) resetPvpState();
+      app.match = null;
       setScene("menu");
     }
   }
@@ -2316,40 +3112,60 @@ function handleDiscardPileSwipe(start, end) {
   return true;
 }
 
-function handleBattleFieldRowSwipe(start, end) {
-  if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner != null) return false;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const absX = Math.abs(dx);
-  const absY = Math.abs(dy);
-  if (absX < 42 || absX < absY * 1.2) return false;
-  const action = findAction(start);
-  if (!action || !["battleFieldRow", "battleCardDetail"].includes(action.id) || !action.scrollKey || !(action.maxScroll > 0)) return false;
+function canScrollBattleCards() {
+  return app.scene === "battle" && app.match && !app.match.over && !app.ui.battleCardDetailId && !app.ui.battleCardDetailUid && !app.ui.battleLogHistoryOpen && app.ui.discardPileOwner == null;
+}
+
+function scrollBattleFieldRowBy(action, deltaX) {
+  if (!canScrollBattleCards() || !action?.scrollKey || !(action.maxScroll > 0)) return false;
   if (!app.ui.battleRowScrolls) app.ui.battleRowScrolls = {};
-  const current = app.ui.battleRowScrolls[action.scrollKey] || 0;
-  const step = action.pageStep || 96;
-  const next = Math.max(0, Math.min(current + (dx < 0 ? step : -step), action.maxScroll));
-  if (Math.abs(next - current) > 0.5) {
+  const before = app.ui.battleRowScrolls[action.scrollKey] || 0;
+  const next = Math.max(0, Math.min(before - deltaX, action.maxScroll));
+  if (Math.abs(next - before) > 0.1) {
     app.ui.battleRowScrolls[action.scrollKey] = next;
     render();
   }
   return true;
 }
 
-function handleHandSwipe(start, end) {
-  if (!start || !end || app.scene !== "battle" || !app.match || app.match.over || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner != null) return false;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.2) return false;
-  const handTop = view.height - view.safeBottom - BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_SWIPE_TOP_PADDING;
-  const handBottom = view.height - view.safeBottom - (BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_CARD_H) + BATTLE_HAND_SWIPE_BOTTOM_PADDING;
-  if (start.y < handTop || start.y > handBottom) return false;
-  const nextPage = clampHandPage(app.ui.handPage + (dx < 0 ? 1 : -1));
-  if (nextPage !== app.ui.handPage) {
-    app.ui.handPage = nextPage;
-    startPageTransition("battleHand", "x", dx < 0 ? view.width * 0.38 : -view.width * 0.38);
+let battleScrollMotionId = 0;
+
+function cancelBattleScrollInertia() {
+  battleScrollMotionId += 1;
+}
+
+function startBattleScrollInertia(target, initialVelocity) {
+  const velocityLimit = 2.4;
+  let velocity = Math.max(-velocityLimit, Math.min(velocityLimit, initialVelocity || 0));
+  if (!target || Math.abs(velocity) < 0.04) return;
+  const motionId = ++battleScrollMotionId;
+  let lastTime = Date.now();
+
+  function step() {
+    if (motionId !== battleScrollMotionId || !canScrollBattleCards()) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    let before;
+    let next;
+    if (target.type === "hand") {
+      before = app.ui.handScroll || 0;
+      next = clampHandScroll(before + velocity * elapsed);
+      app.ui.handScroll = next;
+    } else {
+      if (!target.scrollKey || !(target.maxScroll > 0)) return;
+      if (!app.ui.battleRowScrolls) app.ui.battleRowScrolls = {};
+      before = app.ui.battleRowScrolls[target.scrollKey] || 0;
+      next = Math.max(0, Math.min(before + velocity * elapsed, target.maxScroll));
+      app.ui.battleRowScrolls[target.scrollKey] = next;
+    }
+    if (Math.abs(next - before) < 0.05) return;
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
   }
-  return true;
+
+  requestFrame(step);
 }
 
 function handleDeckBuilderSwipe(start, end) {
@@ -2407,21 +3223,114 @@ function handleSettingsSwipe(start, end) {
   return false;
 }
 
-function handleHistorySwipe(start, end) {
-  if (!start || !end || app.scene !== "history" || app.ui.historyLeaderDetailId) return false;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const absX = Math.abs(dx);
-  const absY = Math.abs(dy);
-  const listTop = view.safeTop + 30 + 58;
-  const listBottom = view.height - view.safeBottom - 76;
-  if (start.y < listTop || start.y > listBottom || absY < 42 || absY < absX * 1.2) return false;
-  const nextPage = historyScene.clampPage(view, app.ui, (app.ui.historyPage || 0) + (dy < 0 ? 1 : -1));
-  if (nextPage !== app.ui.historyPage) {
-    app.ui.historyPage = nextPage;
-    startPageTransition("history", "y", dy < 0 ? 98 : -98);
+function historyScrollBounds() {
+  return historyScene.scrollBounds(view);
+}
+
+function canScrollHistory() {
+  return app.scene === "history" && !app.ui.historyLeaderDetailId;
+}
+
+function clampHistoryScroll(value) {
+  const { maxScroll } = historyScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollHistoryBy(deltaY) {
+  if (!canScrollHistory()) return false;
+  const before = app.ui.historyScroll || 0;
+  const next = clampHistoryScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.1) {
+    app.ui.historyScroll = next;
+    render();
   }
   return true;
+}
+
+let historyScrollMotionId = 0;
+
+function cancelHistoryScrollInertia() {
+  historyScrollMotionId += 1;
+}
+
+function startHistoryScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (!canScrollHistory() || Math.abs(velocity) < 0.04) return;
+  const motionId = ++historyScrollMotionId;
+  let lastTime = Date.now();
+
+  function step() {
+    if (motionId !== historyScrollMotionId || !canScrollHistory()) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const before = app.ui.historyScroll || 0;
+    const next = clampHistoryScroll(before + velocity * elapsed);
+    app.ui.historyScroll = next;
+    if (Math.abs(next - before) < 0.05) return;
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+  }
+
+  requestFrame(step);
+}
+
+function battleCardsPageScrollBounds() {
+  return battleCardsScene.scrollBounds(view, app.match, app.ui);
+}
+
+function canScrollBattleCardsPage() {
+  return app.scene === "battleCards" && app.match && !app.ui.battleCardsDetailId && !app.ui.battleCardsHelpOpen;
+}
+
+function clampBattleCardsPageScroll(value) {
+  const { maxScroll } = battleCardsPageScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollBattleCardsPageBy(deltaY) {
+  if (!canScrollBattleCardsPage()) return false;
+  const bounds = battleCardsPageScrollBounds();
+  if (!Array.isArray(app.ui.battleCardsScrolls)) app.ui.battleCardsScrolls = [0, 0];
+  const before = app.ui.battleCardsScrolls[bounds.playerIndex] || 0;
+  const next = clampBattleCardsPageScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.1) {
+    app.ui.battleCardsScrolls[bounds.playerIndex] = next;
+    render();
+  }
+  return true;
+}
+
+let battleCardsPageScrollMotionId = 0;
+
+function cancelBattleCardsPageScrollInertia() {
+  battleCardsPageScrollMotionId += 1;
+}
+
+function startBattleCardsPageScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (!canScrollBattleCardsPage() || Math.abs(velocity) < 0.04) return;
+  const motionId = ++battleCardsPageScrollMotionId;
+  let lastTime = Date.now();
+
+  function step() {
+    if (motionId !== battleCardsPageScrollMotionId || !canScrollBattleCardsPage()) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const bounds = battleCardsPageScrollBounds();
+    if (!Array.isArray(app.ui.battleCardsScrolls)) app.ui.battleCardsScrolls = [0, 0];
+    const before = app.ui.battleCardsScrolls[bounds.playerIndex] || 0;
+    const next = clampBattleCardsPageScroll(before + velocity * elapsed);
+    app.ui.battleCardsScrolls[bounds.playerIndex] = next;
+    if (Math.abs(next - before) < 0.05) return;
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+  }
+
+  requestFrame(step);
 }
 
 function detailEntry(card) {
@@ -2454,6 +3363,7 @@ function detailEntryMatches(entry, detailId, detailUid) {
 
 function currentDetailState() {
   if (app.ui.deckCardDetailId) return { id: app.ui.deckCardDetailId, uid: "", slot: "deck" };
+  if (app.ui.battleCardsDetailId) return { id: app.ui.battleCardsDetailId, uid: "", slot: "battleCards" };
   if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return { id: app.ui.battleCardDetailId, uid: app.ui.battleCardDetailUid, slot: "battle" };
   if (app.ui.settingCardDetailId) return { id: app.ui.settingCardDetailId, uid: "", slot: "settings" };
   if (app.ui.matchSetupCardDetailId) return { id: app.ui.matchSetupCardDetailId, uid: "", slot: app.scene === "pvpSetup" ? "pvpSetup" : "matchSetup" };
@@ -2464,6 +3374,7 @@ function currentDetailState() {
 function setCurrentDetailCard(slot, card, cardUid = "") {
   if (!card) return;
   if (slot === "deck") app.ui.deckCardDetailId = card.id;
+  else if (slot === "battleCards") app.ui.battleCardsDetailId = card.id;
   else if (slot === "battle") {
     app.ui.battleCardDetailId = card.id || "";
     app.ui.battleCardDetailUid = cardUid || card.uid || "";
@@ -2508,6 +3419,7 @@ function pvpSetupDetailEntries(settings) {
 
 function getCurrentDetailCardList() {
   if (app.scene === "battle" && battleScene.detailCardEntries) return battleScene.detailCardEntries(app.match, app.ui, view);
+  if (app.scene === "battleCards" && battleCardsScene.detailCards) return detailEntries(battleCardsScene.detailCards(app.match, app.ui));
   if (app.scene === "history" && historyScene.detailLeaderCards) return detailEntries(historyScene.detailLeaderCards(view, app.ui));
   const settings = loadSettings();
   if (app.scene === "deckBuilder") return detailEntries(sortedEligibleGroups(settings.humanFaction).map(group => group.card));
@@ -2557,6 +3469,15 @@ function findAction(point) {
 
 function handleTap(point) {
   const action = findAction(point);
+  if (app.scene === "pvpRoom") {
+    console.log("[pvp-ready-debug] pvpRoom tap", {
+      point,
+      actionId: action?.id || "",
+      playerIndex: app.pvp.playerIndex,
+      submitting: app.pvp.submitting,
+      room: pvpReadyDebug(app.pvp.room)
+    });
+  }
   if (action) handleAction(action);
 }
 
@@ -2582,6 +3503,14 @@ function openBattleLogHistory() {
 function openHistoryLeaderDetail(cardId) {
   if (!cardId) return;
   app.ui.historyLeaderDetailId = cardId;
+  app.ui.detailSwipe = null;
+  vibrate();
+  render();
+}
+
+function openBattleCardsDetail(cardId) {
+  if (!cardId) return;
+  app.ui.battleCardsDetailId = cardId;
   app.ui.detailSwipe = null;
   vibrate();
   render();
@@ -2627,6 +3556,9 @@ function startLongPress(point) {
     if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
       openDetail = openHistoryLeaderDetail;
     }
+    if (app.scene === "battleCards" && !app.ui.battleCardsDetailId && !app.ui.battleCardsHelpOpen && action.id === "battleCardsCard") {
+      openDetail = openBattleCardsDetail;
+    }
     if (app.scene === "matchSetup" && !app.ui.matchSetupCardDetailId && ["humanLeader", "aiLeader", "selectMatchSetupOption"].includes(action.id)) {
       openDetail = openMatchSetupCardDetail;
     }
@@ -2661,7 +3593,10 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
   wx.onTouchStart(event => {
     const point = normalizeTouch(event);
     if (!point) return;
-    touchStartState = { point };
+    cancelBattleScrollInertia();
+    cancelHistoryScrollInertia();
+    cancelBattleCardsPageScrollInertia();
+    touchStartState = { point, startTime: Date.now() };
     startLongPress(point);
   });
 }
@@ -2672,7 +3607,7 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
     if (!point || !touchStartState) return;
     
     // 实时跟踪卡牌详情滑动
-    const detailId = app.ui.deckCardDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
+    const detailId = app.ui.deckCardDetailId || app.ui.battleCardsDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
     if (detailId && !app.ui.detailSwipe?.animating) {
       const dx = point.x - touchStartState.point.x;
       const dy = point.y - touchStartState.point.y;
@@ -2696,6 +3631,101 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         scrollBattleLogHistoryBy(point.y - last.y);
         touchStartState.battleLogHistoryScrolled = true;
         touchStartState.lastPoint = point;
+        return;
+      }
+    }
+
+    if (canScrollBattleCards()) {
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.battleScrollTarget && Math.abs(dx) > 4 && Math.abs(dx) > Math.abs(dy) * 0.8) {
+        const handTop = view.height - view.safeBottom - BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_SWIPE_TOP_PADDING;
+        const handBottom = view.height - view.safeBottom - (BATTLE_HAND_BOTTOM_OFFSET - BATTLE_HAND_CARD_H) + BATTLE_HAND_SWIPE_BOTTOM_PADDING;
+        if (start.y >= handTop && start.y <= handBottom && handScrollBounds().maxScroll > 0) {
+          touchStartState.battleScrollTarget = { type: "hand" };
+        } else {
+          const action = findAction(start);
+          if (action && ["battleFieldRow", "battleCardDetail"].includes(action.id) && action.scrollKey && action.maxScroll > 0) {
+            touchStartState.battleScrollTarget = { type: "row", scrollKey: action.scrollKey, maxScroll: action.maxScroll };
+          }
+        }
+      }
+
+      const target = touchStartState.battleScrollTarget;
+      if (target) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaX = point.x - last.x;
+        const elapsed = Math.max(1, now - lastTime);
+        if (target.type === "hand") scrollHandBy(deltaX);
+        else scrollBattleFieldRowBy(target, deltaX);
+        const instantVelocity = -deltaX / elapsed;
+        const previousVelocity = touchStartState.battleScrollVelocity;
+        touchStartState.battleScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.battleCardsScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
+        return;
+      }
+    }
+
+    if (canScrollBattleCardsPage()) {
+      const bounds = battleCardsPageScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.battleCardsPageScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.battleCardsPageScrolling = true;
+      }
+      if (touchStartState.battleCardsPageScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollBattleCardsPageBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.battleCardsPageScrollVelocity;
+        touchStartState.battleCardsPageScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.battleCardsPageScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
+        return;
+      }
+    }
+
+    if (canScrollHistory()) {
+      const bounds = historyScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.historyScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.historyScrolling = true;
+      }
+      if (touchStartState.historyScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollHistoryBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.historyScrollVelocity;
+        touchStartState.historyScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.historyScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
         return;
       }
     }
@@ -2748,13 +3778,28 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       render();
     }
 
+    if (state && state.battleCardsScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startBattleScrollInertia(state.battleScrollTarget, (state.battleScrollVelocity || 0) * releaseFactor);
+      return;
+    }
+    if (state && state.battleCardsPageScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startBattleCardsPageScrollInertia((state.battleCardsPageScrollVelocity || 0) * releaseFactor);
+      return;
+    }
+    if (state && state.historyScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startHistoryScrollInertia((state.historyScrollVelocity || 0) * releaseFactor);
+      return;
+    }
     if (state && state.battleLogHistoryScrolled) return;
     if (state && state.settingsDeckScrolled) return;
     if (handleBattleLogHistorySwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
-    if (handleBattleFieldRowSwipe(start, point)) return;
-    if (handleHandSwipe(start, point)) return;
-    if (handleHistorySwipe(start, point)) return;
     if (handleSettingsSwipe(start, point)) return;
     if (handleDeckBuilderSwipe(start, point)) return;
     if (Math.hypot(point.x - start.x, point.y - start.y) <= 20) handleTap(point);
@@ -2772,7 +3817,7 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
   });
 }
 
-console.log("===== 章鱼牌 v0718-join-fallback-v1 新代码已加载 =====");
+console.log("===== 章鱼牌 v20260720-ready-debug-v1 诊断代码已加载 =====");
 pvpClient.initCloud();
 setupShare();
 handleLaunchRoom();

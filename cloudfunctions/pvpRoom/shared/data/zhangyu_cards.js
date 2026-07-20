@@ -5225,7 +5225,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/郑和.webp"
+      "imageUrl": "assets/card-icons/汪大渊.webp"
     },
     {
       "id": "zhangyu-0323",

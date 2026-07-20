@@ -19,15 +19,23 @@ function leaderSkill(card) {
   return card ? `技能：${cardSummary(card)}` : "暂无技能";
 }
 
+function currentHumanFaction(settings) {
+  return settings.humanLineupMode === "random" ? "random" : settings.humanFaction;
+}
+
 function setupOptions(settings, field, slots, faction) {
+  const humanFaction = currentHumanFaction(settings);
   if (field === "humanFaction") {
-    return FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) }));
+    return [{ value: "random", label: "随机阵容", hint: "阵营、主将、卡牌均在开局时随机确定" }].concat(
+      FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) }))
+    );
   }
   if (field === "aiFaction") {
     return [{ value: "random", label: "随机", hint: "开局随机确定阵营被动" }].concat(FACTION_KEYS.map(value => ({ value, label: FACTION_LABELS[value] || value, hint: factionPerkSummary(value) })));
   }
   if (field === "humanLeader") {
-    return leadersFor(settings.humanFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }));
+    if (humanFaction === "random") return [{ value: "random", label: "随机", hint: "随阵营随机确定主将" }];
+    return leadersFor(humanFaction).map(card => ({ value: card.id, label: displayName(card), hint: leaderSkill(card) }));
   }
   if (field === "aiLeader") {
     if (settings.aiFaction === "random") return [{ value: "random", label: "随机" }];
@@ -42,8 +50,9 @@ function setupOptions(settings, field, slots, faction) {
 }
 
 function selectedValue(settings, field) {
-  if (field === "humanFaction") return settings.humanFaction;
-  if (field === "humanLeader") return selectedLeader(settings, "human", settings.humanFaction)?.id || "";
+  const humanFaction = currentHumanFaction(settings);
+  if (field === "humanFaction") return humanFaction;
+  if (field === "humanLeader") return humanFaction === "random" ? "random" : (selectedLeader(settings, "human", humanFaction)?.id || "");
   if (field === "aiFaction") return settings.aiFaction === "random" ? "random" : settings.aiFaction;
   if (field === "aiLeader") {
     if (settings.aiFaction === "random") return "random";
@@ -54,7 +63,8 @@ function selectedValue(settings, field) {
 }
 
 function detailLeaderCards(settings, detailId) {
-  const candidates = [leadersFor(settings.humanFaction)];
+  const humanFaction = currentHumanFaction(settings);
+  const candidates = [humanFaction === "random" ? [] : leadersFor(humanFaction)];
   if (settings.aiFaction !== "random") candidates.push(leadersFor(settings.aiFaction));
   return candidates.find(list => list.some(card => card.id === detailId)) || candidates.reduce((all, list) => all.concat(list), []);
 }
@@ -145,10 +155,11 @@ function draw(ctx, view, actions, ui = {}) {
     if (!detail) ui.matchSetupCardDetailId = "";
   }
   const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const selectedIds = getActiveCustomDeckIds(settings, faction);
-  const status = deckStatus(selectedIds, faction);
-  const useCustomDeck = status.valid && settings.customDeckEnabled;
+  const faction = currentHumanFaction(settings);
+  const randomLineup = faction === "random";
+  const selectedIds = randomLineup ? [] : getActiveCustomDeckIds(settings, faction);
+  const status = randomLineup ? { valid: false, total: 0, ids: [] } : deckStatus(selectedIds, faction);
+  const useCustomDeck = !randomLineup && status.valid && settings.customDeckEnabled;
   const humanLeader = selectedLeader(settings, "human", faction);
   const aiLeader = selectedLeader(settings, "ai", settings.aiFaction);
   const aiFactionLabel = settings.aiFaction === "random" ? "随机" : (FACTION_LABELS[settings.aiFaction] || settings.aiFaction);
@@ -171,11 +182,11 @@ function draw(ctx, view, actions, ui = {}) {
 
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "rgba(255, 250, 240, 0.94)", "#dcc48d");
   drawSectionTitle(ctx, "我的牌组", contentX, panelY + 28);
-  drawRow(ctx, actions, { id: "humanFaction", label: "阵营", value: FACTION_LABELS[faction] || faction, x: contentX, y: panelY + 58, w: rowW, fill: "#2f6f57" }, dropdownField === "humanFaction", anchors);
+  drawRow(ctx, actions, { id: "humanFaction", label: "阵营", value: randomLineup ? "随机阵容" : (FACTION_LABELS[faction] || faction), x: contentX, y: panelY + 58, w: rowW, fill: "#2f6f57" }, dropdownField === "humanFaction", anchors);
   drawRow(ctx, actions, {
     id: "humanLeader",
     label: "主将",
-    value: short(humanLeader ? displayName(humanLeader) : "未选择", 14),
+    value: randomLineup ? "随机" : short(humanLeader ? displayName(humanLeader) : "未选择", 14),
     card: humanLeader,
     cardId: humanLeader?.id,
     x: contentX,
@@ -184,12 +195,16 @@ function draw(ctx, view, actions, ui = {}) {
     fill: "#7a5a95"
   }, dropdownField === "humanLeader", anchors);
 
-  const statusText = status.valid
-    ? `自定义牌组已完成：${status.total}张，本局${useCustomDeck ? "使用自定义" : "使用随机"}。`
-    : `自定义牌组未完成：${status.total}/40，可编辑或随机开局。`;
-  drawInfoCard(ctx, statusText, contentX, panelY + 160, rowW, 34, status.valid ? (useCustomDeck ? "#2f6f57" : "#8d6840") : "#8f3c1f");
+  const statusText = randomLineup
+    ? "开局时随机确定阵营、主将与卡牌。"
+    : (status.valid
+      ? `自定义牌组已完成：${status.total}张，本局${useCustomDeck ? "使用自定义" : "使用随机"}。`
+      : `自定义牌组未完成：${status.total}/40，可编辑或随机开局。`);
+  drawInfoCard(ctx, statusText, contentX, panelY + 160, rowW, 34, randomLineup ? "#2f6f57" : (status.valid ? (useCustomDeck ? "#2f6f57" : "#8d6840") : "#8f3c1f"));
 
-  if (status.valid) {
+  if (randomLineup) {
+    drawInfoCard(ctx, "本局阵容全部随机生成", contentX, panelY + 218, rowW, 36, "#8d6840");
+  } else if (status.valid) {
     const toggle = { id: "togglePreparedDeckMode", x: contentX, y: panelY + 218, w: (rowW - 10) / 2, h: 36 };
     const edit = { id: "editCustomDeck", x: toggle.x + toggle.w + 10, y: panelY + 218, w: toggle.w, h: 36 };
     actions.push(toggle, edit);
@@ -220,7 +235,7 @@ function draw(ctx, view, actions, ui = {}) {
   const start = { id: "startPrepared", x: 46, y: bottom, w: view.width - 92, h: 46 };
   const back = { id: "back", x: 46, y: bottom + 58, w: view.width - 92, h: 42 };
   actions.push(start, back);
-  button(ctx, { ...start, label: useCustomDeck ? "使用该阵营牌组开始" : "随机卡牌开始", fill: "#2f6f57", stroke: "#1d4f3c", size: 15 });
+  button(ctx, { ...start, label: randomLineup ? "使用随机阵容开始" : (useCustomDeck ? "使用该阵营牌组开始" : "随机卡牌开始"), fill: "#2f6f57", stroke: "#1d4f3c", size: 15 });
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSetupDropdown(ctx, view, actions, settings, dropdownField, anchors);
   if (detail) {

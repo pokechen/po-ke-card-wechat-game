@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = {
   mode: "ai",
   mode: "ai",
   humanFaction: "Northern Realms",
+  humanLineupMode: "selected",
   aiFaction: "random",
   humanLeaderId: "",
   aiLeaderId: "",
@@ -131,6 +132,9 @@ function getActiveCustomDeckIds(settings, faction) {
 function normalizeSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...settings };
   next.mode = next.mode === "hotseat" ? "hotseat" : "ai";
+  const legacyRandomLineup = next.humanFaction === "random";
+  next.humanLineupMode = legacyRandomLineup || next.humanLineupMode === "random" ? "random" : "selected";
+  if (legacyRandomLineup) next.humanFaction = "Northern Realms";
   next.customDeckEnabled = !!next.customDeckEnabled;
   next.customDecks = { ...safeObject(next.customDecks) };
   next.customDeckSlots = { ...safeObject(next.customDeckSlots) };
@@ -140,7 +144,7 @@ function normalizeSettings(settings) {
   next.pvpLeaderIds = { ...safeObject(next.pvpLeaderIds) };
   next.pvpFaction = next.pvpFaction || next.humanFaction;
   next.pvpDeckMode = next.pvpDeckMode === "custom" ? "custom" : "random";
-  next.pvpRuleFactionMode = next.pvpRuleFactionMode === "fixed" ? "fixed" : "any";
+  next.pvpRuleFactionMode = ["fixed", "random"].includes(next.pvpRuleFactionMode) ? next.pvpRuleFactionMode : "any";
   next.pvpRuleFaction = next.pvpRuleFaction || next.pvpFaction || next.humanFaction;
   next.pvpRuleDeckMode = next.pvpRuleDeckMode === "autoOnly" ? "autoOnly" : "any";
   next.aiOpponentRemembered = !!next.aiOpponentRemembered;

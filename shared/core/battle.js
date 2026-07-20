@@ -23,15 +23,19 @@ const AI_DIFFICULTY = {
 };
 
 function makePlayer(name, index, faction, difficulty, customDeckIds, leaderId) {
+  const deck = buildDeck(index, { faction, difficulty, customDeckIds });
   return {
     name,
     index,
     faction,
     factionName: FACTION_LABELS[faction] || faction,
     difficulty: difficulty || "normal",
+    deckMode: customDeckIds ? "custom" : "random",
     leader: defaultLeader(faction, leaderId),
     leaderUsed: false,
-    deck: buildDeck(index, { faction, difficulty, customDeckIds }),
+    halfWeatherRound: null,
+    battleCardIds: deck.map(card => card.id),
+    deck,
     hand: [],
     board: { melee: [], ranged: [], siege: [] },
     discard: [],
@@ -124,6 +128,7 @@ function createMatch(options = {}) {
     lastPlayed: null,
     lastPlayedSeq: 0,
     playedHistory: [],
+    leaderReveals: [null, null],
     roundTransition: null
   };
   draw(state.players[0], 10);
@@ -329,15 +334,20 @@ function takeBestDiscardToHand(state, fromIndex, toIndex) {
   return true;
 }
 
-function discardTwoDrawOne(state, playerIndex) {
+function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
   const player = state.players[playerIndex];
-  const picks = player.hand.slice().sort((a, b) => cardValue(a) - cardValue(b)).slice(0, 2);
-  picks.forEach(card => {
-    player.hand = player.hand.filter(item => item.uid !== card.uid);
-    player.discard.push(card);
-  });
+  const picks = Array.isArray(selectedUids)
+    ? selectedUids.map(uid => player.hand.find(card => card.uid === uid)).filter(Boolean)
+    : player.hand.slice().sort((a, b) => cardValue(a) - cardValue(b)).slice(0, 2);
+  if (picks.length !== 2 || new Set(picks.map(card => card.uid)).size !== 2) return false;
+  const picked = new Set(picks.map(card => card.uid));
+  player.hand = player.hand.filter(card => !picked.has(card.uid));
+  player.discard.push(...picks);
+  const before = player.hand.length;
   draw(player, 1);
-  addLog(state, `${player.name}弃置 ${picks.length} 张牌并抽 1 张。`);
+  const drawn = player.hand.length - before;
+  addLog(state, `${player.name}弃置「${picks.map(cardLabel).join("」、「")}」并抽 ${drawn} 张牌。`);
+  return { picks, drawn };
 }
 
 function optimizeAgileRows(state, playerIndex) {
@@ -631,11 +641,24 @@ function pass(state) {
 }
 
 function useLeader(state, playerIndex) {
-  if (state.over || (state.mulligan && state.mulligan.active)) return false;
+  if (state.over || state.pending || state.roundTransition || (state.mulligan && state.mulligan.active)) return false;
   const player = state.players[playerIndex];
   if (!player || player.leaderUsed || !player.leader) return false;
-  player.leaderUsed = true;
   const text = leaderText(player);
+  const discardsTwo = /discard 2 cards/.test(text);
+  if (discardsTwo && player.hand.length < 2) return false;
+  if (discardsTwo && isHumanControlled(state, playerIndex)) {
+    state.pending = {
+      type: "leaderDiscard",
+      playerIndex,
+      candidates: player.hand.slice(),
+      selectedUids: [],
+      title: "黄巢：选择第 1 张弃牌"
+    };
+    addLog(state, `${player.name}正在为主将「${cardLabel(player.leader)}」选择 2 张弃牌。`);
+    return true;
+  }
+  player.leaderUsed = true;
   const locksOpponentLeader = /cancel your opponent|取消.*主将|cancel.*leader/.test(text);
   markLeaderUsed(state, playerIndex, locksOpponentLeader ? "对手主将技能被封锁" : "主将技能");
   if (locksOpponentLeader) {
@@ -644,10 +667,19 @@ function useLeader(state, playerIndex) {
   } else {
     addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」。`);
     if (/look at 3 random/.test(text)) {
-    const sample = shuffle(state.players[otherIndex(playerIndex)].hand).slice(0, 3).map(cardLabel).join("、") || "无手牌";
-    addLog(state, `侦察对手手牌：${sample}`);
-  } else if (/opponent.*discard|对手.*弃牌/.test(text)) {
-    if (!takeBestDiscardToHand(state, otherIndex(playerIndex), playerIndex)) draw(player, 1);
+      const cards = shuffle(state.players[otherIndex(playerIndex)].hand).slice(0, 3);
+      if (!Array.isArray(state.leaderReveals)) state.leaderReveals = [null, null];
+      state.leaderReveals[playerIndex] = {
+        seq: state.lastPlayed?.seq || state.lastPlayedSeq || 0,
+        playerIndex,
+        opponentIndex: otherIndex(playerIndex),
+        cards
+      };
+      const result = cards.length ? `手牌x${cards.length}` : "无手牌";
+      addLog(state, `侦察完成：查看对手 ${cards.length} 张手牌。`);
+      appendLastBattleActionEffect(state, "侦察", result);
+    } else if (/opponent.*discard|对手.*弃牌/.test(text)) {
+      if (!takeBestDiscardToHand(state, otherIndex(playerIndex), playerIndex)) draw(player, 1);
   } else if (/restore a card from your discard|弃牌堆.*手牌/.test(text)) {
     if (!takeBestDiscardToHand(state, playerIndex, playerIndex)) draw(player, 1);
   } else if (/discard 2 cards/.test(text)) {
@@ -672,7 +704,8 @@ function useLeader(state, playerIndex) {
   } else if (/draw|抽/.test(text)) {
     draw(player, 1);
   } else if (/half (of )?(their )?strength|lose half|半损|一半战力/i.test(text)) {
-    addLog(state, `${player.name}激活主将「${cardLabel(player.leader)}」：己方单位在恶劣时局下仅损失一半战力。`);
+    player.halfWeatherRound = state.round;
+    addLog(state, `${player.name}激活主将「${cardLabel(player.leader)}」：本回合己方单位在恶劣时局下仅损失一半战力。`);
   } else {
     addLog(state, "该主将能力已作为持续/被动效果处理。");
   }
@@ -1076,7 +1109,11 @@ function continueRoundTransition(state) {
   state.round = transition.nextRound || (state.round + 1);
   state.weather = {};
   state.rowHorn = [{ melee: false, ranged: false, siege: false }, { melee: false, ranged: false, siege: false }];
-  state.players.forEach(player => { player.passed = false; player.autoPassed = false; });
+  state.players.forEach(player => {
+    player.passed = false;
+    player.autoPassed = false;
+    player.halfWeatherRound = null;
+  });
   state.current = transition.winner === null ? 0 : transition.winner;
   if (state.round === 3) applySkelligePerk(state);
   autoPassEmptyPlayers(state);
@@ -1193,6 +1230,8 @@ function recordFinishedMatch(state) {
     aiLeader: cardLabel(p1.leader),
     humanLeaderId: p0.leader?.id || "",
     aiLeaderId: p1.leader?.id || "",
+    humanDeckMode: p0.deckMode || "random",
+    aiDeckMode: p1.deckMode || "random",
     difficulty: p1.difficulty,
     mode: state.mode,
     endReason: state.endReason || "normal"
@@ -1221,6 +1260,11 @@ function finishMatch(state) {
   return true;
 }
 
+function hasActiveHalfWeatherLeader(state, player) {
+  if (!state || !player || !player.leaderUsed || player.halfWeatherRound !== state.round) return false;
+  return /half (of )?(their )?strength|lose half|半损|一半战力/i.test(leaderText(player));
+}
+
 function recalcScores(state) {
   state.players.forEach((player, pi) => {
     ROWS.forEach(row => {
@@ -1234,8 +1278,7 @@ function recalcScores(state) {
       cards.forEach(card => {
         let value = card.strength || 0;
         if (!card.hero && state.weather[row]) {
-          const leaderHalfActive = player.leader && player.leaderUsed && /half (of )?(their )?strength|lose half|半损|一半战力/i.test(`${player.leader.leaderAbility || ""}${player.leader.abilityText || ""}`);
-          value = leaderHalfActive ? Math.ceil(value / 2) : Math.min(value, 1);
+          value = hasActiveHalfWeatherLeader(state, player) ? Math.ceil(value / 2) : Math.min(value, 1);
         }
         if (!card.hero && hasAbility(card, "Tight Bond") && bondCounts[card.baseName] > 1) value *= bondCounts[card.baseName];
         if (!card.hero) {
@@ -1370,7 +1413,8 @@ function aiStep(state) {
   const ai = state.players[1];
   const cfg = AI_DIFFICULTY[ai.difficulty || "normal"] || AI_DIFFICULTY.normal;
   if (ai.hand.length === 0) return pass(state);
-  if (!ai.leaderUsed && shouldUseLeader(state, cfg)) return useLeader(state, 1);
+  const canPayLeaderDiscard = !/discard 2 cards/.test(leaderText(ai)) || ai.hand.length >= 2;
+  if (!ai.leaderUsed && canPayLeaderDiscard && shouldUseLeader(state, cfg)) return useLeader(state, 1);
   const decision = aiDecideTurn(state, cfg);
   if (decision.action === "pass") return pass(state);
   if (decision.card) playCard(state, decision.card.uid, decision.row);
@@ -1440,6 +1484,44 @@ function resolvePending(state, choice = {}) {
     return playCard(state, uid, choice.row);
   }
   const playerIndex = pending.playerIndex;
+  if (pending.type === "leaderDiscard") {
+    const player = state.players[playerIndex];
+    const uid = String(choice.uid || "");
+    const selectedUids = Array.isArray(pending.selectedUids) ? pending.selectedUids.slice() : [];
+    const isCandidate = pending.candidates.some(card => card.uid === uid)
+      && player.hand.some(card => card.uid === uid);
+    if (!uid || !isCandidate) return false;
+    const selectedIndex = selectedUids.indexOf(uid);
+    if (selectedIndex >= 0) {
+      selectedUids.splice(selectedIndex, 1);
+      state.pending = {
+        ...pending,
+        selectedUids,
+        title: `黄巢：选择第 ${selectedUids.length + 1} 张弃牌`
+      };
+      return true;
+    }
+    selectedUids.push(uid);
+    if (selectedUids.length < 2) {
+      state.pending = {
+        ...pending,
+        selectedUids,
+        title: "黄巢：选择第 2 张弃牌"
+      };
+      return true;
+    }
+    const pickedCards = selectedUids.map(selectedUid => player.hand.find(card => card.uid === selectedUid));
+    if (pickedCards.some(card => !card)) return false;
+    state.pending = null;
+    const result = discardTwoDrawOne(state, playerIndex, selectedUids);
+    if (!result) return false;
+    player.leaderUsed = true;
+    const drawResult = result.drawn > 0 ? `，并抽${result.drawn}张牌` : "";
+    markLeaderUsed(state, playerIndex, `弃牌：${pickedCards.map(cardLabel).join("、")}${drawResult}`);
+    addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」。`);
+    afterPlay(state);
+    return true;
+  }
   state.pending = null;
   if (pending.type === "revive") {
     if (!choice.skip && choice.uid) reviveCardByUid(state, playerIndex, choice.uid);
@@ -1480,6 +1562,12 @@ function cancelPending(state) {
     addLog(state, "已取消选线，请重新选择手牌。 ");
     return true;
   }
+  if (state.pending.type === "leaderDiscard") {
+    const player = state.players[state.pending.playerIndex];
+    state.pending = null;
+    addLog(state, `${player.name}取消了主将「${cardLabel(player.leader)}」的弃牌，请重新出牌。`);
+    return true;
+  }
   if (state.pending.type === "decoy") return resolvePending(state, { cancel: true });
   return resolvePending(state, { skip: true });
 }
@@ -1514,6 +1602,7 @@ module.exports = {
   totalScore,
   rowScore,
   handOwnerIndex,
+  hasActiveHalfWeatherLeader,
   recalcScores,
   estimatePlayGain,
   cardLabel

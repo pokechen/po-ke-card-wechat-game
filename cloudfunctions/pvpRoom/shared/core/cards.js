@@ -329,6 +329,60 @@ function groupHasSynergy(group) {
   return group.cards.length > 1 && (hasAbility(card, "Tight Bond") || hasAbility(card, "Muster") || hasAbility(card, "Berserker") || hasAbility(card, "Summon Shield Maidens"));
 }
 
+function summonDeckTarget(card) {
+  if (hasAbility(card, "Summon Shield Maidens")) return "岳家军";
+  return "";
+}
+
+function autoDeckCardsAreRelated(left, right) {
+  if (!left || !right) return false;
+  const leftName = left.baseName || left.name;
+  const rightName = right.baseName || right.name;
+  const sameName = leftName === rightName;
+  if (sameName && [left, right].some(card => hasAbility(card, "Tight Bond") || hasAbility(card, "Muster") || hasAbility(card, "Berserker") || hasSummon(card))) {
+    return true;
+  }
+  if (left.musterGroup && left.musterGroup === right.musterGroup) return true;
+  if (left.musterTarget === rightName || right.musterTarget === leftName) return true;
+  const leftBerserkerSet = hasAbility(left, "Berserker") || hasAbility(left, "Mardroeme");
+  const rightBerserkerSet = hasAbility(right, "Berserker") || hasAbility(right, "Mardroeme");
+  if (leftBerserkerSet && rightBerserkerSet) return true;
+  if (summonDeckTarget(left) === rightName || summonDeckTarget(right) === leftName) return true;
+  return false;
+}
+
+function expandAutoDeckGroup(seedCards, pool) {
+  const related = seedCards.slice();
+  const included = {};
+  related.forEach(card => { included[card.id] = true; });
+  for (let i = 0; i < related.length; i++) {
+    pool.forEach(card => {
+      if (included[card.id] || !autoDeckCardsAreRelated(related[i], card)) return;
+      included[card.id] = true;
+      related.push(card);
+    });
+  }
+  return related;
+}
+
+function addAutoDeckGroup(picked, group, pool) {
+  const seedCards = groupHasSynergy(group) ? group.cards : group.cards.slice(0, 1);
+  const pickedIds = {};
+  picked.forEach(card => { pickedIds[card.id] = true; });
+  const cards = expandAutoDeckGroup(seedCards, pool).filter(card => !pickedIds[card.id]);
+  if (!cards.length || picked.length + cards.length > 40) return [];
+  picked.push(...cards);
+  return cards;
+}
+
+function markPickedGroups(groups, usedKeys, picked) {
+  const pickedIds = {};
+  picked.forEach(card => { pickedIds[card.id] = true; });
+  groups.forEach(group => {
+    if (group.cards.some(card => pickedIds[card.id])) usedKeys[group.key] = true;
+  });
+}
+
 function pickFromGroups(groups, usedKeys, topRatio, randomPick, strengthBias) {
   const available = groups.filter(group => !usedKeys[group.key]);
   if (!available.length) return null;
@@ -372,57 +426,22 @@ function selectAutoDeckCards(options = {}) {
     const card = group.card;
     if (card.hero && heroCount >= config.maxHeroes) continue;
     if (hasAbility(card, "Spy") && spyCount >= config.maxSpyCards) continue;
-    const cards = groupHasSynergy(group) ? group.cards : group.cards.slice(0, 1);
-    cards.forEach(item => {
-      if (picked.length < 40) {
-        picked.push(item);
-        if (item.hero) heroCount += 1;
-        if (hasAbility(item, "Spy")) spyCount += 1;
-      }
+    const added = addAutoDeckGroup(picked, group, pool);
+    added.forEach(item => {
+      if (item.hero) heroCount += 1;
+      if (hasAbility(item, "Spy")) spyCount += 1;
     });
+    markPickedGroups(unitGroups, usedUnits, picked);
   }
   const usedSpecials = {};
-  // 引擎联动（通用线）：牌组出现任意「奋起(Berserker)」时，保底补一张通用破釜沉舟（可任选阵线覆盖任意线）
-  const hasMardroemeSpecial = picked.some(card => card.category === "special" && hasAbility(card, "Mardroeme"));
-  if (picked.some(card => hasAbility(card, "Berserker")) && !hasMardroemeSpecial) {
-    const mardroemeGroup = specialGroups.find(group => hasAbility(group.card, "Mardroeme"));
-    if (mardroemeGroup) {
-      usedSpecials[mardroemeGroup.key] = true;
-      picked.push(mardroemeGroup.cards[0]);
-    }
-  }
-  // 引擎联动（朝堂线）：牌组出现「朝堂线(ranged)奋起」时，保底补一张朝堂破釜李时珍（仅触发朝堂线）。
-  // 引擎联动为强制逻辑，不受英雄上限 / used 标记限制（李时珍在 unit 循环中可能因英雄数满被跳过，这里兜底强塞）。
-  const hasRangedBerserker = picked.some(card => hasAbility(card, "Berserker") && (card.row || []).includes("ranged"));
-  const hasLiShizhen = picked.some(card => (card.baseName || card.name) === "李时珍");
-  if (hasRangedBerserker && !hasLiShizhen) {
-    const liGroup = unitGroups.find(group => (group.card.baseName || group.card.name) === "李时珍");
-    if (liGroup && picked.length < 40) {
-      usedUnits[liGroup.key] = true;
-      picked.push(liGroup.cards[0]);
-    }
-  }
-  // 引擎联动（集贤线）：牌组出现拥有「集贤(Muster)」且指定 musterTarget 的卡（如鬼谷子->孟尝君）时，
-  // 保底补入该目标全部卡牌，否则集贤无法触发。为强制逻辑，不受 used 标记与英雄上限约束（仍受 40 张上限）。
-  const musterTargetNames = {};
-  picked.forEach(card => {
-    const target = card.musterTarget;
-    if (!target) return;
-    musterTargetNames[target] = true;
-  });
-  Object.keys(musterTargetNames).forEach(targetName => {
-    unitGroups.filter(group => (group.card.baseName || group.card.name) === targetName).forEach(group => {
-      usedUnits[group.key] = true;
-      group.cards.forEach(item => {
-        if (!picked.includes(item) && picked.length < 40) picked.push(item);
-      });
-    });
-  });
+  markPickedGroups(specialGroups, usedSpecials, picked);
   while (picked.filter(card => card.category === "special" || card.category === "weather").length < config.specialTarget) {
     const group = pickFromGroups(specialGroups, usedSpecials, config.topRatio, config.randomPick, strengthBias);
     if (!group) break;
     usedSpecials[group.key] = true;
-    picked.push(group.cards[0]);
+    addAutoDeckGroup(picked, group, pool);
+    markPickedGroups(unitGroups, usedUnits, picked);
+    markPickedGroups(specialGroups, usedSpecials, picked);
   }
   return picked;
 }

@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, card, wrapText, drawCardImage, short } = require("../ui/canvas");
 const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility } = require("../core/cards");
-const { totalScore, rowScore, handOwnerIndex } = require("../core/battle");
+const { totalScore, rowScore, handOwnerIndex, hasActiveHalfWeatherLeader } = require("../core/battle");
 const { drawDetail } = require("./cardDetail");
 
 const FIELD_FONT = "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", sans-serif";
@@ -36,7 +36,10 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
     fillRoundRect(ctx, x, y, avatar, avatar, 10, "#efe6d2", "#d3b982");
     text(ctx, "将", x + avatar / 2, y + avatar / 2, 13, "#8f3c1f", "center");
   }
-  text(ctx, `${player.name} · ${short(player.factionName, 4)}`, x + avatar + 6, centerY - 7, 11, "#3b2b18");
+  const identity = state.mode === "online"
+    ? `${playerSideLabel(state, playerIndex)} · ${short(player.name, 4)} · ${short(player.factionName, 4)}`
+    : `${player.name} · ${short(player.factionName, 4)}`;
+  text(ctx, identity, x + avatar + 6, centerY - 7, 11, isLocal ? "#2f6f57" : "#8f3c1f");
   const handInfo = `手牌 ${player.hand.length} 张${player.passed ? " · 已放弃" : ""}`;
   text(ctx, `${leader ? short(leader.name || leader.baseName, 4) : "未配置主将"} · ${handInfo}`, x + avatar + 6, centerY + 8, 10, player.leaderUsed ? "#9a8a73" : "#775c34");
   const discardCount = player.discard ? player.discard.length : 0;
@@ -199,7 +202,7 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
     rowOrder.forEach((row, index) => {
       const y = baseY + index * (rowH + gap);
       const suppressed = !!state.weather[row];
-      const halfWeather = suppressed && hasHalfWeatherLeader(player);
+      const halfWeather = suppressed && hasActiveHalfWeatherLeader(state, player);
       const hasHorn = rowHornActive(state, playerIndex, row);
       fillRoundRect(ctx, 12, y, view.width - 24, rowH, 9, halfWeather ? "#e8d5a8" : (suppressed ? "#ecd6b4" : (isEnemySide ? "#efe6d2" : "#fffaf0")), halfWeather ? "#b8860b" : (suppressed ? "#c0392b" : "#d3b982"));
       if (halfWeather) fillRoundRect(ctx, 12, y, 4, rowH, 2, "#b8860b");
@@ -231,8 +234,7 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
       const scrollKey = `${playerIndex}:${row}`;
       const scroll = Math.max(0, Math.min(ui.battleRowScrolls[scrollKey] || 0, maxScroll));
       ui.battleRowScrolls[scrollKey] = scroll;
-      const pageStep = Math.max(step, viewportW - step * 0.5);
-      actions.push({ id: "battleFieldRow", playerIndex, row, scrollKey, maxScroll, pageStep, x: fieldX, y, w: viewportW, h: rowH });
+      actions.push({ id: "battleFieldRow", playerIndex, row, scrollKey, maxScroll, x: fieldX, y, w: viewportW, h: rowH });
       if (hornRect) {
         const hornCard = rowHornDetailCard(playerIndex, row);
         if (hornCard) {
@@ -260,7 +262,7 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
         const drawRect = { x, y: y + 5, w: cardW, h: cardH };
         const hitX = Math.max(fieldX, x);
         const hitRight = Math.min(fieldRight, x + cardW);
-        const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, scrollKey, maxScroll, pageStep, x: hitX, y: y + 5, w: hitRight - hitX, h: cardH };
+        const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, scrollKey, maxScroll, x: hitX, y: y + 5, w: hitRight - hitX, h: cardH };
         actions.push(detail);
         drawFieldCard(ctx, item, drawRect, rowH, suppressed);
       });
@@ -339,29 +341,48 @@ function cardMetaText(card) {
   return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
 }
 
+function handScrollBounds(view, itemCount) {
+  const gap = 6;
+  const left = 10;
+  const viewportW = Math.max(0, view.width - left * 2);
+  const cardW = Math.floor((view.width - 20 - gap * 5) / 5.5);
+  const contentW = itemCount > 0 ? itemCount * cardW + Math.max(0, itemCount - 1) * gap : 0;
+  return {
+    left,
+    viewportW,
+    cardW,
+    gap,
+    contentW,
+    maxScroll: Math.max(0, contentW - viewportW)
+  };
+}
+
 function drawHand(ctx, view, actions, state, ui) {
   const ownerIndex = handOwnerIndex(state);
   const player = state.players[ownerIndex] || state.players[0];
   const waiting = (state.mode === "ai" && state.current !== 0 || state.mode === "online" && !isLocalOnlineAction(state)) && !state.over;
-  const pageSize = 5;
   const sortedHand = orderedHandCards(player.hand, state, ui);
-  const page = Math.max(0, Math.min(ui.handPage || 0, Math.max(0, Math.ceil(sortedHand.length / pageSize) - 1)));
-  const shown = sortedHand.slice(page * pageSize, page * pageSize + pageSize + 1);
-  const gap = 6;
-  const cardW = Math.floor((view.width - 20 - gap * 5) / 5.5);
+  const bounds = handScrollBounds(view, sortedHand.length);
+  const scroll = Math.max(0, Math.min(ui.handScroll || 0, bounds.maxScroll));
+  ui.handScroll = scroll;
   const cardH = HAND_CARD_H;
-  const transition = ui.pageTransition?.scene === "battleHand" ? ui.pageTransition.offset || 0 : 0;
-  const startX = 10 + transition;
   const startY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
-  const totalPages = Math.max(1, Math.ceil(player.hand.length / pageSize));
-  shown.forEach((item, index) => {
+  const viewportRight = bounds.left + bounds.viewportW;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(bounds.left, startY, bounds.viewportW, cardH);
+  ctx.clip();
+  sortedHand.forEach((item, index) => {
+    const x = bounds.left + index * (bounds.cardW + bounds.gap) - scroll;
+    if (x >= viewportRight || x + bounds.cardW <= bounds.left) return;
     const spec = {
       id: "card",
       cardUid: item.uid,
       cardId: item.id,
-      x: startX + index * (cardW + gap),
+      x,
       y: startY,
-      w: cardW,
+      w: bounds.cardW,
       h: cardH,
       name: item.name,
       baseName: item.baseName,
@@ -376,13 +397,27 @@ function drawHand(ctx, view, actions, state, ui) {
       strength: item.category === "weather" || item.category === "special" ? "" : item.strength,
       nameMax: 4
     };
-    actions.push(spec);
+    const hitX = Math.max(bounds.left, x);
+    const hitRight = Math.min(viewportRight, x + bounds.cardW);
+    actions.push({ ...spec, x: hitX, w: hitRight - hitX });
     card(ctx, spec);
   });
+  ctx.restore();
+
+  if (bounds.maxScroll > 0) {
+    const trackW = Math.min(112, bounds.viewportW * 0.34);
+    const trackX = bounds.left + (bounds.viewportW - trackW) / 2;
+    const trackY = startY + cardH + 4;
+    const thumbW = Math.max(22, trackW * bounds.viewportW / bounds.contentW);
+    const thumbX = trackX + (trackW - thumbW) * (scroll / bounds.maxScroll);
+    fillRoundRect(ctx, trackX, trackY, trackW, 3, 1.5, "rgba(119,92,52,0.20)");
+    fillRoundRect(ctx, thumbX, trackY - 1, thumbW, 5, 2.5, "rgba(47,111,87,0.68)");
+  }
+
   if (waiting) {
     const tipY = startY - 24;
     fillRoundRect(ctx, 16, tipY, view.width - 32, 20, 8, "rgba(141,104,64,0.88)", "rgba(111,77,41,0.8)");
-    text(ctx, "等待对方行动", view.width / 2, tipY + 10, 10, "#fff7d8", "center");
+    text(ctx, "等待敌方行动", view.width / 2, tipY + 10, 10, "#fff7d8", "center");
   }
 }
 
@@ -400,7 +435,7 @@ function drawPendingChoice(ctx, view, actions, state) {
       const player = state.players[playerIndex] || {};
       const rect = { id: "firstPlayerChoice", playerIndex, x: 18 + index * (w + 6), y: panelY + 28, w, h: 28 };
       actions.push(rect);
-      button(ctx, { ...rect, label: `${player.name || `玩家${playerIndex + 1}`}先手`, size: 11, fill: "#2f6f57" });
+      button(ctx, { ...rect, label: `${playerIdentityLabel(state, playerIndex, player.name)}先手`, size: 11, fill: "#2f6f57" });
     });
     return;
   }
@@ -413,6 +448,14 @@ function drawPendingChoice(ctx, view, actions, state) {
       button(ctx, { ...rect, label: ROW_LABELS[row] || row, size: 11, fill: "#2f6f57" });
     });
     const cancel = { id: "pendingCancel", x: view.width - 72, y: panelY + 4, w: 50, h: 22 };
+    actions.push(cancel);
+    button(ctx, { ...cancel, label: "取消", size: 10, fill: "#8d6840" });
+    return;
+  }
+  if (pending.type === "leaderDiscard") {
+    const selectedCount = (pending.selectedUids || []).length;
+    text(ctx, `已选 ${selectedCount}/2 · 点卡牌选择，再点已选卡取消`, 24, panelY + 43, 10, "#775c34");
+    const cancel = { id: "pendingCancel", x: view.width - 72, y: panelY + 28, w: 50, h: 28 };
     actions.push(cancel);
     button(ctx, { ...cancel, label: "取消", size: 10, fill: "#8d6840" });
     return;
@@ -445,6 +488,8 @@ function battleCardMatch(card, cardId, cardUid) {
 
 function findBattleCardContext(state, cardId, cardUid) {
   if (!state || (!cardId && !cardUid)) return null;
+  const revealCard = (state.leaderReveals?.[localPlayerIndex(state)]?.cards || []).find(item => battleCardMatch(item, cardId, cardUid));
+  if (revealCard) return { card: revealCard, playerIndex: localPlayerIndex(state), row: null, zone: "leaderReveal" };
   const rowHornContext = findRowHornContext(state, cardUid);
   if (rowHornContext) return rowHornContext;
   for (let pi = 0; pi < state.players.length; pi += 1) {
@@ -501,15 +546,18 @@ function visiblePendingDetailCards(state) {
   return (state.pending.candidates || []).map(entry => entry.card || entry).filter(Boolean);
 }
 
-function isPendingReviveDetail(state, ui = {}) {
-  if (!state?.pending || state.pending.type !== "revive") return false;
-  return visiblePendingDetailCards(state).some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid));
+function pendingDetailType(state, ui = {}) {
+  if (!state?.pending || !["revive", "leaderDiscard"].includes(state.pending.type)) return "";
+  return visiblePendingDetailCards(state).some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))
+    ? state.pending.type
+    : "";
 }
 
-function ensurePendingReviveDetail(state, ui = {}) {
-  if (!state?.pending || state.pending.type !== "revive" || !isLocalOnlineAction(state)) return;
+function ensurePendingDetail(state, ui = {}) {
+  if (!state?.pending || !["revive", "leaderDiscard"].includes(state.pending.type) || !isLocalOnlineAction(state)) return;
   if (ui.battleCardDetailId || ui.battleCardDetailUid) return;
-  const first = visiblePendingDetailCards(state)[0];
+  const selected = new Set(state.pending.selectedUids || []);
+  const first = visiblePendingDetailCards(state).find(card => !selected.has(card.uid)) || visiblePendingDetailCards(state)[0];
   if (!first) return;
   ui.battleCardDetailId = first.id || "";
   ui.battleCardDetailUid = first.uid || "";
@@ -519,6 +567,8 @@ function ensurePendingReviveDetail(state, ui = {}) {
 function detailCardEntries(state, ui = {}, view = null) {
   const context = findBattleCardContext(state, ui.battleCardDetailId, ui.battleCardDetailUid);
   if (!context) return [];
+  const revealCards = state.leaderReveals?.[localPlayerIndex(state)]?.cards || [];
+  if (revealCards.some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))) return detailEntries(revealCards);
   const pendingCards = visiblePendingDetailCards(state);
   if (pendingCards.some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))) return detailEntries(pendingCards);
   if (context.zone === "leader") return detailEntries(visibleLeaderCards(state));
@@ -532,10 +582,6 @@ function detailCardEntries(state, ui = {}, view = null) {
 
 function leaderTextForBattle(player) {
   return `${player?.leader?.baseName || ""} ${player?.leader?.leaderAbility || ""} ${player?.leader?.abilityText || ""}`;
-}
-
-function hasHalfWeatherLeader(player) {
-  return !!player.leaderUsed && /half (of )?(their )?strength|lose half|半损|一半战力/i.test(leaderTextForBattle(player));
 }
 
 function hasSpyDoubleLeader(player) {
@@ -585,7 +631,7 @@ function describeBoardCardEffect(state, context) {
     lines.push(`奋起转化：由「${card.transformedFrom}」经破釜触发转化为当前形态。`);
   }
   if (state.weather[row]) {
-    lines.push(hasHalfWeatherLeader(player)
+    lines.push(hasActiveHalfWeatherLeader(state, player)
       ? `时局：${rowLabel}受压制，主将效果使其改为半损。`
       : `时局：${rowLabel}受压制，基础战力降为 1。`);
   }
@@ -624,7 +670,7 @@ function battlePowerEffectSections(state, context, fallbackCard) {
 
   const blocks = [];
   boardContexts.forEach((ctx, idx) => {
-    const owner = state.players[ctx.playerIndex]?.name || `玩家${ctx.playerIndex + 1}`;
+    const owner = playerIdentityLabel(state, ctx.playerIndex, `玩家${ctx.playerIndex + 1}`);
     const header = boardContexts.length > 1 ? `实例 ${idx + 1}（${owner}）：\n` : "";
     const desc = describeBoardCardEffect(state, ctx).join("\n");
     blocks.push(header + desc);
@@ -661,13 +707,31 @@ function mulliganDetailSections(state, context) {
   const done = state.mulligan.done?.[owner];
   const startLabel = state.mode === "online" ? "准备" : "不换开始";
   const lines = done
-    ? "你已完成换牌，正在等待对方。"
+    ? "你已完成换牌，正在等待敌方。"
     : `本局可换 ${max} 张：已换 ${used} 张，还可换 ${left} 张。\n点击当前卡牌可直接替换；也可点空白回到手牌后选择其它牌。\n不想换牌时，点击「${startLabel}」保留当前手牌。`;
   return [{ title: "换牌说明", content: lines, color: "#8f3c1f", lines: 4 }];
 }
 
 function playerSideLabel(state, playerIndex) {
-  return playerIndex === localPlayerIndex(state) ? "我方" : "对方";
+  return playerIndex === localPlayerIndex(state) ? "我方" : "敌方";
+}
+
+function playerIdentityLabel(state, playerIndex, fallbackName) {
+  const playerName = state.players?.[playerIndex]?.name || fallbackName || `玩家${playerIndex + 1}`;
+  return state.mode === "online" ? `${playerSideLabel(state, playerIndex)}（${playerName}）` : playerName;
+}
+
+function localizeBattleEntryText(value, entry, state) {
+  const content = String(value || "");
+  if (state?.mode !== "online") return content;
+  let playerIndex = Number.isInteger(entry?.playerIndex) ? entry.playerIndex : -1;
+  if (playerIndex < 0) {
+    playerIndex = (state.players || []).findIndex(player => player?.name && content.startsWith(player.name));
+  }
+  if (playerIndex < 0) return content;
+  const playerName = entry?.playerName || state.players?.[playerIndex]?.name || "";
+  const identity = playerIdentityLabel(state, playerIndex, playerName);
+  return playerName && content.startsWith(playerName) ? `${identity}${content.slice(playerName.length)}` : content;
 }
 
 function drawRoundDot(ctx, x, y, active, fill) {
@@ -692,7 +756,7 @@ function drawRoundResultMarkers(ctx, view, state) {
   const y = view.safeTop + 4;
   fillRoundRect(ctx, x, y, panelW, panelH, 10, "rgba(255,250,240,0.94)", "#d3b982");
   text(ctx, "我", x + 14, y + 16, 9, "#2f6f57", "center");
-  text(ctx, "对", x + 14, y + 28, 9, "#8f3c1f", "center");
+  text(ctx, "敌", x + 14, y + 28, 9, "#8f3c1f", "center");
   for (let index = 0; index < 3; index += 1) {
     const result = results.find(item => item.round === index + 1);
     const cx = x + 38 + index * 22;
@@ -721,8 +785,8 @@ function compactEffectNames(namesText, count) {
 function normalizeBattleEffectSegment(segment) {
   const value = String(segment || "").replace(/^\s+|\s+$/g, "").replace(/。$/, "");
   if (!value) return "";
-  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|奇策|召唤岳家军|破釜|请辞)：(.+)/);
-  if (direct) return `${direct[1]}：${short(direct[2].trim(), direct[1] === "奇策" ? 18 : 16)}`;
+  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|奇策|召唤岳家军|破釜|请辞|弃牌)：(.+)/);
+  if (direct) return `${direct[1]}：${short(direct[2].trim(), direct[1] === "奇策" ? 18 : (direct[1] === "弃牌" ? 24 : 16))}`;
 
   const muster = value.match(/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)\s*(\d+)\s*张[^：；。]*(?:：([^；。]+))?/);
   if (muster) {
@@ -766,23 +830,26 @@ function battlePlayEntryLeaderLabel(entry) {
   return /封锁对手主将技能|主将技能被封锁|主将能力已被封锁|cancel.*leader/i.test(source) ? "，对手主将技能被封锁" : "";
 }
 
-function battlePlayEntryText(entry) {
-  if (entry.type === "boardChange") return String(entry.text || "场上卡牌变化").replace(/。$/, "");
+function battlePlayEntryText(entry, state) {
+  if (entry.type === "boardChange") return localizeBattleEntryText(String(entry.text || "场上卡牌变化").replace(/。$/, ""), entry, state);
   const effectText = battlePlayEntryEffectText(entry);
   const leaderLabel = battlePlayEntryLeaderLabel(entry);
   if (entry.text) {
     const value = String(entry.text)
       .replace(/^第\s*\d+\s*回合\s*[·：:]\s*/, "")
-      .replace(/；?(集贤|召唤岳家军|召唤|奇策|破釜|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天)[^；。]*。?/g, "")
+      .replace(/；?(集贤|召唤岳家军|召唤|奇策|破釜|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察)[^；。]*。?/g, "")
       .replace(/到(?:己方|对方)(?:疆场|朝堂|文脉)/g, "")
       .replace(/\s*(?:→|->)\s*[^；。]*/g, "")
       .replace(/。$/, "")
       .trim();
     const suffix = leaderLabel && !/主将技能被封锁|主将能力已被封锁/.test(value) ? leaderLabel : "";
-    return `${value}${suffix}${effectText}`;
+    return `${localizeBattleEntryText(value, entry, state)}${suffix}${effectText}`;
   }
   const verb = entry.actionType === "leader" ? "使用主将" : "打出";
-  return `${entry.playerName || "玩家"}${verb}「${entry.name || entry.baseName || "未知卡牌"}」${leaderLabel}${effectText}`;
+  const actor = state?.mode === "online" && Number.isInteger(entry.playerIndex)
+    ? playerIdentityLabel(state, entry.playerIndex, entry.playerName)
+    : (entry.playerName || "玩家");
+  return `${actor}${verb}「${entry.name || entry.baseName || "未知卡牌"}」${leaderLabel}${effectText}`;
 }
 
 function mergeBattlePlayLogEntries(logs) {
@@ -1006,7 +1073,7 @@ function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
         );
         fillRoundRect(ctx, row.x + 5, row.y + 6, 4, row.h - 12, 2, isHistory ? "#b09970" : "#c46a2b");
       }
-      const entryText = battlePlayEntryText(entry);
+      const entryText = battlePlayEntryText(entry, state);
       const lineH = 13;
       const tagW = (isRoundResult || isPass || isFactionPerk || isBoardChange) ? 56 : 0;
       const wrapW = row.w - 50 - tagW;
@@ -1039,8 +1106,7 @@ function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
 }
 
 function drawOpponentPassNotice(ctx, view, actions, state, ui, notice) {
-  const local = localPlayerIndex(state);
-  const opponentName = notice.playerName || state.players[notice.playerIndex]?.name || (notice.playerIndex === local ? "我方" : "对方");
+  const opponentName = playerIdentityLabel(state, notice.playerIndex, notice.playerName || "敌方");
   const auto = /手牌已打完/.test(notice.text || "");
   const panelW = view.width - 36;
   const panelX = 18;
@@ -1154,7 +1220,8 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   const actor = state.players[actorIndex] || opponentPlayer || state.players[1];
   const title = transition.winner == null
     ? "本局平局"
-    : `${state.players[transition.winner]?.name || playerSideLabel(state, transition.winner)}获胜`;
+    : `${playerIdentityLabel(state, transition.winner)}获胜`;
+  const actorName = playerIdentityLabel(state, actorIndex, actor?.name || "敌方");
   const nextLine = transition.matchOver
     ? `${seconds} 秒后结算整局结果`
     : `${seconds} 秒后进入第 ${transition.nextRound || (transition.round + 1)} 局`;
@@ -1186,7 +1253,7 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   text(ctx, style.label, textX + tagW / 2, panelY + 17, 10, "#fff7d8", "center");
   text(ctx, `${title} · 第 ${transition.round} 局结束`, textX + tagW + 8, panelY + 18, 13, style.color);
   wrapText(ctx, `我方 ${localPlayer?.factionName || localPlayer?.faction || "阵营"} · ${short(localPlayer?.leader?.name || localPlayer?.leader?.baseName || "主将", 8)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
-  wrapText(ctx, `对手 ${opponentPlayer?.factionName || opponentPlayer?.faction || "系统"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.baseName || "系统主将", 8)} · ${actor?.name || "系统"}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
+  wrapText(ctx, `敌方 ${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.baseName || "主将", 8)} · ${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
   wrapText(ctx, `${roundLine} · ${nextLine}`, textX, panelY + 80, textW, 13, 1, 10, "#6f5a3a");
   text(ctx, `${localRounds}:${opponentRounds}`, view.width - 42, panelY + 54, 18, style.color, "center");
 }
@@ -1217,7 +1284,7 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
   const panelW = view.width - 36;
   const panelX = 18;
 
-  const displayText = battlePlayEntryText(notice);
+  const displayText = battlePlayEntryText(notice, state);
 
   // 布局：左侧大卡牌 + 右侧统一出牌摘要
   const cardW = 88;
@@ -1280,6 +1347,72 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
   text(ctx, "×", close.x + close.w / 2, close.y + close.h / 2 + 1, 14, "#fff7d8", "center");
 }
 
+function leaderRevealKey(state, reveal) {
+  return `${state.matchId || "local"}:${reveal?.seq || 0}`;
+}
+
+function drawLeaderRevealPanel(ctx, view, actions, state, ui) {
+  const local = localPlayerIndex(state);
+  const reveal = state.leaderReveals?.[local];
+  const key = leaderRevealKey(state, reveal);
+  if (!reveal || ui.dismissedLeaderRevealKey === key) return;
+
+  const cards = Array.isArray(reveal.cards) ? reveal.cards : [];
+  const panelX = 16;
+  const panelW = view.width - 32;
+  const gap = 10;
+  const cardW = Math.min(96, Math.max(68, Math.floor((panelW - 36 - gap * 2) / 3)));
+  const cardH = Math.round(cardW * 1.36);
+  const panelH = cards.length ? cardH + 94 : 174;
+  const panelY = Math.max(view.safeTop + 66, Math.min(view.height - view.safeBottom - panelH - 56, (view.height - panelH) / 2));
+
+  actions.push({ id: "dismissLeaderReveal", revealKey: key, x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(38, 28, 18, 0.58)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+
+  actions.push({ id: "leaderRevealPanel", x: panelX, y: panelY, w: panelW, h: panelH });
+  fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d19330");
+  fillRoundRect(ctx, panelX, panelY, 5, panelH, 3, "#c46a2b", "#c46a2b");
+  text(ctx, "张仪 · 侦察结果", panelX + 18, panelY + 25, 18, "#2f2417");
+  text(ctx, cards.length ? `随机查看敌方 ${cards.length} 张手牌 · 仅你可见` : "敌方当前没有手牌 · 仅你可见", panelX + 18, panelY + 49, 11, "#775c34");
+
+  const close = { id: "dismissLeaderReveal", revealKey: key, x: panelX + panelW - 42, y: panelY + 10, w: 28, h: 28 };
+  actions.push(close);
+  fillRoundRect(ctx, close.x, close.y, close.w, close.h, 14, "rgba(141,104,64,0.92)", "#6f4d29");
+  text(ctx, "×", close.x + close.w / 2, close.y + close.h / 2 + 1, 15, "#fff7d8", "center");
+
+  if (!cards.length) {
+    text(ctx, "无可侦察手牌", panelX + panelW / 2, panelY + 112, 15, "#8f3c1f", "center");
+    return;
+  }
+
+  const cardsW = cards.length * cardW + Math.max(0, cards.length - 1) * gap;
+  const startX = panelX + (panelW - cardsW) / 2;
+  const cardY = panelY + 66;
+  cards.forEach((item, index) => {
+    const x = startX + index * (cardW + gap);
+    const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, x, y: cardY, w: cardW, h: cardH };
+    actions.push(detail);
+    card(ctx, {
+      ...detail,
+      name: item.name || item.baseName || "未知卡牌",
+      baseName: item.baseName,
+      imageUrl: item.imageUrl,
+      summary: item.summary || item.abilityText,
+      category: categoryLabel(item),
+      faction: item.faction,
+      row: item.row,
+      abilities: item.abilities,
+      abilityDisplayNames: item.abilityDisplayNames,
+      hero: item.hero,
+      strength: item.category === "weather" || item.category === "special" ? "策" : item.strength,
+      nameMax: 6
+    });
+  });
+}
+
 function drawCardGuide(ctx, view, actions) {
   const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const panelW = view.width - 48;
@@ -1302,7 +1435,7 @@ function drawCardGuide(ctx, view, actions) {
 
 function draw(ctx, view, actions, state, ui = {}) {
   clear(ctx, view.width, view.height);
-  ensurePendingReviveDetail(state, ui);
+  ensurePendingDetail(state, ui);
   let detail = null;
   let detailContext = null;
   if (ui.battleCardDetailId || ui.battleCardDetailUid) {
@@ -1318,13 +1451,17 @@ function draw(ctx, view, actions, state, ui = {}) {
   const weatherNames = ROWS.filter(row => state.weather[row]).map(row => ROW_LABELS[row]);
   const local = localPlayerIndex(state);
   const actionOwner = actionOwnerIndex(state);
-  const actionPlayer = state.players[actionOwner] || state.players[state.current] || state.players[0];
-  const sideName = state.mode === "online" ? `${actionOwner === local ? "我方" : "对方"} · ` : "";
+  const actionPlayerIndex = state.players[actionOwner] ? actionOwner : (state.current || 0);
+  const actionPlayer = state.players[actionPlayerIndex] || state.players[0];
+  const actionPlayerName = state.mode === "online"
+    ? playerIdentityLabel(state, actionPlayerIndex, actionPlayer.name)
+    : actionPlayer.name;
   const roundText = `第 ${state.round} 回合`;
-  const mulliganUsed = isMulligan ? (state.mulligan.used[actionOwner] || 0) : 0;
+  const mulliganUsed = isMulligan ? (state.mulligan.used[actionPlayerIndex] || 0) : 0;
+  const waitingForEnemyMulligan = isMulligan && state.mode === "online" && state.mulligan.simultaneous && state.mulligan.done?.[local];
   const statusText = isMulligan
-    ? `${sideName}${actionPlayer.name} 换牌 ${mulliganUsed}/${state.mulligan.max}`
-    : (state.over ? "对局结束" : (state.roundTransition ? "回合结算中" : `当前：${sideName}${actionPlayer.name}`));
+    ? (waitingForEnemyMulligan ? "我方已准备 · 等待敌方换牌" : `${actionPlayerName} 换牌 ${mulliganUsed}/${state.mulligan.max}`)
+    : (state.over ? "对局结束" : (state.roundTransition ? "回合结算中" : `当前：${actionPlayerName}`));
   text(ctx, roundText, view.width / 2, headerY, 17, "#2f2417", "center");
   text(ctx, statusText, view.width / 2, headerY + 22, 12, "#775c34", "center");
   drawRoundResultMarkers(ctx, view, state);
@@ -1334,7 +1471,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const logLineH = 14;
   const logTextW = view.width - 48;
-  const latestActionText = !state.pending && state.lastPlayed ? battlePlayEntryText(state.lastPlayed) : "";
+  const latestActionText = !state.pending && state.lastPlayed ? battlePlayEntryText(state.lastPlayed, state) : "";
   const logEntries = latestActionText ? [latestActionText] : (state.logs && state.logs.length ? state.logs : ["暂无行动记录"]);
   ctx.font = `10px ${FIELD_FONT}`;
   const latestFitsOneLine = !/\n/.test(logEntries[0]) && ctx.measureText(logEntries[0]).width <= logTextW;
@@ -1381,6 +1518,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   if (ui.showCardGuide && !state.roundTransition && !isMulligan && !state.over && (state.mode === "online" ? state.current === local : state.current === 0)) {
     drawCardGuide(ctx, view, actions);
   }
+  drawLeaderRevealPanel(ctx, view, actions, state, ui);
   if (detail) {
     const entries = detailCardEntries(state, ui, view);
     const currentIdx = entries.findIndex(entry => battleCardMatch(entry.card, ui.battleCardDetailId, ui.battleCardDetailUid));
@@ -1388,25 +1526,46 @@ function draw(ctx, view, actions, state, ui = {}) {
     const rightCard = currentIdx >= 0 && currentIdx < entries.length - 1 ? entries[currentIdx + 1].card : null;
     const swipeOffset = ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0;
     const helpSections = mulliganDetailSections(state, detailContext);
-    const pendingRevive = isPendingReviveDetail(state, ui);
-    const extraSections = battlePowerEffectSections(state, detailContext, detail).concat(pendingRevive ? [{
+    const pendingType = pendingDetailType(state, ui);
+    const pendingRevive = pendingType === "revive";
+    const pendingLeaderDiscard = pendingType === "leaderDiscard";
+    const selectedUids = new Set(state.pending?.selectedUids || []);
+    const currentSelected = pendingLeaderDiscard && selectedUids.has(detail.uid);
+    const detailCard = pendingRevive ? { ...detail, effective: detail.strength } : detail;
+    const pendingSections = pendingRevive ? [{
       title: "济世选择",
       content: "点击当前卡牌复归到战场；左右滑动切换其它可复归卡牌；点击空白处跳过本次济世。",
       color: "#8f3c1f",
       lines: 3
+    }] : (pendingLeaderDiscard ? [{
+      title: "黄巢弃牌",
+      content: currentSelected
+        ? "此牌已选，再点当前卡牌可取消选择；左右滑动切换其它手牌。"
+        : (selectedUids.size === 1
+          ? "点击当前卡牌后将二次确认是否弃置这两张牌；左右滑动可换牌。"
+          : "点击当前卡牌选择第 1 张弃牌；左右滑动切换手牌；点击空白处取消。"),
+      color: "#8f3c1f",
+      lines: 3
     }] : []);
-    drawDetail(ctx, view, actions, detail, {
-      title: pendingRevive ? "济世复归" : (isMulligan ? "换牌阶段" : "卡牌详情"),
-      closeHint: pendingRevive ? "点击当前卡牌复归 · 左右滑动切换" : (isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局"),
+    const extraSections = (pendingRevive || pendingLeaderDiscard ? [] : battlePowerEffectSections(state, detailContext, detail)).concat(pendingSections);
+    drawDetail(ctx, view, actions, detailCard, {
+      title: pendingRevive ? "济世复归" : (pendingLeaderDiscard ? `黄巢弃牌 ${selectedUids.size}/2` : (isMulligan ? "换牌阶段" : "卡牌详情")),
+      closeHint: pendingRevive
+        ? "点击当前卡牌复归 · 左右滑动切换"
+        : (pendingLeaderDiscard
+          ? "点卡牌选择/取消 · 选满后确认"
+          : (isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局")),
       leftCard,
       rightCard,
       swipeOffset,
       extraSections,
+      headerAction: pendingLeaderDiscard ? { id: "closeDetail", label: "取消" } : null,
       helpAction: isMulligan ? { id: "mulliganHelp" } : null,
       helpOpen: !!ui.mulliganHelpOpen,
       helpSections,
+      selected: currentSelected,
       anim: ui.mulliganSwapAnim ? { alpha: ui.mulliganSwapAnim.alpha, scale: ui.mulliganSwapAnim.scale } : null,
-      cardAction: pendingRevive
+      cardAction: pendingRevive || pendingLeaderDiscard
         ? { id: "targetChoice", cardId: detail.id, cardUid: detail.uid }
         : (isMulligan && detailContext?.zone === "hand" && isLocalOnlineAction(state)
           ? { id: "mulliganDetailSwap", cardId: detail.id, cardUid: detail.uid }
@@ -1416,4 +1575,4 @@ function draw(ctx, view, actions, state, ui = {}) {
   if (state.roundTransition) drawRoundTransitionNotice(ctx, view, actions, state, ui);
 }
 
-module.exports = { draw, detailCardEntries, sortedHandCards };
+module.exports = { draw, detailCardEntries, sortedHandCards, handScrollBounds };

@@ -1,5 +1,5 @@
 const { fillRoundRect, wrapText, short, drawCardImage, text } = require("../ui/canvas");
-const { cardSummary, displayName, abilityDescriptions } = require("../core/cards");
+const { cardSummary, displayName, abilityDescriptions, factionPerkSummary } = require("../core/cards");
 
 function wrappedHeight(ctx, content, maxWidth, lineHeight, maxLines, size) {
   const value = String(content || "");
@@ -42,7 +42,17 @@ function effectSections(card) {
     const fallback = cleanEffectText(card?.abilityText || (card?.category === "leader" || card?.category === "weather" || card?.category === "special" ? cardSummary(card) : ""));
     if (fallback) effects.push(fallback);
   }
-  return effects.length ? [{ title: "特殊效果", content: effects.join("\n"), color: "#f1d58a", lines: 8 }] : [];
+  const sections = effects.length ? [{
+    title: card?.category === "leader" ? "主将技能" : "特殊效果",
+    content: effects.join("\n"),
+    color: "#f1d58a",
+    lines: 8
+  }] : [];
+  if (card?.category === "leader") {
+    const factionEffect = factionPerkSummary(card.faction);
+    if (factionEffect) sections.push({ title: "阵容特殊效果", content: factionEffect, color: "#9ed3b0", lines: 4 });
+  }
+  return sections;
 }
 
 function drawSidePreview(ctx, sideCard, cx, y, w, h, alpha) {
@@ -98,7 +108,12 @@ function drawDetail(ctx, view, actions, card, options = {}) {
   // 标题栏
   fillRoundRect(ctx, panelX + 10, panelY + 8, panelW - 20, headerH - 8, 14, "#efe2c6", "#dcc48d");
   text(ctx, options.title || "卡牌详情", panelX + 22, panelY + 26, 17, "#2f2417");
-  if (options.helpAction) {
+  if (options.headerAction) {
+    const headerAction = { ...options.headerAction, x: panelX + panelW - 70, y: panelY + 13, w: 48, h: 26 };
+    actions.push(headerAction);
+    fillRoundRect(ctx, headerAction.x, headerAction.y, headerAction.w, headerAction.h, 13, "#8d6840", "#6f4d29");
+    text(ctx, headerAction.label || "取消", headerAction.x + headerAction.w / 2, headerAction.y + headerAction.h / 2, 11, "#fff7d8", "center");
+  } else if (options.helpAction) {
     const help = { ...options.helpAction, x: panelX + panelW - 52, y: panelY + 12, w: 28, h: 28 };
     actions.push(help);
     fillRoundRect(ctx, help.x, help.y, help.w, help.h, 14, options.helpOpen ? "#8f3c1f" : "#fff7d8", "#d1ad6a");
@@ -183,6 +198,12 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     const nameStripH = 26;
     fillRoundRect(ctx, mcx - mainCardW/2 + 4, mcy + mainCardH - nameStripH - 6, mainCardW - 8, nameStripH, 7, card.hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)", card.hero ? "#f4b63d" : "#e2cc9c");
     text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, card.hero ? "#fff1a8" : "#2f2417", "center");
+
+    if (options.selected) {
+      fillRoundRect(ctx, mcx - mainCardW / 2 - 10, mcy - 10, mainCardW + 20, mainCardH + 20, 18, "rgba(47, 111, 87, 0.16)", "#2f6f57");
+      fillRoundRect(ctx, mcx + mainCardW / 2 - 58, mcy + 10, 48, 24, 12, "#2f6f57", "#fff7d8");
+      text(ctx, "已选", mcx + mainCardW / 2 - 34, mcy + 22, 12, "#fff7d8", "center");
+    }
 
     // 战力icon
     if (options.cardAction) {

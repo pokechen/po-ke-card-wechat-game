@@ -74,30 +74,41 @@ function roundDetail(item) {
   }).join(" · ");
 }
 
+function deckModeLabel(mode) {
+  if (mode === "custom") return "自定义卡牌";
+  if (mode === "random") return "随机卡牌";
+  return "卡牌模式未知";
+}
+
 function layout(view) {
   const top = view.safeTop + 30;
   const bottom = view.height - view.safeBottom - 52;
   const listTop = top + 58;
-  const listBottom = bottom - 18;
-  const pageSize = Math.max(1, Math.floor((listBottom - listTop) / ROW_GAP));
-  return { top, bottom, listTop, pageSize };
+  const availableH = Math.max(ROW_H, bottom - listTop);
+  const fullRows = Math.max(1, Math.floor((availableH - ROW_H * 0.5) / ROW_GAP));
+  const viewportH = Math.min(availableH, fullRows * ROW_GAP + ROW_H * 0.5);
+  const listBottom = listTop + viewportH;
+  return { top, bottom, listTop, listBottom, viewportH };
 }
 
-function pageState(view, ui, history, targetPage) {
+function scrollState(view, ui, history) {
   const info = layout(view);
-  const totalPages = Math.max(1, Math.ceil(history.length / info.pageSize));
-  const page = targetPage == null ? (ui.historyPage || 0) : targetPage;
-  const safePage = Math.max(0, Math.min(page, totalPages - 1));
-  const start = safePage * info.pageSize;
-  return { ...info, totalPages, safePage, start, list: history.slice(start, start + info.pageSize + 1) };
+  const contentH = history.length ? (history.length - 1) * ROW_GAP + ROW_H : 0;
+  const maxScroll = Math.max(0, contentH - info.viewportH);
+  const scroll = Math.max(0, Math.min(ui.historyScroll || 0, maxScroll));
+  const start = Math.max(0, Math.floor(scroll / ROW_GAP));
+  const end = Math.min(history.length, Math.ceil((scroll + info.viewportH) / ROW_GAP) + 1);
+  return { ...info, contentH, maxScroll, scroll, start, list: history.slice(start, end) };
 }
 
-function clampPage(view, ui, page) {
-  return pageState(view, ui, loadSave().history || [], page).safePage;
+function scrollBounds(view) {
+  const history = loadSave().history || [];
+  const state = scrollState(view, {}, history);
+  return { listTop: state.listTop, listBottom: state.listBottom, maxScroll: state.maxScroll };
 }
 
 function detailLeaderCards(view, ui) {
-  const state = pageState(view, ui, loadSave().history || []);
+  const state = scrollState(view, ui, loadSave().history || []);
   const seen = new Set();
   return state.list
     .map(item => leaderCard(item.humanLeaderId, item.humanLeader))
@@ -148,10 +159,9 @@ function draw(ctx, view, actions, ui = {}) {
   clear(ctx, view.width, view.height);
   const save = loadSave();
   const allHistory = save.history || [];
-  const state = pageState(view, ui, allHistory);
-  const transitionY = ui.pageTransition?.scene === "history" ? ui.pageTransition.offset || 0 : 0;
-  const listBottom = state.bottom - 18;
-  ui.historyPage = state.safePage;
+  const state = scrollState(view, ui, allHistory);
+  const listBottom = state.listBottom;
+  ui.historyScroll = state.scroll;
   let detail = null;
   if (ui.historyLeaderDetailId) {
     detail = cardById(ui.historyLeaderDetailId);
@@ -172,7 +182,7 @@ function draw(ctx, view, actions, ui = {}) {
   ctx.clip();
   state.list.forEach((item, index) => {
     const globalIndex = state.start + index;
-    const y = state.listTop + index * ROW_GAP + transitionY;
+    const y = state.listTop + globalIndex * ROW_GAP - state.scroll;
     const style = resultStyle(item);
     const badge = badges[globalIndex];
     const humanLeader = leaderCard(item.humanLeaderId, item.humanLeader);
@@ -191,21 +201,30 @@ function draw(ctx, view, actions, ui = {}) {
     text(ctx, style.label, textX + tagW / 2, y + 17, 10, "#fff7d8", "center");
     text(ctx, `${title} · ${formatTime(item.time)}`, textX + tagW + 8, y + 18, 13, style.color);
     const isOnline = item.mode === "online";
-    wrapText(ctx, `我方 ${item.humanFaction || "阵营"} · ${short(item.humanLeader || "主将", 8)}`, textX, y + 40, textW, 14, 1, 11, "#3b2b18");
+    wrapText(ctx, `我方·${deckModeLabel(item.humanDeckMode)} ${item.humanFaction || "阵营"} · ${short(item.humanLeader || "主将", 8)}`, textX, y + 40, textW, 14, 1, 11, "#3b2b18");
     const oppSuffix = isOnline ? "好友对战" : (DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通");
     const oppName = isOnline ? "好友" : "对手";
-    wrapText(ctx, `${oppName} ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${oppSuffix}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
+    wrapText(ctx, `${oppName}·${deckModeLabel(item.aiDeckMode)} ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${oppSuffix}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
     wrapText(ctx, roundDetail(item), textX, y + 80, textW, 13, 1, 10, "#6f5a3a");
     text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 54, 18, style.color, "center");
   });
   ctx.restore();
-  if (state.safePage < state.totalPages - 1) {
+  if (state.scroll < state.maxScroll - 0.5) {
     ctx.save();
     const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, listBottom - 30, 0, listBottom) : null;
     if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
     else ctx.fillStyle = "rgba(255,250,240,0.72)";
     ctx.fillRect(0, listBottom - 30, view.width, 30);
     ctx.restore();
+  }
+  if (state.maxScroll > 0) {
+    const trackX = view.width - 9;
+    const trackY = state.listTop + 4;
+    const trackH = Math.max(24, state.viewportH - 8);
+    const thumbH = Math.max(30, trackH * state.viewportH / state.contentH);
+    const thumbY = trackY + (trackH - thumbH) * (state.scroll / state.maxScroll);
+    fillRoundRect(ctx, trackX, trackY, 3, trackH, 1.5, "rgba(119,92,52,0.16)");
+    fillRoundRect(ctx, trackX, thumbY, 3, thumbH, 1.5, "rgba(143,60,31,0.72)");
   }
   const back = { id: "back", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
   actions.push(back);
@@ -220,4 +239,4 @@ function draw(ctx, view, actions, ui = {}) {
   }
 }
 
-module.exports = { draw, clampPage, detailLeaderCards };
+module.exports = { draw, scrollBounds, detailLeaderCards };
