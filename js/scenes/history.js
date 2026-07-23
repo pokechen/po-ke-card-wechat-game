@@ -1,5 +1,4 @@
 const { clear, text, button, fillRoundRect, wrapText, drawCardImage, short } = require("../ui/canvas");
-const { loadSave } = require("../core/storage");
 const { DIFFICULTY_LABELS, allCards, cardById, displayName } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
@@ -65,6 +64,24 @@ function leaderCard(id, name) {
   return LEADERS.find(card => displayName(card) === target || cleanName(card.baseName || card.name) === target) || null;
 }
 
+function applyRoundMorale(morale, winner) {
+  const next = [morale[0], morale[1]];
+  if (winner == null) {
+    next[0] -= 1;
+    next[1] -= 1;
+  } else {
+    next[winner === 0 ? 1 : 0] -= 1;
+  }
+  return next.map(value => Math.max(0, value));
+}
+
+function moraleAfterRoundResults(results) {
+  return (Array.isArray(results) ? results : []).reduce((morale, result) => {
+    if (Array.isArray(result?.morale) && result.morale.length >= 2) return [result.morale[0] || 0, result.morale[1] || 0];
+    return applyRoundMorale(morale, result?.winner == null ? null : result.winner);
+  }, [2, 2]);
+}
+
 function roundDetail(item) {
   const rounds = Array.isArray(item.roundResults) ? item.roundResults : [];
   if (!rounds.length) return `小局 ${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`;
@@ -72,6 +89,27 @@ function roundDetail(item) {
     const tag = r.winner == null ? "平" : (r.winner === 0 ? "胜" : "负");
     return `${r.round}局${r.scores?.[0] || 0}:${r.scores?.[1] || 0}${tag}`;
   }).join(" · ");
+}
+
+function drawMoraleToken(ctx, x, y, active, fill) {
+  const size = 6;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x + size, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size, y);
+  ctx.closePath();
+  ctx.fillStyle = active ? fill : "#d8c9ad";
+  ctx.fill();
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = active ? fill : "#bfa77c";
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMoraleTokens(ctx, x, y, count, fill) {
+  for (let index = 0; index < 2; index += 1) drawMoraleToken(ctx, x + index * 16, y, index < count, fill);
 }
 
 function deckModeLabel(mode) {
@@ -101,14 +139,25 @@ function scrollState(view, ui, history) {
   return { ...info, contentH, maxScroll, scroll, start, list: history.slice(start, end) };
 }
 
-function scrollBounds(view) {
-  const history = loadSave().history || [];
-  const state = scrollState(view, {}, history);
+function cloudHistory(ui = {}) {
+  return Array.isArray(ui.cloudHistoryRecords) ? ui.cloudHistoryRecords : [];
+}
+
+function historySummary(history) {
+  const total = history.length;
+  const wins = history.filter(item => item.winner === 0).length;
+  const draws = history.filter(item => item.winner == null).length;
+  const losses = Math.max(0, total - wins - draws);
+  return { total, wins, losses, draws, winRate: total ? Math.round(wins * 100 / total) : 0 };
+}
+
+function scrollBounds(view, ui = {}) {
+  const state = scrollState(view, {}, cloudHistory(ui));
   return { listTop: state.listTop, listBottom: state.listBottom, maxScroll: state.maxScroll };
 }
 
 function detailLeaderCards(view, ui) {
-  const state = scrollState(view, ui, loadSave().history || []);
+  const state = scrollState(view, ui, cloudHistory(ui));
   const seen = new Set();
   return state.list
     .map(item => leaderCard(item.humanLeaderId, item.humanLeader))
@@ -157,8 +206,7 @@ function drawStreakBadge(ctx, badge, rightX, y) {
 
 function draw(ctx, view, actions, ui = {}) {
   clear(ctx, view.width, view.height);
-  const save = loadSave();
-  const allHistory = save.history || [];
+  const allHistory = cloudHistory(ui);
   const state = scrollState(view, ui, allHistory);
   const listBottom = state.listBottom;
   ui.historyScroll = state.scroll;
@@ -167,14 +215,14 @@ function draw(ctx, view, actions, ui = {}) {
     detail = cardById(ui.historyLeaderDetailId);
     if (!detail) ui.historyLeaderDetailId = "";
   }
-  const total = save.matches || 0;
-  const winRate = total ? Math.round((save.wins || 0) * 100 / total) : 0;
+  const summary = historySummary(allHistory);
   text(ctx, "战绩记录", view.width / 2, state.top, 22, "#2f2417", "center");
-  text(ctx, `总 ${total} · 胜 ${save.wins || 0} · 负 ${save.losses || 0} · 平 ${save.draws || 0} · 胜率 ${winRate}%`, view.width / 2, state.top + 28, 12, "#775c34", "center");
+  text(ctx, `总 ${summary.total} · 胜 ${summary.wins} · 负 ${summary.losses} · 平 ${summary.draws} · 胜率 ${summary.winRate}%`, view.width / 2, state.top + 28, 12, "#775c34", "center");
   const badges = streakBadges(allHistory);
   if (!state.list.length) {
     fillRoundRect(ctx, 24, state.top + 74, view.width - 48, 110, 18, "#fffaf0", "#dcc48d");
-    text(ctx, "还没有完成的对局", view.width / 2, state.top + 128, 15, "#775c34", "center");
+    const emptyText = ui.cloudHistoryLoading ? "正在同步云端战绩..." : (ui.cloudHistoryError || "还没有完成的对局");
+    text(ctx, emptyText, view.width / 2, state.top + 128, 15, "#775c34", "center");
   }
   ctx.save();
   ctx.beginPath();
@@ -206,7 +254,11 @@ function draw(ctx, view, actions, ui = {}) {
     const oppName = isOnline ? "好友" : "对手";
     wrapText(ctx, `${oppName}·${deckModeLabel(item.aiDeckMode)} ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${oppSuffix}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
     wrapText(ctx, roundDetail(item), textX, y + 80, textW, 13, 1, 10, "#6f5a3a");
-    text(ctx, `${item.rounds?.[0] || 0}:${item.rounds?.[1] || 0}`, view.width - 42, y + 54, 18, style.color, "center");
+    const morale = Array.isArray(item.morale) ? item.morale : moraleAfterRoundResults(item.roundResults);
+    const moraleX = view.width - 58;
+    text(ctx, "军心", moraleX + 8, y + 34, 10, "#8a6132", "center");
+    drawMoraleTokens(ctx, moraleX, y + 52, morale[0] || 0, "#2f6f57");
+    drawMoraleTokens(ctx, moraleX, y + 72, morale[1] || 0, "#8f3c1f");
   });
   ctx.restore();
   if (state.scroll < state.maxScroll - 0.5) {

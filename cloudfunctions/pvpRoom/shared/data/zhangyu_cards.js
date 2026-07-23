@@ -3739,7 +3739,10 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。",
+      "abilityText": "集贤：打出后从牌库中立即打出所有程咬金。",
+      "musterTarget": "程咬金",
+      "musterTargetDisplayName": "程咬金",
+      "musterTargetOneWay": true,
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,

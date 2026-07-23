@@ -1,0 +1,9 @@
+{
+  "name": "admin-stats",
+  "version": "1.0.0",
+  "description": "管理后台聚合统计：users 用户量/增长，match_history 对局与 AI 胜率",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

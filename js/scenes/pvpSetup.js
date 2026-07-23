@@ -267,8 +267,8 @@ function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
       : (faction === "random"
         ? "随机阵容会在开局时随机确定阵营、主将与卡牌。选择具体阵营后可使用自定义牌组。"
         : (status.valid
-          ? `自定义牌组已完成：${status.total}张；本局${useCustom ? "使用自定义卡牌" : "使用随机卡牌"}。`
-          : `自定义牌组未完成：${status.total}/40张；可编辑卡牌，或直接使用随机卡牌。`)));
+          ? `自定义牌组已完成：${status.total}张，总分${status.score}；本局${useCustom ? "使用自定义卡牌" : "使用随机卡牌"}。`
+          : `自定义牌组未完成：${status.total}/40张，总分${status.score}；可编辑卡牌，或直接使用随机卡牌。`)));
   fillRoundRect(ctx, contentX, panelY + 160, rowW, 62, 12, "rgba(255, 249, 235, 0.88)", "rgba(216, 189, 131, 0.7)");
   wrapText(ctx, statusText, contentX + 12, panelY + 178, rowW - 24, 16, 3, 11, useCustom ? "#2f6f57" : "#8d6840");
 

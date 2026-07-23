@@ -1,15 +1,14 @@
 const SAVE_KEY = "zhangyu.wechat.demo.save.v2";
 const SETTINGS_KEY = "zhangyu.wechat.demo.settings.v2";
 const MAX_CUSTOM_DECKS = 1;
+const MAX_HISTORY_RECORDS = 100;
+
+let recordMatchCloudHook = null;
 
 const DEFAULT_SAVE = {
   finishedTutorial: false,
-  matches: 0,
-  wins: 0,
-  losses: 0,
-  draws: 0,
-  lastResult: "",
-  history: []
+  // 只允许保存离线/上传失败的待同步战绩；云端已存在的战绩以 match_history 为准
+  pendingHistory: []
 };
 
 const DEFAULT_SETTINGS = {
@@ -64,32 +63,159 @@ function setStorage(key, value) {
   }
 }
 
-function loadSave() {
-  const save = getStorage(SAVE_KEY, DEFAULT_SAVE);
-  save.finishedTutorial = !!save.finishedTutorial;
-  save.history = Array.isArray(save.history) ? save.history : [];
-  return save;
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
-function saveProgress(patch) {
+function compactRecordKeyText(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, "").slice(0, 120);
+}
+
+function matchRecordKey(result = {}, index = 0) {
+  if (result.recordKey) return String(result.recordKey).slice(0, 160);
+  const rounds = safeArray(result.roundResults)
+    .map(item => `${item?.round || 0}:${safeArray(item?.scores).join("-")}:${item?.winner == null ? "draw" : item.winner}`)
+    .join("|");
+  return compactRecordKeyText([
+    result.mode || "local",
+    result.roomId || "",
+    result.matchId || "",
+    result.time || Date.now(),
+    result.endReason || "normal",
+    safeArray(result.rounds).join("-"),
+    safeArray(result.scores).join("-"),
+    rounds,
+    index
+  ].join(":"));
+}
+
+function normalizeMatchRecord(result = {}, index = 0) {
+  const time = Number(result.time || Date.now()) || Date.now();
+  return {
+    ...result,
+    time,
+    recordKey: matchRecordKey({ ...result, time }, index),
+    syncState: result.syncState === "synced" ? "synced" : "pending"
+  };
+}
+
+function uniqueHistory(records = []) {
+  const seen = new Set();
+  const result = [];
+  safeArray(records).forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const record = normalizeMatchRecord(item, index);
+    const key = record.recordKey;
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(record);
+  });
+  return result.sort((a, b) => (b.time || 0) - (a.time || 0)).slice(0, MAX_HISTORY_RECORDS);
+}
+
+function summaryFromHistory(history, current = {}) {
+  const list = uniqueHistory(history);
+  return {
+    ...current,
+    matches: list.length,
+    wins: list.filter(item => item.winner === 0).length,
+    losses: list.filter(item => item.winner === 1).length,
+    draws: list.filter(item => item.winner == null).length,
+    lastResult: list[0]?.resultText || "",
+    history: list
+  };
+}
+
+function pendingOnly(records = []) {
+  return uniqueHistory(safeArray(records).filter(item => item && item.syncState !== "synced"));
+}
+
+function loadSave() {
+  const save = getStorage(SAVE_KEY, DEFAULT_SAVE);
+  // 兼容旧版本：旧 save.history 只迁移未同步记录，已同步/云端记录不再作为本地数据源。
+  const pendingHistory = pendingOnly([].concat(save.pendingHistory || [], save.history || []));
+  const normalized = {
+    finishedTutorial: !!save.finishedTutorial,
+    pendingHistory
+  };
+  // 清理旧版本地战绩/统计字段，避免同一份云端战绩同时存在本地与数据库。
+  if (save.history || save.matches || save.wins || save.losses || save.draws || save.lastResult) setStorage(SAVE_KEY, normalized);
+  return {
+    ...DEFAULT_SAVE,
+    ...normalized,
+    // 兼容旧调用：history 仅代表待同步队列，不代表完整战绩。
+    history: pendingHistory,
+    matches: 0,
+    wins: 0,
+    losses: 0,
+    draws: 0,
+    lastResult: ""
+  };
+}
+
+function saveProgress(patch = {}) {
   const current = loadSave();
-  return setStorage(SAVE_KEY, { ...current, ...patch });
+  return setStorage(SAVE_KEY, {
+    finishedTutorial: patch.finishedTutorial == null ? current.finishedTutorial : !!patch.finishedTutorial,
+    pendingHistory: current.pendingHistory
+  });
+}
+
+function replaceMatchHistory(history) {
+  const current = loadSave();
+  return setStorage(SAVE_KEY, {
+    finishedTutorial: current.finishedTutorial,
+    pendingHistory: pendingOnly(history)
+  });
+}
+
+function mergeMatchHistory() {
+  // 云端战绩不再合并到本地缓存；展示层应使用 match_history 接口返回的数据。
+  return true;
+}
+
+function localMatchRecords() {
+  return loadSave().pendingHistory.slice();
+}
+
+function clearLocalMatchHistory() {
+  return replaceMatchHistory([]);
+}
+
+function updateMatchRecord(recordKey, patch) {
+  if (!recordKey) return false;
+  const current = loadSave();
+  const history = current.pendingHistory.map(item => item.recordKey === recordKey ? { ...item, ...patch } : item);
+  return replaceMatchHistory(history);
+}
+
+function removeLocalMatchRecord(recordKey) {
+  if (!recordKey) return false;
+  const current = loadSave();
+  const history = current.pendingHistory.filter(item => item.recordKey !== recordKey);
+  return replaceMatchHistory(history);
+}
+
+function pendingMatchRecords() {
+  return loadSave().pendingHistory.slice();
+}
+
+function setRecordMatchCloudHook(hook) {
+  recordMatchCloudHook = typeof hook === "function" ? hook : null;
 }
 
 function recordMatch(result) {
   const current = loadSave();
-  const history = [result].concat(current.history || []).slice(0, 30);
-  const isWin = result.winner === 0;
-  const isLoss = result.winner === 1;
-  const isDraw = result.winner == null;
-  return saveProgress({
-    matches: (current.matches || 0) + 1,
-    wins: (current.wins || 0) + (isWin ? 1 : 0),
-    losses: (current.losses || 0) + (isLoss ? 1 : 0),
-    draws: (current.draws || 0) + (isDraw ? 1 : 0),
-    lastResult: result.resultText || "",
-    history
-  });
+  const record = normalizeMatchRecord(result, current.pendingHistory.length);
+  const pendingHistory = pendingOnly([record].concat(current.pendingHistory || []));
+  const saved = setStorage(SAVE_KEY, { finishedTutorial: current.finishedTutorial, pendingHistory });
+  console.log("[storage] recordMatch queued locally until cloud sync, recordKey:", record.recordKey, "hookSet:", !!recordMatchCloudHook);
+  if (recordMatchCloudHook) {
+    Promise.resolve(recordMatchCloudHook(record)).catch(err => {
+      console.error("[storage] recordMatchCloudHook error:", err?.message || err);
+    });
+  }
+  return saved;
 }
 
 function safeObject(value) {
@@ -175,6 +301,14 @@ module.exports = {
   MAX_CUSTOM_DECKS,
   loadSave,
   saveProgress,
+  replaceMatchHistory,
+  mergeMatchHistory,
+  localMatchRecords,
+  clearLocalMatchHistory,
+  updateMatchRecord,
+  removeLocalMatchRecord,
+  pendingMatchRecords,
+  setRecordMatchCloudHook,
   recordMatch,
   loadSettings,
   saveSettings,

@@ -1,5 +1,5 @@
 const { clear, text, button, fillRoundRect, card, wrapText, short } = require("../ui/canvas");
-const { cardById, cardValue, categoryLabel, displayName } = require("../core/cards");
+const { cardById, deckExpectedScore, categoryLabel, displayName, groupCards } = require("../core/cards");
 const { sortedHandCards } = require("./battleScene");
 const { drawDetail } = require("./cardDetail");
 
@@ -47,6 +47,10 @@ function battleCardsForPlayer(state, playerIndex) {
   return sortedHandCards(cards);
 }
 
+function groupedBattleCards(cards) {
+  return groupCards(cards || []).map(group => ({ ...group, count: group.cards.length }));
+}
+
 function pageLayout(view) {
   const top = view.safeTop + 22;
   const tabsY = top + 36;
@@ -67,13 +71,14 @@ function scrollState(view, state, ui = {}) {
   const layout = pageLayout(view);
   const playerIndex = selectedPlayerIndex(state, ui);
   const cards = battleCardsForPlayer(state, playerIndex);
-  const rows = Math.ceil(cards.length / COLUMNS);
+  const groups = groupedBattleCards(cards);
+  const rows = Math.ceil(groups.length / COLUMNS);
   const contentH = rows ? rows * layout.rowStep - GAP : 0;
   const viewportH = layout.viewportH;
   const maxScroll = Math.max(0, contentH - viewportH);
   const saved = Array.isArray(ui.battleCardsScrolls) ? ui.battleCardsScrolls[playerIndex] : 0;
   const scroll = Math.max(0, Math.min(saved || 0, maxScroll));
-  return { ...layout, playerIndex, cards, contentH, viewportH, maxScroll, scroll };
+  return { ...layout, playerIndex, cards, groups, contentH, viewportH, maxScroll, scroll };
 }
 
 function scrollBounds(view, state, ui = {}) {
@@ -82,7 +87,32 @@ function scrollBounds(view, state, ui = {}) {
 }
 
 function detailCards(state, ui = {}) {
-  return battleCardsForPlayer(state, selectedPlayerIndex(state, ui));
+  return groupedBattleCards(battleCardsForPlayer(state, selectedPlayerIndex(state, ui))).map(group => group.card);
+}
+
+function drawPowerIcon(ctx, x, y) {
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#c46a2b";
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + 7);
+  ctx.lineTo(x + 13, y - 6);
+  ctx.stroke();
+  ctx.strokeStyle = "#d19330";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + 2);
+  ctx.lineTo(x + 8, y + 8);
+  ctx.stroke();
+  ctx.strokeStyle = "#6f4d29";
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(x - 2, y + 9);
+  ctx.lineTo(x + 3, y + 4);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawScoreHelp(ctx, view, actions) {
@@ -95,8 +125,8 @@ function drawScoreHelp(ctx, view, actions) {
   const panelY = Math.max(view.safeTop + 72, (view.height - panelH) / 2);
   actions.push({ id: "battleCardsHelpPanel", x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d1ad6a");
-  text(ctx, "卡牌强度记分", panelX + 20, panelY + 28, 18, "#2f2417");
-  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、破釜+8、奋起+6、通才+2、鼓舞+7、奇策+6、时局+6。\n同一张牌有多个能力时累计加分；整副牌得分为所有卡牌记分之和。";
+  text(ctx, "总战力说明", panelX + 20, panelY + 28, 18, "#2f2417");
+  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、破釜+8、奋起+6、通才+2、鼓舞+7、奇策+6、时局+6。\n总战力是按以上规则计算出的整体强度分，数字越高，代表这组卡牌的基础战力和能力加成整体越强，便于对比双方卡牌强度。";
   wrapText(ctx, rule, panelX + 20, panelY + 64, panelW - 40, 21, 8, 13, "#5f4727");
   const close = { id: "closeBattleCardsHelp", x: panelX + 74, y: panelY + panelH - 48, w: panelW - 148, h: 34 };
   actions.push(close);
@@ -123,21 +153,29 @@ function draw(ctx, view, actions, state, ui = {}) {
 
   const normalCount = info.cards.filter(item => item.category !== "special" && item.category !== "weather").length;
   const specialCount = info.cards.length - normalCount;
-  const score = info.cards.reduce((sum, item) => sum + cardValue(item), 0);
+  const score = deckExpectedScore(info.cards);
   fillRoundRect(ctx, 18, info.summaryY, view.width - 36, 62, 13, "#fffaf0", "#dcc48d");
-  text(ctx, `${player?.factionName || "阵营"} · 共 ${info.cards.length} 张`, 30, info.summaryY + 18, 12, "#775c34");
-  text(ctx, `普通卡 ${normalCount} 张 · 特殊卡牌 ${specialCount} 张`, 30, info.summaryY + 42, 13, "#3b2b18");
-  text(ctx, `强度记分：${score}`, view.width - 52, info.summaryY + 18, 12, "#8f3c1f", "right");
-  const help = { id: "battleCardsHelp", x: view.width - 44, y: info.summaryY + 7, w: 28, h: 28 };
+  text(ctx, `${player?.factionName || "阵营"} · 共 ${info.cards.length} 张 · ${info.groups.length} 种`, 30, info.summaryY + 18, 12, "#775c34");
+  const statsLine = `普通卡 ${normalCount} 张 · 特殊卡牌 ${specialCount} 张 ·`;
+  text(ctx, statsLine, 30, info.summaryY + 42, 13, "#3b2b18");
+  const scoreText = `总战力 ${score}`;
+  const scoreW = ctx.measureText(scoreText).width;
+  const helpSize = 22;
+  const maxIconX = view.width - 30 - 20 - scoreW - 8 - helpSize;
+  const iconX = Math.max(30, Math.min(maxIconX, 30 + ctx.measureText(statsLine).width + 12));
+  drawPowerIcon(ctx, iconX, info.summaryY + 42);
+  text(ctx, scoreText, iconX + 20, info.summaryY + 42, 13, "#8f3c1f");
+  const help = { id: "battleCardsHelp", x: iconX + 20 + scoreW + 8, y: info.summaryY + 31, w: helpSize, h: helpSize };
   actions.push(help);
-  fillRoundRect(ctx, help.x, help.y, help.w, help.h, 14, "#fff7d8", "#d1ad6a");
-  text(ctx, "?", help.x + help.w / 2, help.y + help.h / 2 + 1, 16, "#8f3c1f", "center");
+  fillRoundRect(ctx, help.x, help.y, help.w, help.h, 11, "#fff7d8", "#d1ad6a");
+  text(ctx, "?", help.x + help.w / 2, help.y + help.h / 2 + 1, 14, "#8f3c1f", "center");
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, info.listTop, view.width, info.viewportH);
   ctx.clip();
-  info.cards.forEach((item, index) => {
+  info.groups.forEach((group, index) => {
+    const item = group.card;
     const col = index % COLUMNS;
     const row = Math.floor(index / COLUMNS);
     const x = info.margin + col * (info.cardW + GAP);
@@ -164,7 +202,8 @@ function draw(ctx, view, actions, state, ui = {}) {
       abilityDisplayNames: item.abilityDisplayNames,
       hero: item.hero,
       strength: item.category === "special" || item.category === "weather" ? "策" : item.strength,
-      nameMax: 4
+      nameMax: 4,
+      count: group.count
     });
   });
   ctx.restore();
@@ -194,11 +233,12 @@ function draw(ctx, view, actions, state, ui = {}) {
 
   const detail = ui.battleCardsDetailId ? cardById(ui.battleCardsDetailId) : null;
   if (detail) {
-    const currentIdx = info.cards.findIndex(item => item.id === detail.id);
+    const detailCards = info.groups.map(group => group.card);
+    const currentIdx = detailCards.findIndex(item => item.id === detail.id);
     drawDetail(ctx, view, actions, detail, {
       closeHint: "点击空白处返回卡牌总览",
-      leftCard: currentIdx > 0 ? info.cards[currentIdx - 1] : null,
-      rightCard: currentIdx >= 0 && currentIdx < info.cards.length - 1 ? info.cards[currentIdx + 1] : null,
+      leftCard: currentIdx > 0 ? detailCards[currentIdx - 1] : null,
+      rightCard: currentIdx >= 0 && currentIdx < detailCards.length - 1 ? detailCards[currentIdx + 1] : null,
       swipeOffset: ui.detailSwipe ? ui.detailSwipe.offset || 0 : 0
     });
   } else if (ui.battleCardsDetailId) {

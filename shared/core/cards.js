@@ -226,6 +226,9 @@ function cloneCard(card, owner) {
     summary: cardSummary(card),
     hero: !!card.hero,
     owner,
+    controller: owner,
+    zone: "deck",
+    boardRow: null,
     playedBy: owner,
     transformed: false
   };
@@ -247,23 +250,100 @@ function hasSummon(card) {
   return (card.abilities || []).some(ability => /^Summon /.test(ability));
 }
 
-function cardValue(card) {
-  let value = card.strength || 0;
-  if (card.hero || card.category === "hero") value += 8;
-  if (hasAbility(card, "Spy")) value += 11;
+function isDecoyCard(card) {
+  const name = cleanCardName(card.baseName || card.name);
+  return name === "请辞归隐" || /收回手牌/.test(card.abilityText || "");
+}
+
+function cardPool(context) {
+  if (Array.isArray(context)) return context;
+  if (Array.isArray(context?.pool)) return context.pool;
+  if (Array.isArray(context?.cards)) return context.cards;
+  return [];
+}
+
+function musterRelated(card, pool) {
+  const name = cleanCardName(card.baseName || card.name);
+  return pool.filter(item => {
+    const itemName = cleanCardName(item.baseName || item.name);
+    if (card.musterTarget) return itemName === card.musterTarget || itemName === name;
+    if (card.musterGroup) return item.musterGroup === card.musterGroup;
+    return itemName === name;
+  });
+}
+
+function tightBondBonus(card, context) {
+  const pool = cardPool(context);
+  const name = cleanCardName(card.baseName || card.name);
+  const count = pool.filter(item => cleanCardName(item.baseName || item.name) === name && hasAbility(item, "Tight Bond")).length;
+  if (count <= 1) return 0;
+  const strength = card.strength || 0;
+  return Math.min(8, Math.max(2, Math.round(strength * (count - 1) * 0.25 + Math.max(0, count - 2))));
+}
+
+function musterBonus(card, context) {
+  const related = musterRelated(card, cardPool(context));
+  const total = related.length;
+  if (total <= 1) return 0;
+  const name = cleanCardName(card.baseName || card.name);
+  if (card.musterGroup === "桃园三杰" || card.musterGroup === "taoyuan-brothers") return 10;
+  if (card.musterGroup === "星火五雄" || card.musterGroup === "xinghuo-five") return 10;
+  if (name === "曾子") return 12;
+  if (name === "孟尝君") return 5;
+  if (name === "鬼谷子") return 7;
+  if (name === "李密") return 8;
+  const relatedStrength = related.reduce((sum, item) => sum + (item.strength || 0), 0);
+  return Math.min(14, Math.round(2 + total * 1.5 + relatedStrength * 0.15));
+}
+
+function summonBonus(card, context) {
+  if (hasAbility(card, "Summon Shield Maidens")) return 18;
+  if (hasAbility(card, "Summon Avenger")) return 19;
+  if (hasAbility(card, "Summon Sky Hound")) return 12;
+  return (card.abilities || []).some(ability => /^Summon /.test(ability)) ? 8 : 0;
+}
+
+function isClearWeatherCard(card) {
+  return card.category === "weather" && /拨云见日|晴空|Clear Weather/i.test(card.baseName || card.name || "");
+}
+
+function cardValue(card, context = {}) {
+  const strength = card.strength || 0;
+  const spy = hasAbility(card, "Spy");
+  let value = spy ? 20 - strength : strength;
+  if (!spy && (card.hero || card.category === "hero")) value += 6;
   if (hasAbility(card, "Medic")) value += 7;
-  if (hasAbility(card, "Tight Bond")) value += 6;
-  if (hasAbility(card, "Muster")) value += 7;
-  if (hasSummon(card)) value += 7;
-  if (hasAbility(card, "Morale Boost")) value += 4;
-  if (hasAbility(card, "Mardroeme")) value += 8;
-  if (hasAbility(card, "Berserker")) value += 6;
+  if (hasAbility(card, "Tight Bond")) value += tightBondBonus(card, context);
+  if (hasAbility(card, "Muster")) value += musterBonus(card, context);
+  value += summonBonus(card, context);
+  if (hasAbility(card, "Morale Boost")) value += 1;
+  if (hasAbility(card, "Mardroeme")) value += 6;
+  if (hasAbility(card, "Berserker")) value += 3;
   if (hasAbility(card, "Agile")) value += 2;
   const name = cleanCardName(card.baseName || card.name);
-  if (hasAbility(card, "Commander's Horn") || name === "战鼓齐鸣") value += 7;
-  if (hasAbility(card, "Scorch") || name === "釜底抽薪") value += 6;
-  if (card.category === "weather") value += 6;
+  if (hasAbility(card, "Commander's Horn") || name === "战鼓齐鸣") value += 9;
+  if (hasAbility(card, "Scorch") || name === "釜底抽薪") value += name === "田单" ? 9 : (card.category === "special" || name === "釜底抽薪" ? 8 : 5);
+  if (card.category === "weather") value += isClearWeatherCard(card) ? 3 : 6;
   return value;
+}
+
+function autoDeckCardValue(card, picked = [], pool = allCards()) {
+  let value = cardValue(card, { pool });
+  if (isDecoyCard(card)) {
+    const medicCount = picked.filter(item => !item.hero && hasAbility(item, "Medic")).length;
+    if (medicCount) value += 12 + medicCount * 5;
+  }
+  return value;
+}
+
+function deckValueTotal(cards) {
+  const list = Array.isArray(cards) ? cards : [];
+  return list.reduce((sum, card) => sum + cardValue(card, { pool: list }), 0);
+}
+
+function deckExpectedScore(cards) {
+  const list = Array.isArray(cards) ? cards : [];
+  return list.length ? Math.round((deckValueTotal(list) / list.length) * 10) : 0;
 }
 
 function hasAbility(card, ability) {
@@ -300,12 +380,15 @@ function deckStatus(ids, faction) {
   const cards = normalizedIds.map(cardById).filter(Boolean);
   const units = cards.filter(card => card.category === "unit" || card.category === "hero").length;
   const specials = cards.filter(card => card.category === "special" || card.category === "weather").length;
+  const valueTotal = deckValueTotal(cards);
   return {
     ids: normalizedIds,
     cards,
     total: cards.length,
     units,
     specials,
+    valueTotal,
+    score: deckExpectedScore(cards),
     valid: units >= 22 && specials <= 10 && cards.length >= 22 && cards.length <= 40
   };
 }
@@ -343,7 +426,8 @@ function autoDeckCardsAreRelated(left, right) {
     return true;
   }
   if (left.musterGroup && left.musterGroup === right.musterGroup) return true;
-  if (left.musterTarget === rightName || right.musterTarget === leftName) return true;
+  if (left.musterTarget === rightName) return true;
+  if (right.musterTarget === leftName && !right.musterTargetOneWay) return true;
   const leftBerserkerSet = hasAbility(left, "Berserker") || hasAbility(left, "Mardroeme");
   const rightBerserkerSet = hasAbility(right, "Berserker") || hasAbility(right, "Mardroeme");
   if (leftBerserkerSet && rightBerserkerSet) return true;
@@ -366,9 +450,13 @@ function expandAutoDeckGroup(seedCards, pool) {
 }
 
 function addAutoDeckGroup(picked, group, pool) {
-  const seedCards = groupHasSynergy(group) ? group.cards : group.cards.slice(0, 1);
   const pickedIds = {};
   picked.forEach(card => { pickedIds[card.id] = true; });
+  // 非联动组每次只取 1 张，且跳过已选入的副本，以便同一特殊牌（如请辞归隐）可重复多选
+  const seedCards = groupHasSynergy(group)
+    ? group.cards
+    : group.cards.filter(card => !pickedIds[card.id]).slice(0, 1);
+  if (!seedCards.length) return [];
   const cards = expandAutoDeckGroup(seedCards, pool).filter(card => !pickedIds[card.id]);
   if (!cards.length || picked.length + cards.length > 40) return [];
   picked.push(...cards);
@@ -383,7 +471,7 @@ function markPickedGroups(groups, usedKeys, picked) {
   });
 }
 
-function pickFromGroups(groups, usedKeys, topRatio, randomPick, strengthBias) {
+function pickFromGroups(groups, usedKeys, topRatio, randomPick, strengthBias, valueFn = cardValue) {
   const available = groups.filter(group => !usedKeys[group.key]);
   if (!available.length) return null;
   const poolSize = Math.max(1, Math.ceil(available.length * topRatio));
@@ -391,7 +479,7 @@ function pickFromGroups(groups, usedKeys, topRatio, randomPick, strengthBias) {
   if (!randomPick) return pool[0];
   if (!strengthBias) return pool[Math.floor(Math.random() * pool.length)];
   // 加权随机：卡牌价值越高，被选中概率越大，整体偏向强势卡牌（仍保留随机性）
-  const weights = pool.map(group => Math.max(1, cardValue(group.card) + 1));
+  const weights = pool.map(group => Math.max(1, valueFn(group.card) + 1));
   const total = weights.reduce((a, b) => a + b, 0);
   let r = Math.random() * total;
   for (let i = 0; i < pool.length; i++) {
@@ -399,6 +487,17 @@ function pickFromGroups(groups, usedKeys, topRatio, randomPick, strengthBias) {
     if (r <= 0) return pool[i];
   }
   return pool[pool.length - 1];
+}
+
+function specialGroupMaxCopies(group, picked) {
+  const card = group.card;
+  if (isDecoyCard(card)) {
+    // 请辞归隐：牌组中存在可重复回收的非传世济世（非 Hero 的 Medic 单位）时，
+    // 最多带入 3 张配合回收；否则仅保留 1 张（与现有池一致，避免无意义堆砌）。
+    const hasReplayMedic = picked.some(item => !item.hero && hasAbility(item, "Medic"));
+    return hasReplayMedic ? 3 : 1;
+  }
+  return 1;
 }
 
 function selectAutoDeckCards(options = {}) {
@@ -412,15 +511,16 @@ function selectAutoDeckCards(options = {}) {
   }[difficulty] || { unitTarget: 24, specialTarget: 5, topRatio: 0.55, randomPick: true, maxHeroes: 5, maxSpyCards: 2 };
   const pool = eligibleCards(faction);
   const unitGroups = groupCards(pool.filter(card => card.category === "unit" || card.category === "hero"))
-    .sort((a, b) => cardValue(b.card) - cardValue(a.card));
-  const specialGroups = groupCards(pool.filter(card => card.category === "special" || card.category === "weather"))
-    .sort((a, b) => cardValue(b.card) - cardValue(a.card));
+    .sort((a, b) => cardValue(b.card, { pool }) - cardValue(a.card, { pool }));
+  const specialGroups = groupCards(pool.filter(card => card.category === "special" || card.category === "weather"));
   const picked = [];
+  const rankedSpecialGroups = () => specialGroups.slice()
+    .sort((a, b) => autoDeckCardValue(b.card, picked, pool) - autoDeckCardValue(a.card, picked, pool));
   const usedUnits = {};
   let heroCount = 0;
   let spyCount = 0;
   while (picked.filter(card => card.category === "unit" || card.category === "hero").length < config.unitTarget) {
-    const group = pickFromGroups(unitGroups, usedUnits, config.topRatio, config.randomPick, strengthBias);
+    const group = pickFromGroups(unitGroups, usedUnits, config.topRatio, config.randomPick, strengthBias, card => cardValue(card, { pool }));
     if (!group) break;
     usedUnits[group.key] = true;
     const card = group.card;
@@ -434,14 +534,27 @@ function selectAutoDeckCards(options = {}) {
     markPickedGroups(unitGroups, usedUnits, picked);
   }
   const usedSpecials = {};
+  const specialPicked = {};
   markPickedGroups(specialGroups, usedSpecials, picked);
   while (picked.filter(card => card.category === "special" || card.category === "weather").length < config.specialTarget) {
-    const group = pickFromGroups(specialGroups, usedSpecials, config.topRatio, config.randomPick, strengthBias);
+    const rankedSpecials = rankedSpecialGroups();
+    const group = pickFromGroups(rankedSpecials, usedSpecials, config.topRatio, config.randomPick, strengthBias, card => autoDeckCardValue(card, picked, pool));
     if (!group) break;
-    usedSpecials[group.key] = true;
-    addAutoDeckGroup(picked, group, pool);
+    const maxCopies = specialGroupMaxCopies(group, picked);
+    const already = specialPicked[group.key] || 0;
+    if (already >= maxCopies) {
+      // 已达该组最大携带张数，禁止继续挑选本组
+      usedSpecials[group.key] = true;
+      continue;
+    }
+    const added = addAutoDeckGroup(picked, group, pool);
+    if (!added.length) {
+      usedSpecials[group.key] = true;
+      continue;
+    }
+    specialPicked[group.key] = already + 1;
+    if (specialPicked[group.key] >= maxCopies) usedSpecials[group.key] = true;
     markPickedGroups(unitGroups, usedUnits, picked);
-    markPickedGroups(specialGroups, usedSpecials, picked);
   }
   return picked;
 }
@@ -493,6 +606,8 @@ module.exports = {
   cloneCard,
   shuffle,
   cardValue,
+  deckValueTotal,
+  deckExpectedScore,
   hasAbility,
   eligibleCards,
   leadersFor,

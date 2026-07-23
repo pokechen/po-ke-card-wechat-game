@@ -7,6 +7,14 @@ const FIELD_FONT = "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", 
 const HORN_DETAIL_CARD_ID = "zhangyu-0179";
 const ROW_HORN_UID_PREFIX = "rowHorn";
 
+function measureTextWidth(ctx, content, size) {
+  ctx.save();
+  ctx.font = `${size}px ${FIELD_FONT}`;
+  const width = ctx.measureText(String(content || "")).width;
+  ctx.restore();
+  return width;
+}
+
 function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, centerY) {
   const leader = player.leader;
   const active = state.current === playerIndex && !state.over && !(state.mulligan && state.mulligan.active);
@@ -15,12 +23,17 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
   const avatar = 32;
   const x = 12;
   const y = centerY - avatar / 2;
+  const identity = state.mode === "online"
+    ? `${playerSideLabel(state, playerIndex)} · ${short(player.name, 4)} · ${short(player.factionName, 4)}`
+    : `${player.name} · ${short(player.factionName, 4)}`;
+  const handInfo = `手牌 ${player.hand.length} 张${player.passed ? " · 已放弃" : ""}`;
+  const subline = `${leader ? short(leader.name || leader.baseName, 4) : "未配置主将"} · ${handInfo}`;
   const scoreReserve = 56;
-  const pillH = 24;
-  const pillW = 72;
-  const pillGap = 8;
-  const panelW = Math.max(120, Math.min(174, view.width - scoreReserve - pillW - pillGap - 24));
-  fillRoundRect(ctx, x - 3, y - 2, panelW, avatar + 4, 10, active ? "#fff8e5" : "#f2ead8", active ? "#2f6f57" : "#d3b982");
+  const maxPanelW = Math.max(118, Math.min(186, view.width - scoreReserve - 24));
+  const textW = Math.max(measureTextWidth(ctx, identity, 11), measureTextWidth(ctx, subline, 10));
+  const panelW = Math.max(118, Math.min(maxPanelW, avatar + 18 + textW));
+  const panel = { x: x - 3, y: y - 2, w: panelW, h: avatar + 4 };
+  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 10, active ? "#fff8e5" : "#f2ead8", active ? "#2f6f57" : "#d3b982");
   if (leader) {
     const action = { id: "leaderAvatar", playerIndex, cardId: leader.id, x, y, w: avatar, h: avatar };
     actions.push(action);
@@ -36,20 +49,10 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
     fillRoundRect(ctx, x, y, avatar, avatar, 10, "#efe6d2", "#d3b982");
     text(ctx, "将", x + avatar / 2, y + avatar / 2, 13, "#8f3c1f", "center");
   }
-  const identity = state.mode === "online"
-    ? `${playerSideLabel(state, playerIndex)} · ${short(player.name, 4)} · ${short(player.factionName, 4)}`
-    : `${player.name} · ${short(player.factionName, 4)}`;
   text(ctx, identity, x + avatar + 6, centerY - 7, 11, isLocal ? "#2f6f57" : "#8f3c1f");
-  const handInfo = `手牌 ${player.hand.length} 张${player.passed ? " · 已放弃" : ""}`;
-  text(ctx, `${leader ? short(leader.name || leader.baseName, 4) : "未配置主将"} · ${handInfo}`, x + avatar + 6, centerY + 8, 10, player.leaderUsed ? "#9a8a73" : "#775c34");
-  const discardCount = player.discard ? player.discard.length : 0;
-  const pillX = x - 3 + panelW + pillGap;
-  const pillY = centerY - pillH / 2;
-  const pillFill = isLocal ? "#2f6f57" : "#8f3c1f";
-  fillRoundRect(ctx, pillX, pillY, pillW, pillH, 12, pillFill, "#fff7d8");
-  text(ctx, `弃牌 ${discardCount}`, pillX + pillW / 2, centerY + 1, 11, "#fff7d8", "center");
-  actions.push({ id: "viewDiscardPile", playerIndex, x: pillX, y: pillY, w: pillW, h: pillH });
+  text(ctx, subline, x + avatar + 6, centerY + 8, 10, player.leaderUsed ? "#9a8a73" : "#775c34");
   text(ctx, `${totalScore(player)} 分`, view.width - 14, centerY, 12, "#8f3c1f", "right");
+  return panel;
 }
 
 function fieldSortOrder(card) {
@@ -197,7 +200,9 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
     if (!player) return;
     const isEnemySide = visualIndex === 0;
     const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + sideGap;
-    drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16);
+    const header = drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16);
+    if (isEnemySide) drawRoundResultMarkers(ctx, view, state, header);
+    else drawSharedDiscardPileButton(ctx, view, actions, state, header);
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
     rowOrder.forEach((row, index) => {
       const y = baseY + index * (rowH + gap);
@@ -734,39 +739,89 @@ function localizeBattleEntryText(value, entry, state) {
   return playerName && content.startsWith(playerName) ? `${identity}${content.slice(playerName.length)}` : content;
 }
 
-function drawRoundDot(ctx, x, y, active, fill) {
+function applyRoundMorale(morale, winner) {
+  const next = [morale[0], morale[1]];
+  if (winner == null) {
+    next[0] -= 1;
+    next[1] -= 1;
+  } else {
+    next[winner === 0 ? 1 : 0] -= 1;
+  }
+  return next.map(value => Math.max(0, value));
+}
+
+function moraleAfterRoundResults(results) {
+  return (Array.isArray(results) ? results : []).reduce((morale, result) => {
+    if (Array.isArray(result?.morale) && result.morale.length >= 2) return [result.morale[0] || 0, result.morale[1] || 0];
+    return applyRoundMorale(morale, result?.winner == null ? null : result.winner);
+  }, [2, 2]);
+}
+
+function drawMoraleToken(ctx, x, y, active, fill, size = 6) {
   ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, active ? 5 : 4, 0, Math.PI * 2);
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x + size, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size, y);
+  ctx.closePath();
   ctx.fillStyle = active ? fill : "#d8c9ad";
   ctx.fill();
-  ctx.lineWidth = active ? 2 : 1;
-  ctx.strokeStyle = active ? "#fff7d8" : "#bfa77c";
+  ctx.lineWidth = Math.max(1, size * 0.2);
+  ctx.strokeStyle = active ? fill : "#bfa77c";
   ctx.stroke();
   ctx.restore();
 }
 
-function drawRoundResultMarkers(ctx, view, state) {
-  const results = Array.isArray(state.roundResults) ? state.roundResults : [];
-  if (!results.length && state.round <= 1) return;
-  const local = localPlayerIndex(state);
-  const panelW = 114;
-  const panelH = 42;
-  const x = view.width - panelW - 10;
-  const y = view.safeTop + 4;
-  fillRoundRect(ctx, x, y, panelW, panelH, 10, "rgba(255,250,240,0.94)", "#d3b982");
-  text(ctx, "我", x + 14, y + 16, 9, "#2f6f57", "center");
-  text(ctx, "敌", x + 14, y + 28, 9, "#8f3c1f", "center");
-  for (let index = 0; index < 3; index += 1) {
-    const result = results.find(item => item.round === index + 1);
-    const cx = x + 38 + index * 22;
-    text(ctx, String(index + 1), cx, y + 8, 7, "#8a785f", "center");
-    const isLocalWin = result && result.winner === local;
-    const isEnemyWin = result && result.winner != null && result.winner !== local;
-    const isDraw = result && result.winner == null;
-    drawRoundDot(ctx, cx, y + 18, isLocalWin || isDraw, isDraw ? "#d19330" : "#2f6f57");
-    drawRoundDot(ctx, cx, y + 32, isEnemyWin || isDraw, isDraw ? "#d19330" : "#8f3c1f");
+function drawMoraleTokens(ctx, x, y, count, fill, loss = 0, size = 6, gap = 16) {
+  for (let index = 0; index < 2; index += 1) {
+    drawMoraleToken(ctx, x + index * gap, y, index < count, fill, size);
   }
+  if (loss > 0) text(ctx, `-${loss}`, x + gap * 2 + 6, y + 1, 10, "#9f3b24", "center");
+}
+
+function sideStatusLabel(state, playerIndex) {
+  const playerName = state.players?.[playerIndex]?.name || `玩家${playerIndex + 1}`;
+  if (state.mode === "online") return short(playerName, 4);
+  if (state.mode === "ai") return playerIndex === localPlayerIndex(state) ? "玩家" : "系统";
+  return short(playerName, 4);
+}
+
+function panelAfterHeader(view, header, preferredW) {
+  if (!header) return { x: 10, y: view.safeTop + 2, w: preferredW, h: 24 };
+  const x = header.x + header.w + 6;
+  const availableW = Math.max(72, view.width - x - 10);
+  return { x, y: header.y, w: Math.min(preferredW, availableW), h: header.h };
+}
+
+function drawSharedDiscardPileButton(ctx, view, actions, state, header) {
+  const local = localPlayerIndex(state);
+  const opponent = local === 0 ? 1 : 0;
+  const localCount = state.players?.[local]?.discard?.length || 0;
+  const opponentCount = state.players?.[opponent]?.discard?.length || 0;
+  const rect = { id: "viewDiscardPile", playerIndex: local, ...panelAfterHeader(view, header, 112) };
+  actions.push(rect);
+  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 10, "rgba(255,250,240,0.94)", "#d3b982");
+  drawFittedText(ctx, `双方弃牌 ${localCount}/${opponentCount}`, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1, rect.w - 12, 10, "#775c34");
+}
+
+function drawRoundResultMarkers(ctx, view, state, header) {
+  const local = localPlayerIndex(state);
+  const opponent = local === 0 ? 1 : 0;
+  const morale = moraleAfterRoundResults(state.roundResults || []);
+  const panel = panelAfterHeader(view, header, 126);
+  const labelW = state.mode === "online" ? 36 : 28;
+  const titleX = panel.x + 14;
+  const labelX = panel.x + 28 + labelW / 2;
+  const tokenX = panel.x + 34 + labelW;
+  const topY = panel.y + panel.h * 0.34;
+  const bottomY = panel.y + panel.h * 0.72;
+  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 10, "rgba(255,250,240,0.94)", "#d3b982");
+  text(ctx, "军心", titleX, panel.y + panel.h / 2 + 1, 8, "#8a6132", "center");
+  drawFittedText(ctx, sideStatusLabel(state, opponent), labelX, topY + 1, labelW, 8.5, "#8f3c1f");
+  drawFittedText(ctx, sideStatusLabel(state, local), labelX, bottomY + 1, labelW, 8.5, "#2f6f57");
+  drawMoraleTokens(ctx, tokenX, topY, morale[opponent] || 0, "#8f3c1f", 0, 4.6, 12);
+  drawMoraleTokens(ctx, tokenX, bottomY, morale[local] || 0, "#2f6f57", 0, 4.6, 12);
 }
 
 function compactEffectNames(namesText, count) {
@@ -785,8 +840,11 @@ function compactEffectNames(namesText, count) {
 function normalizeBattleEffectSegment(segment) {
   const value = String(segment || "").replace(/^\s+|\s+$/g, "").replace(/。$/, "");
   if (!value) return "";
-  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|奇策|召唤岳家军|破釜|请辞|弃牌)：(.+)/);
-  if (direct) return `${direct[1]}：${short(direct[2].trim(), direct[1] === "奇策" ? 18 : (direct[1] === "弃牌" ? 24 : 16))}`;
+  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|时局|奇策|侦察|取回|洗牌|调度|封锁|抽牌|半损|召唤岳家军|破釜|请辞|弃牌|主将技能)：(.+)/);
+  if (direct) {
+    const limit = direct[1] === "主将技能" ? 24 : (direct[1] === "奇策" ? 18 : (direct[1] === "弃牌" ? 24 : 16));
+    return `${direct[1]}：${short(direct[2].trim(), limit)}`;
+  }
 
   const muster = value.match(/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)\s*(\d+)\s*张[^：；。]*(?:：([^；。]+))?/);
   if (muster) {
@@ -809,9 +867,18 @@ function normalizeBattleEffectSegment(segment) {
   return "";
 }
 
+function leaderSkillSummaryLabel(entry) {
+  if (entry.actionType !== "leader") return "";
+  const summary = String(entry.summary || "").replace(/。$/, "").trim();
+  if (!summary || summary === "主将技能") return "";
+  return `主将技能：${short(summary, 24)}`;
+}
+
 function battlePlayEntryEffectLabels(entry) {
   const source = [entry.description, entry.text].filter(Boolean).map(String).join("；");
   const labels = [];
+  const leaderSummary = leaderSkillSummaryLabel(entry);
+  if (leaderSummary) labels.push(leaderSummary);
   source.split(/[；。]/).forEach(segment => {
     const label = normalizeBattleEffectSegment(segment);
     if (label && !labels.includes(label)) labels.push(label);
@@ -837,19 +904,20 @@ function battlePlayEntryText(entry, state) {
   if (entry.text) {
     const value = String(entry.text)
       .replace(/^第\s*\d+\s*回合\s*[·：:]\s*/, "")
-      .replace(/；?(集贤|召唤岳家军|召唤|奇策|破釜|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察)[^；。]*。?/g, "")
+      .replace(/；?(集贤|召唤岳家军|召唤|奇策|破釜|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察|取回|洗牌|调度|封锁|抽牌|半损|主将技能)[^；。]*。?/g, "")
       .replace(/到(?:己方|对方)(?:疆场|朝堂|文脉)/g, "")
       .replace(/\s*(?:→|->)\s*[^；。]*/g, "")
       .replace(/。$/, "")
       .trim();
-    const suffix = leaderLabel && !/主将技能被封锁|主将能力已被封锁/.test(value) ? leaderLabel : "";
+    const suffix = leaderLabel && !effectText && !/主将技能被封锁|主将能力已被封锁/.test(value) ? leaderLabel : "";
     return `${localizeBattleEntryText(value, entry, state)}${suffix}${effectText}`;
   }
   const verb = entry.actionType === "leader" ? "使用主将" : "打出";
   const actor = state?.mode === "online" && Number.isInteger(entry.playerIndex)
     ? playerIdentityLabel(state, entry.playerIndex, entry.playerName)
     : (entry.playerName || "玩家");
-  return `${actor}${verb}「${entry.name || entry.baseName || "未知卡牌"}」${leaderLabel}${effectText}`;
+  const suffix = leaderLabel && !effectText ? leaderLabel : "";
+  return `${actor}${verb}「${entry.name || entry.baseName || "未知卡牌"}」${suffix}${effectText}`;
 }
 
 function mergeBattlePlayLogEntries(logs) {
@@ -1205,8 +1273,11 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   const scores = transition.scores || [0, 0];
   const localScore = scores[local] || 0;
   const opponentScore = scores[opponent] || 0;
-  const localRounds = localPlayer?.roundsWon || 0;
-  const opponentRounds = opponentPlayer?.roundsWon || 0;
+  const moraleAfter = Array.isArray(transition.morale) ? transition.morale : moraleAfterRoundResults(state.roundResults);
+  const moraleLoss = Array.isArray(transition.moraleLoss) ? transition.moraleLoss : [0, 0];
+  const moraleBefore = Array.isArray(transition.moraleBefore)
+    ? transition.moraleBefore
+    : [Math.min(2, (moraleAfter[0] || 0) + (moraleLoss[0] || 0)), Math.min(2, (moraleAfter[1] || 0) + (moraleLoss[1] || 0))];
   const seconds = Math.max(1, Math.ceil((ui.roundTransitionNoticeMs || ui.recentPlayAutoDismissMs || 2000) / 1000));
   const resultType = transition.winner == null ? "draw" : (transition.winner === local ? "win" : "loss");
   const resultStyles = {
@@ -1232,6 +1303,7 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
       return `${item.round}局${itemScores[local] || 0}:${itemScores[opponent] || 0}${tag}`;
     }).join(" · ")
     : `${transition.round}局${localScore}:${opponentScore}${resultType === "draw" ? "平" : (resultType === "win" ? "胜" : "负")}`;
+  const moraleLine = `军心 ${moraleBefore[local] || 0}:${moraleBefore[opponent] || 0}→${moraleAfter[local] || 0}:${moraleAfter[opponent] || 0}`;
   const panelW = view.width - 36;
   const panelX = 18;
   const panelH = 90;
@@ -1241,7 +1313,7 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   const avatarY = panelY + 6;
   const avatarX = 32;
   const textX = avatarX + avatarSize + 10;
-  const textW = view.width - textX - 72;
+  const textW = view.width - textX - 92;
   const tagW = 38;
   const tagH = 18;
 
@@ -1254,8 +1326,11 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   text(ctx, `${title} · 第 ${transition.round} 局结束`, textX + tagW + 8, panelY + 18, 13, style.color);
   wrapText(ctx, `我方 ${localPlayer?.factionName || localPlayer?.faction || "阵营"} · ${short(localPlayer?.leader?.name || localPlayer?.leader?.baseName || "主将", 8)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
   wrapText(ctx, `敌方 ${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.baseName || "主将", 8)} · ${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
-  wrapText(ctx, `${roundLine} · ${nextLine}`, textX, panelY + 80, textW, 13, 1, 10, "#6f5a3a");
-  text(ctx, `${localRounds}:${opponentRounds}`, view.width - 42, panelY + 54, 18, style.color, "center");
+  wrapText(ctx, `${roundLine} · ${moraleLine} · ${nextLine}`, textX, panelY + 80, textW, 13, 1, 10, "#6f5a3a");
+  const moraleX = view.width - 58;
+  text(ctx, "军心", moraleX + 8, panelY + 31, 10, "#8a6132", "center");
+  drawMoraleTokens(ctx, moraleX, panelY + 48, moraleAfter[local] || 0, style.color, moraleLoss[local] || 0);
+  drawMoraleTokens(ctx, moraleX, panelY + 69, moraleAfter[opponent] || 0, "#8f3c1f", moraleLoss[opponent] || 0);
 }
 
 function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
@@ -1464,7 +1539,6 @@ function draw(ctx, view, actions, state, ui = {}) {
     : (state.over ? "对局结束" : (state.roundTransition ? "回合结算中" : `当前：${actionPlayerName}`));
   text(ctx, roundText, view.width / 2, headerY, 17, "#2f2417", "center");
   text(ctx, statusText, view.width / 2, headerY + 22, 12, "#775c34", "center");
-  drawRoundResultMarkers(ctx, view, state);
   if (weatherNames.length) {
     text(ctx, `时局：${weatherNames.join("、")}`, view.width / 2, headerY + 40, 10, "#8a785f", "center");
   }

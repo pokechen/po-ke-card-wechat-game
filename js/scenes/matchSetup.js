@@ -198,8 +198,8 @@ function draw(ctx, view, actions, ui = {}) {
   const statusText = randomLineup
     ? "开局时随机确定阵营、主将与卡牌。"
     : (status.valid
-      ? `自定义牌组已完成：${status.total}张，本局${useCustomDeck ? "使用自定义" : "使用随机"}。`
-      : `自定义牌组未完成：${status.total}/40，可编辑或随机开局。`);
+      ? `自定义牌组已完成：${status.total}张，总分${status.score}，本局${useCustomDeck ? "使用自定义" : "使用随机"}。`
+      : `自定义牌组未完成：${status.total}/40，总分${status.score}，可编辑或随机开局。`);
   drawInfoCard(ctx, statusText, contentX, panelY + 160, rowW, 34, randomLineup ? "#2f6f57" : (status.valid ? (useCustomDeck ? "#2f6f57" : "#8d6840") : "#8f3c1f"));
 
   if (randomLineup) {

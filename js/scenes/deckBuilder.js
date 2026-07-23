@@ -75,7 +75,7 @@ function draw(ctx, view, actions, ui) {
   text(ctx, "编辑我的牌组", view.width / 2, top, 22, "#2f2417", "center");
   text(ctx, `${FACTION_LABELS[faction] || faction} · 自定义牌组 · ${safePage + 1}/${totalPages}`, view.width / 2, top + 25, 12, "#775c34", "center");
   const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
-  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略 ${status.specials}/10`, view.width / 2, top + 45, 12, statusColor, "center");
+  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略 ${status.specials}/10 · 总分 ${status.score}`, view.width / 2, top + 45, 11, statusColor, "center");
 
   const auto = { id: "autoCustomDeck", x: 26, y: toolY, w: (view.width - 64) / 2, h: 34 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 12, y: toolY, w: auto.w, h: 34 };

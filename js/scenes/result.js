@@ -4,11 +4,51 @@ function localPlayerIndex(state) {
   return state?.mode === "online" && Number.isInteger(state.localPlayerIndex) ? state.localPlayerIndex : 0;
 }
 
+function applyRoundMorale(morale, winner) {
+  const next = [morale[0], morale[1]];
+  if (winner == null) {
+    next[0] -= 1;
+    next[1] -= 1;
+  } else {
+    next[winner === 0 ? 1 : 0] -= 1;
+  }
+  return next.map(value => Math.max(0, value));
+}
+
+function moraleAfterRoundResults(results) {
+  return (Array.isArray(results) ? results : []).reduce((morale, result) => {
+    if (Array.isArray(result?.morale) && result.morale.length >= 2) return [result.morale[0] || 0, result.morale[1] || 0];
+    return applyRoundMorale(morale, result?.winner == null ? null : result.winner);
+  }, [2, 2]);
+}
+
+function drawMoraleToken(ctx, x, y, active, fill) {
+  const size = 7;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x + size, y);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size, y);
+  ctx.closePath();
+  ctx.fillStyle = active ? fill : "#d8c9ad";
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = active ? fill : "#bfa77c";
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMoraleTokens(ctx, x, y, count, fill) {
+  for (let index = 0; index < 2; index += 1) drawMoraleToken(ctx, x + index * 18, y, index < count, fill);
+}
+
 function resultTitle(state) {
   if (!state) return "对局结束";
   if (state.mode !== "online") return state.resultText || "对局结束";
   const local = localPlayerIndex(state);
   if (state.winner == null) return "平局";
+  if (state.endReason === "disconnect") return state.winner === local ? "对方掉线" : "你已掉线";
   if (state.endReason === "surrender") return state.winner === local ? "对方认输" : "你已认输";
   return state.winner === local ? "你赢了" : "你输了";
 }
@@ -22,7 +62,9 @@ function roundResultText(state) {
     const scoreText = state.mode === "online"
       ? `${scores[local] || 0}:${scores[enemy] || 0}`
       : `${scores[0] || 0}:${scores[1] || 0}`;
-    return `第${item.round}局 ${scoreText}${state.mode === "online" ? ` ${label}` : ""}`;
+    const morale = Array.isArray(item.morale) ? item.morale : null;
+    const moraleText = morale ? ` 军心${morale[local] || 0}:${morale[enemy] || 0}` : "";
+    return `第${item.round}局 ${scoreText}${state.mode === "online" ? ` ${label}` : ""}${moraleText}`;
   });
   return entries.join("  ");
 }
@@ -46,12 +88,18 @@ function draw(ctx, view, actions, state) {
   const finalScoresText = online
     ? `${state.finalScores?.[local] || 0} : ${state.finalScores?.[enemy] || 0}`
     : `${state.finalScores?.[0] || 0} : ${state.finalScores?.[1] || 0}`;
+  const morale = Array.isArray(state.morale) ? state.morale : moraleAfterRoundResults(state.roundResults);
   text(ctx, roundsText, view.width / 2, top + 92, online ? 12 : 18, "#3b2b18", "center");
   text(ctx, `末局分：${finalScoresText}`, view.width / 2, top + 122, 15, "#8f3c1f", "center");
+  text(ctx, "军心", view.width / 2, top + 144, 11, "#8a6132", "center");
+  drawMoraleTokens(ctx, view.width / 2 - 48, top + 164, morale[local] || 0, "#2f6f57");
+  drawMoraleTokens(ctx, view.width / 2 + 18, top + 164, morale[enemy] || 0, "#8f3c1f");
+  text(ctx, "我", view.width / 2 - 62, top + 165, 10, "#2f6f57", "center");
+  text(ctx, "敌", view.width / 2 + 4, top + 165, 10, "#8f3c1f", "center");
+  text(ctx, online ? `我方 ${me.factionName} 对 敌方 ${opponent.factionName}` : `${p0.factionName} 对 ${p1.factionName}`, view.width / 2, top + 184, 12, "#775c34", "center");
   const detail = roundResultText(state);
-  if (detail) text(ctx, detail, view.width / 2, top + 150, 12, "#775c34", "center");
-  text(ctx, online ? `我方 ${me.factionName} 对 敌方 ${opponent.factionName}` : `${p0.factionName} 对 ${p1.factionName}`, view.width / 2, top + 176, 13, "#775c34", "center");
-  text(ctx, online ? "联网对局已结束" : "战绩已保存在本机", view.width / 2, top + 206, 12, "#775c34", "center");
+  if (detail) text(ctx, detail, view.width / 2, top + 204, 10, "#775c34", "center");
+  text(ctx, online ? "联网对局已结束，战绩已存入数据库" : "战绩已保存，并会同步到数据库", view.width / 2, top + 222, 11, "#775c34", "center");
   const cards = { id: "viewBattleCards", x: 46, y: top + 256, w: view.width - 92, h: 48 };
   const restart = { id: "restart", x: 46, y: top + 316, w: view.width - 92, h: 48 };
   const home = { id: "home", x: 46, y: top + 376, w: view.width - 92, h: 48 };

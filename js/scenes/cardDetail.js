@@ -36,21 +36,29 @@ function cleanEffectText(content) {
   return value;
 }
 
+function isLeaderCard(card) {
+  return card?.category === "leader" || card?.category === "主将";
+}
+
 function effectSections(card) {
+  const leader = isLeaderCard(card);
   const effects = abilityDescriptions(card).map(cleanEffectText).filter(Boolean);
   if (!effects.length) {
-    const fallback = cleanEffectText(card?.abilityText || (card?.category === "leader" || card?.category === "weather" || card?.category === "special" ? cardSummary(card) : ""));
+    const fallback = cleanEffectText(card?.abilityText || (leader || card?.category === "weather" || card?.category === "special" ? cardSummary(card) : ""));
     if (fallback) effects.push(fallback);
   }
-  const sections = effects.length ? [{
-    title: card?.category === "leader" ? "主将技能" : "特殊效果",
-    content: effects.join("\n"),
-    color: "#f1d58a",
-    lines: 8
-  }] : [];
-  if (card?.category === "leader") {
+  const sections = [];
+  if (leader) {
     const factionEffect = factionPerkSummary(card.faction);
-    if (factionEffect) sections.push({ title: "阵容特殊效果", content: factionEffect, color: "#9ed3b0", lines: 4 });
+    if (factionEffect) sections.push({ title: "阵容特殊技能", content: factionEffect, color: "#9ed3b0", lines: 4 });
+  }
+  if (effects.length) {
+    sections.push({
+      title: leader ? "主将技能" : "特殊效果",
+      content: effects.join("\n"),
+      color: "#f1d58a",
+      lines: 8
+    });
   }
   return sections;
 }
@@ -217,7 +225,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     }
 
     const isStrategy = card.category === "weather" || card.category === "special";
-    if (card.strength != null && !isStrategy) {
+    if (card.strength != null && !isStrategy && !isLeaderCard(card)) {
       const bs = 30;
       const bx = mcx - mainCardW/2 + 6;
       const by = mcy + 6;

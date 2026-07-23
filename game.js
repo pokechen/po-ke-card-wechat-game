@@ -18,13 +18,14 @@ if (typeof wx !== "undefined" && typeof wx.onShareAppMessage === "function") {
   console.log(`[share-early] 已在加载任何模块前注册，版本=${EARLY_SHARE_VERSION}`);
 }
 
-const { createCanvasAdapter, hit, setImageRenderHook } = require("./js/ui/canvas");
+const { createCanvasAdapter, hit, setImageRenderHook, drawRemoteImage, fillRoundRect, text, wrapText, button } = require("./js/ui/canvas");
 const menuScene = require("./js/scenes/menu");
 const matchSetupScene = require("./js/scenes/matchSetup");
 const rulesScene = require("./js/scenes/rules");
 const settingsScene = require("./js/scenes/settings");
 const deckBuilderScene = require("./js/scenes/deckBuilder");
 const historyScene = require("./js/scenes/history");
+const adminStatsScene = require("./js/scenes/adminStats");
 const battleScene = require("./js/scenes/battleScene");
 const { sortedHandCards } = battleScene;
 const resultScene = require("./js/scenes/result");
@@ -32,8 +33,8 @@ const battleCardsScene = require("./js/scenes/battleCards");
 const pvpRoomScene = require("./js/scenes/pvpRoom");
 const pvpSetupScene = require("./js/scenes/pvpSetup");
 const pvpClient = require("./js/core/pvpClient");
-const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
-const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue } = require("./js/core/cards");
+const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, localMatchRecords, removeLocalMatchRecord, setRecordMatchCloudHook, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
+const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue, allCards } = require("./js/core/cards");
 const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
@@ -88,6 +89,10 @@ const app = {
     deckSlotDropdown: "",
     historyScroll: 0,
     historyLeaderDetailId: "",
+    cloudHistoryRecords: [],
+    cloudHistoryLoaded: false,
+    cloudHistoryLoading: false,
+    cloudHistoryError: "",
     battleCardsSide: "mine",
     battleCardsScrolls: [0, 0],
     battleCardsDetailId: "",
@@ -105,15 +110,34 @@ const app = {
     pvpShareCodeError: "",
     pvpShareCodeRoomId: "",
     pvpShareCodeEnvVersion: "",
+    authToken: "",
+    authUser: null,
+    authExpiresAt: 0,
+    isAdmin: false,
+    adminStats: null,
+    adminStatsLoading: false,
+    adminStatsError: "",
+    adminStatsScroll: 0,
     pageTransition: null,
     detailSwipe: null
   }
 };
 
-setImageRenderHook(() => render());
+let imageRenderPending = false;
+setImageRenderHook(() => {
+  if (app.ui.settingDeckScrolling) return;
+  if (imageRenderPending) return;
+  imageRenderPending = true;
+  requestFrame(() => {
+    imageRenderPending = false;
+    render();
+  });
+});
 
 const RECENT_PLAY_AUTO_DISMISS_MS = 2000;
 const ROUND_TRANSITION_NOTICE_MS = RECENT_PLAY_AUTO_DISMISS_MS * 2;
+const ACTIVE_SINGLE_MATCH_KEY = "zhangyu.single-match.active.v1";
+let activeSingleMatchSnapshot = "";
 const PAGE_TRANSITION_MS = 180;
 const DETAIL_SWIPE_MS = 220;
 const BATTLE_HAND_CARD_H = 96;
@@ -126,6 +150,72 @@ const MULLIGAN_SWAP_IN_MS = 300;
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
   return setTimeout(callback, 16);
+}
+
+function activeSingleMatch() {
+  return app.match && app.match.mode === "ai" && !app.match.over ? app.match : null;
+}
+
+function clearActiveSingleMatchSnapshot() {
+  activeSingleMatchSnapshot = "";
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.removeStorageSync) return;
+  try { api.removeStorageSync(ACTIVE_SINGLE_MATCH_KEY); } catch (err) {
+    console.warn("[single-match] 清理未完成对局快照失败", err?.message || err);
+  }
+}
+
+function persistActiveSingleMatch() {
+  const match = activeSingleMatch();
+  if (!match) {
+    if (app.match?.mode === "ai" && app.match.over) clearActiveSingleMatchSnapshot();
+    return false;
+  }
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.setStorageSync) return false;
+  try {
+    const serialized = JSON.stringify(match);
+    if (serialized === activeSingleMatchSnapshot) return true;
+    api.setStorageSync(ACTIVE_SINGLE_MATCH_KEY, {
+      version: 1,
+      savedAt: Date.now(),
+      match: JSON.parse(serialized)
+    });
+    activeSingleMatchSnapshot = serialized;
+    return true;
+  } catch (err) {
+    console.warn("[single-match] 保存未完成对局快照失败", err?.message || err);
+    return false;
+  }
+}
+
+function restoreInterruptedSingleMatch() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.getStorageSync) return false;
+  let snapshot = null;
+  try { snapshot = api.getStorageSync(ACTIVE_SINGLE_MATCH_KEY) || null; } catch (err) {}
+  if (!snapshot || snapshot.version !== 1) return false;
+  clearActiveSingleMatchSnapshot();
+  const source = snapshot.match;
+  if (!source || source.mode !== "ai" || source.over || source.historyRecorded || !Array.isArray(source.players) || source.players.length !== 2) return false;
+  try {
+    app.match = JSON.parse(JSON.stringify(source));
+    surrender(app.match, 0, "disconnect");
+    app.scene = "result";
+    console.log("[single-match] 检测到重新进入前未完成的单机对局，已判负结算");
+    return true;
+  } catch (err) {
+    console.warn("[single-match] 结算未完成单机对局失败", err?.message || err);
+    app.match = null;
+    return false;
+  }
+}
+
+function resumeSuspendedSingleMatch() {
+  if (app.scene !== "battle" || !activeSingleMatch()) return false;
+  render();
+  if (!app.match.pending) scheduleAi();
+  return true;
 }
 
 function startPageTransition(scene, axis, fromOffset) {
@@ -226,6 +316,7 @@ function continueBattleRoundTransition() {
   app.ui.dismissedRecentPlaySeq = Math.max(app.ui.dismissedRecentPlaySeq || 0, seq);
   if (isOnlineMatch()) return submitPvpAction({ type: "continueRound" });
   if (!continueRoundTransition(app.match)) return render();
+  persistActiveSingleMatch();
   app.ui.handScroll = clampHandScroll(app.ui.handScroll);
   if (app.match.over) return setScene("result");
   render();
@@ -538,13 +629,334 @@ function startMulliganSwapSequence(firstUid) {
   runMulliganSwapStep("out");
 }
 
+const PROFILE_DEFAULT_NAME = "章鱼隐士";
+const CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
+let profileAuthButton = null;
+let profileAuthButtonMode = "";
+let profileUploading = false;
+
+function randomCardImageUrl() {
+  const cards = Array.isArray(allCards) ? allCards : [];
+  if (!cards.length) return "";
+  const card = cards[Math.floor(Math.random() * cards.length)];
+  const baseName = card && (card.baseName || (card.imageUrl ? String(card.imageUrl).split("/").pop().replace(/\.webp$/i, "") : ""));
+  if (!baseName) return "";
+  return `${CARD_IMAGE_BASE_URL}/${encodeURIComponent(baseName)}.webp`;
+}
+
+function hasRealProfile() {
+  const name = app.ui.authUser && app.ui.authUser.nickName;
+  return !!(name && name !== PROFILE_DEFAULT_NAME);
+}
+
+function destroyProfileAuthButton() {
+  if (profileAuthButton && typeof profileAuthButton.destroy === "function") {
+    try { profileAuthButton.destroy(); } catch (err) {}
+  }
+  profileAuthButton = null;
+  profileAuthButtonMode = "";
+}
+
+function applyProfile(userInfo) {
+  const nickName = (userInfo && userInfo.nickName) || PROFILE_DEFAULT_NAME;
+  const avatarUrl = (userInfo && userInfo.avatarUrl) || "";
+  app.ui.authUser = { nickName, avatarUrl };
+  saveAuthSession({
+    token: app.ui.authToken,
+    expiresAt: app.ui.authExpiresAt,
+    tokenStorage: app.ui.authTokenStorage || ""
+  });
+  render();
+  if (!profileUploading) {
+    profileUploading = true;
+    ensureCloudAuth()
+      .then(authed => {
+        if (!authed) { profileUploading = false; return; }
+        return pvpClient.updateProfile({ nickName, avatarUrl })
+          .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err));
+      })
+      .catch(() => {})
+      .then(() => { profileUploading = false; });
+  }
+}
+
+let keyboardInputHandler = null;
+let keyboardConfirmHandler = null;
+function startNameKeyboard() {
+  if (typeof wx === "undefined" || typeof wx.showKeyboard !== "function") return;
+  stopNameKeyboard();
+  keyboardInputHandler = (res) => {
+    if (app.ui.profileDraft) { app.ui.profileDraft.nickName = (res && res.value) || ""; render(); }
+  };
+  keyboardConfirmHandler = (res) => {
+    if (app.ui.profileDraft) app.ui.profileDraft.nickName = (res && res.value) || app.ui.profileDraft.nickName;
+    app.ui.profileEditingName = false;
+    try { wx.hideKeyboard(); } catch (err) {}
+    render();
+  };
+  try { wx.onKeyboardInput(keyboardInputHandler); } catch (err) {}
+  try { wx.onKeyboardConfirm(keyboardConfirmHandler); } catch (err) {}
+  try {
+    wx.showKeyboard({ defaultValue: app.ui.profileDraft.nickName || "", maxLength: 12, confirmType: "done", confirmHold: false });
+    app.ui.profileEditingName = true;
+    render();
+  } catch (err) {}
+}
+function stopNameKeyboard() {
+  if (keyboardInputHandler) { try { wx.offKeyboardInput(keyboardInputHandler); } catch (err) {} keyboardInputHandler = null; }
+  if (keyboardConfirmHandler) { try { wx.offKeyboardConfirm(keyboardConfirmHandler); } catch (err) {} keyboardConfirmHandler = null; }
+  try { wx.hideKeyboard(); } catch (err) {}
+}
+
+function chooseAvatarImage() {
+  if (typeof wx === "undefined") return;
+  const pick = typeof wx.chooseMedia !== "undefined"
+    ? () => wx.chooseMedia({ count: 1, mediaType: ["image"], sizeType: ["compressed"], sourceType: ["album", "camera"] })
+    : typeof wx.chooseImage !== "undefined"
+      ? () => wx.chooseImage({ count: 1, sizeType: ["compressed"], sourceType: ["album", "camera"] })
+      : null;
+  if (!pick) return;
+  pick().then(res => {
+    const paths = res.tempFiles ? res.tempFiles.map(f => f.tempFilePath) : (res.tempFilePaths || []);
+    const url = paths[0] || "";
+    if (!url) return;
+    if (app.ui.profileDraft) app.ui.profileDraft.avatarUrl = url;
+    render();
+    uploadAvatarToCloud(url);
+  }).catch(() => {});
+}
+
+function uploadAvatarToCloud(localPath) {
+  if (!localPath || !pvpClient.uploadAvatarFile) return;
+  ensureCloudAuth()
+    .then(authed => authed ? pvpClient.uploadAvatarFile(localPath) : null)
+    .then(res => {
+      const avatarUrl = res?.avatarUrl || res?.fileID || "";
+      if (avatarUrl && app.ui.profileDraft) { app.ui.profileDraft.avatarUrl = avatarUrl; render(); }
+    })
+    .catch(err => console.warn("[profile] upload avatar failed", err && err.message ? err.message : err));
+}
+
+function saveProfileDraft() {
+  const draft = app.ui.profileDraft || {};
+  const nickName = (draft.nickName || "").trim() || PROFILE_DEFAULT_NAME;
+  const avatarUrl = draft.avatarUrl || "";
+  app.ui.authUser = { nickName, avatarUrl };
+  saveAuthSession({
+    token: app.ui.authToken,
+    expiresAt: app.ui.authExpiresAt,
+    tokenStorage: app.ui.authTokenStorage || ""
+  });
+  render();
+  if (!profileUploading) {
+    profileUploading = true;
+    ensureCloudAuth()
+      .then(authed => {
+        if (!authed) { profileUploading = false; return; }
+        return pvpClient.updateProfile({ nickName, avatarUrl })
+          .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err));
+      })
+      .catch(() => {})
+      .then(() => { profileUploading = false; });
+  }
+}
+
+function openProfileSheet(tip = "") {
+  destroyProfileAuthButton();
+  const user = app.ui.authUser || {};
+  app.ui.profileDraft = { nickName: user.nickName || "", avatarUrl: user.avatarUrl || "" };
+  app.ui.profileEditingName = false;
+  app.ui.profileTip = tip;
+  app.ui.profileSheetOpen = true;
+  app.ui.profilePromptShown = true;
+  render();
+}
+
+function closeProfileSheet() {
+  const wasFirst = app.ui.profileFirstOpen;
+  app.ui.profileSheetOpen = false;
+  app.ui.profileFirstOpen = false;
+  destroyProfileAuthButton();
+  stopNameKeyboard();
+  // 首次进入若未设置任何真实昵称，则落一个默认资料，保证 users 表有头像昵称
+  if (wasFirst) {
+    const draft = app.ui.profileDraft || {};
+    if (!(draft.nickName && draft.nickName !== PROFILE_DEFAULT_NAME)) {
+      applyProfile({ nickName: PROFILE_DEFAULT_NAME, avatarUrl: "" });
+      return;
+    }
+  }
+  render();
+}
+
+function profileNeedsNickname(user = app.ui.authUser) {
+  return !String(user?.nickName || "").trim();
+}
+
+function menuProfileAuthRect() {
+  return { x: 16, y: view.safeTop + 10, w: 34 + 160, h: 38 };
+}
+
+function profileAuthPromptConsumed() {
+  return !profileNeedsNickname() || app.ui.profileAuthPrompted || loadProfileAuthPrompted();
+}
+
+function shouldUseAvatarAuth() {
+  return app.scene === "menu" && !app.ui.profileSheetOpen && !profileAuthPromptConsumed();
+}
+
+function promptProfileIfNeeded(needsProfile) {
+  if (!needsProfile || profileAuthPromptConsumed()) return;
+  app.ui.profileFirstOpen = true;
+  app.ui.profileAuthGuide = true;
+  render();
+  createProfileAuthButton("avatar");
+}
+
+// 统一按钮风格：浅底深字，清晰可读
+const BTN_FILL = "#fff7e8";
+const BTN_STROKE = "#c4b49a";
+const BTN_TEXT = "#4a3826";
+
+function createProfileAuthButton(mode = "avatar") {
+  if (profileAuthButton && profileAuthButtonMode === mode) return true;
+  destroyProfileAuthButton();
+  if (typeof wx === "undefined" || typeof wx.createUserInfoButton !== "function") {
+    saveProfileAuthPrompted();
+    app.ui.profileAuthGuide = false;
+    openProfileSheet("当前环境无法微信授权，请填写个人信息");
+    return false;
+  }
+  const rect = menuProfileAuthRect();
+  profileAuthButton = wx.createUserInfoButton({
+    type: "text",
+    text: "",
+    style: {
+      left: rect.x,
+      top: rect.y,
+      width: rect.w,
+      height: rect.h,
+      lineHeight: rect.h,
+      backgroundColor: "rgba(255,255,255,0.01)",
+      color: "rgba(0,0,0,0)",
+      textAlign: "center",
+      fontSize: 1,
+      borderRadius: Math.floor(rect.h / 2),
+      borderWidth: 0
+    }
+  });
+  profileAuthButtonMode = mode;
+  profileAuthButton.onTap(res => {
+    saveProfileAuthPrompted();
+    app.ui.profileAuthGuide = false;
+    const info = res && res.userInfo;
+    if (info && (info.nickName || info.avatarUrl)) {
+      app.ui.profileDraft = {
+        nickName: info.nickName || app.ui.authUser?.nickName || "",
+        avatarUrl: info.avatarUrl || app.ui.authUser?.avatarUrl || ""
+      };
+      // 微信授权资料保留在 users.profile/userInfo；游戏内展示资料另存 customProfile。
+      ensureCloudAuth()
+        .then(authed => authed && pvpClient.saveWechatProfile ? pvpClient.saveWechatProfile(info) : null)
+        .catch(err => console.warn("[profile] save wechat profile failed", err && err.message ? err.message : err));
+      saveProfileDraft();
+      destroyProfileAuthButton();
+      render();
+      return;
+    }
+    destroyProfileAuthButton();
+    openProfileSheet("未授权微信资料，请填写昵称并上传头像");
+  });
+  if (typeof profileAuthButton.onError === "function") {
+    profileAuthButton.onError(err => {
+      console.warn("[profile] auth error", err && err.message ? err.message : err);
+      saveProfileAuthPrompted();
+      app.ui.profileAuthGuide = false;
+      destroyProfileAuthButton();
+      openProfileSheet("微信授权不可用，请填写个人信息");
+    });
+  }
+  return true;
+}
+
+function drawProfileSheet(ctx, view, actions) {
+  ctx.save();
+  ctx.fillStyle = "rgba(20,16,10,0.55)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+  const firstOpen = !!app.ui.profileFirstOpen;
+  const pw = 300, ph = firstOpen ? 270 : 240;
+  const px = (view.width - pw) / 2, py = (view.height - ph) / 2;
+  const r = 16;
+  fillRoundRect(ctx, px, py, pw, ph, r, "#fff7e8", "#d9c39a");
+  text(ctx, "个人资料", px + pw / 2, py + 28, 17, "#4a3826", "center");
+  text(ctx, "×", px + pw - 22, py + 23, 24, "#806e57", "center", "middle");
+  if (firstOpen) {
+    wrapText(ctx, "设置你的昵称和头像，用于联机对战展示身份。", px + 20, py + 48, pw - 40, 11, 2, 11, "#8a7860");
+  }
+  if (app.ui.profileTip) text(ctx, app.ui.profileTip, px + pw / 2, py + 58, 11, "#8a7860", "center");
+
+  const draft = app.ui.profileDraft || {};
+  const sz = 60;
+  const cx = px + pw / 2;
+  const cy = py + (firstOpen ? 96 : 76);
+
+  fillRoundRect(ctx, cx - sz / 2, cy - sz / 2, sz, sz, sz / 2, "#ede5d5", "#c4b49a");
+  const hasImg = drawRemoteImage(ctx, draft.avatarUrl, cx - sz / 2, cy - sz / 2, sz, sz, { radius: sz / 2 });
+  if (!hasImg) text(ctx, "+", cx, cy + 2, 28, "#b0a488", "center", "middle");
+  const nameY = cy + sz / 2 + 36;
+  const nameLabel = draft.nickName || (app.ui.profileEditingName ? "输入中…" : "未设置昵称");
+  const editSize = 20;
+  const nameW = Math.min(120, Math.max(28, ctx.measureText(nameLabel).width));
+  const nameX = cx - 4;
+  const editX = nameX + nameW / 2 + 8;
+  const editY = nameY - editSize / 2 - 1;
+  text(ctx, nameLabel, nameX, nameY, 14, "#4a3826", "center");
+  fillRoundRect(ctx, editX, editY, editSize, editSize, editSize / 2, "#f6ecd9", "#d2b98c");
+  ctx.save();
+  ctx.translate(editX + editSize / 2, editY + editSize / 2);
+  ctx.rotate(Math.PI / 4);
+  fillRoundRect(ctx, -2, -7, 4, 11, 1.8, "#806343");
+  fillRoundRect(ctx, -2, -7, 4, 2.2, 1, "#b89561");
+  ctx.beginPath();
+  ctx.moveTo(-2, 4);
+  ctx.lineTo(2, 4);
+  ctx.lineTo(0, 7.2);
+  ctx.closePath();
+  ctx.fillStyle = "#806343";
+  ctx.fill();
+  ctx.restore();
+
+  const bw = pw - 40, bx = px + 20;
+  const saveY = cy + sz / 2 + 56;
+  button(ctx, { x: bx, y: saveY, w: bw, h: 40, label: "保存", fill: "#3a6b58", stroke: "#3a6b58", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
+
+  // 遮罩位于最底层；资料框本身吞掉点击，只有框外点击会关闭。
+  actions.push({ id: "profileMask", x: 0, y: 0, w: view.width, h: view.height });
+  actions.push({ id: "profilePanel", x: px, y: py, w: pw, h: ph });
+  actions.push({ id: "profileAvatar", x: cx - sz / 2, y: cy - sz / 2, w: sz, h: sz });
+  actions.push({ id: "profileName", x: cx - 100, y: nameY - 16, w: 200, h: 28 });
+  actions.push({ id: "profileSave", x: bx, y: saveY, w: bw, h: 40 });
+  actions.push({ id: "profileClose", x: px + pw - 40, y: py + 4, w: 36, h: 36 });
+}
+
 function setScene(scene) {
+  destroyProfileAuthButton();
+  stopNameKeyboard();
+  app.ui.profileSheetOpen = false;
   if (scene !== "battle") {
     clearAiTimer();
     clearRecentPlayTimer();
     clearRoundTransitionTimer();
   }
+  persistActiveSingleMatch();
   app.scene = scene;
+  if (scene === "menu") {
+    silentLogin().then(() => {
+      if (app.scene === "menu") promptProfileIfNeeded(profileNeedsNickname());
+    });
+  }
+  if (scene === "menu" || scene === "history") refreshCloudMatchHistory(scene === "history");
   render();
 }
 
@@ -578,7 +990,8 @@ function startMatch(optionsPatch = {}) {
 
 function render() {
   app.actions = [];
-  if (app.scene === "menu") menuScene.draw(ctx, view, app.actions);
+  if (app.scene === "menu") menuScene.draw(ctx, view, app.actions, app.ui);
+  if (app.scene === "menu" && app.ui.profileSheetOpen) drawProfileSheet(ctx, view, app.actions);
   if (app.scene === "pvpSetup") pvpSetupScene.draw(ctx, view, app.actions, app.ui, app.pvp);
   if (app.scene === "pvpRoom") pvpRoomScene.draw(ctx, view, app.actions, app.pvp, app.ui);
   if (app.scene === "matchSetup") matchSetupScene.draw(ctx, view, app.actions, app.ui);
@@ -586,6 +999,7 @@ function render() {
   if (app.scene === "settings") settingsScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "deckBuilder") deckBuilderScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "history") historyScene.draw(ctx, view, app.actions, app.ui);
+  if (app.scene === "adminStats") adminStatsScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "battle") {
     app.ui.recentPlayAutoDismissMs = RECENT_PLAY_AUTO_DISMISS_MS;
     app.ui.roundTransitionNoticeMs = ROUND_TRANSITION_NOTICE_MS;
@@ -603,6 +1017,7 @@ function scheduleAi() {
   app.aiTimer = setTimeout(() => {
     app.aiTimer = null;
     aiStep(app.match);
+    persistActiveSingleMatch();
     if (app.match.over) {
       setScene("result");
       return;
@@ -621,9 +1036,327 @@ function vibrate() {
 }
 
 const SHARE_DEBUG_KEY = "zhangyu.share.debug.v1";
+const AUTH_SESSION_KEY = "zhangyu.auth.session.v1";
+const PROFILE_AUTH_PROMPTED_KEY = "zhangyu.profile.authPrompted.v1";
+const LEGACY_PROFILE_HANDLED_KEY = "zhangyu.profile.handled.v1";
+const LEGACY_PROFILE_AUTHORIZED_KEY = "zhangyu.profile.authorized.v1";
+
+function cleanupLegacyProfileStorage() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.removeStorageSync) return;
+  try { api.removeStorageSync(LEGACY_PROFILE_HANDLED_KEY); } catch (err) {}
+  try { api.removeStorageSync(LEGACY_PROFILE_AUTHORIZED_KEY); } catch (err) {}
+}
+
+function loadProfileAuthPrompted() {
+  cleanupLegacyProfileStorage();
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.getStorageSync) return false;
+  try { return !!api.getStorageSync(PROFILE_AUTH_PROMPTED_KEY); } catch (err) { return false; }
+}
+
+function saveProfileAuthPrompted() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  app.ui.profileAuthPrompted = true;
+  if (!api?.setStorageSync) return;
+  try { api.setStorageSync(PROFILE_AUTH_PROMPTED_KEY, true); } catch (err) {}
+}
 
 function debugJson(value) {
   try { return JSON.stringify(value); } catch (err) { return `[无法序列化: ${err.message}]`; }
+}
+
+function plainError(err) {
+  return {
+    name: err?.name || "Error",
+    message: err?.message || err?.errMsg || String(err || ""),
+    code: err?.code || err?.errCode || "",
+    errMsg: err?.errMsg || ""
+  };
+}
+
+function jsonPlain(value) {
+  try {
+    return JSON.parse(JSON.stringify(value, (key, item) => {
+      if (typeof item === "function") return `[Function ${item.name || "anonymous"}]`;
+      if (item === undefined) return "[undefined]";
+      if (item instanceof Error) return plainError(item);
+      return item;
+    }));
+  } catch (err) {
+    return { stringifyError: err.message || String(err), value: String(value) };
+  }
+}
+
+function callWxCallback(api, method, options = {}) {
+  return new Promise(resolve => {
+    if (!api || typeof api[method] !== "function") return resolve({ ok: false, notSupported: true });
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(jsonPlain(value));
+    };
+    try {
+      api[method]({
+        ...options,
+        success: res => finish({ ok: true, result: res }),
+        fail: err => finish({ ok: false, error: plainError(err) }),
+        complete: res => finish({ ok: false, complete: res })
+      });
+    } catch (err) {
+      finish({ ok: false, exception: plainError(err) });
+    }
+  });
+}
+
+function wxLogin(source) {
+  const api = typeof wx !== "undefined" ? wx : null;
+  return callWxCallback(api, "login", { timeout: 10000 }).then(result => ({ source, ...result }));
+}
+
+function readAuthSession() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.getStorageSync) return null;
+  try {
+    const session = api.getStorageSync(AUTH_SESSION_KEY) || null;
+    if (!session) return null;
+    // 不从本地读取用户头像/昵称，资料只以 users 表返回为准
+    const safeSession = { token: session.token, expiresAt: session.expiresAt, tokenStorage: session.tokenStorage || "" };
+    if (session.user) api.setStorageSync(AUTH_SESSION_KEY, safeSession);
+    return safeSession;
+  } catch (err) { return null; }
+}
+
+function saveAuthSession(session) {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.setStorageSync) return;
+  // 本地只缓存登录态，不缓存头像和昵称
+  const safeSession = {
+    token: session?.token || "",
+    expiresAt: session?.expiresAt || 0,
+    tokenStorage: session?.tokenStorage || ""
+  };
+  try { api.setStorageSync(AUTH_SESSION_KEY, safeSession); } catch (err) {}
+}
+
+function applyAuthSession(session) {
+  const token = String(session?.token || "");
+  app.ui.authToken = token;
+  if (session && Object.prototype.hasOwnProperty.call(session, "user")) app.ui.authUser = session.user || null;
+  app.ui.authTokenStorage = session?.tokenStorage || "";
+  app.ui.authExpiresAt = Number(session?.expiresAt || 0) || 0;
+  pvpClient.setAuthToken?.(token);
+}
+
+function loadAuthSession() {
+  const session = readAuthSession();
+  if (session?.token && Number(session.expiresAt || 0) > Date.now()) applyAuthSession(session);
+}
+
+async function refreshAdminStatus() {
+  if (!app.ui.authToken || !pvpClient.getAdminStatus) {
+    app.ui.isAdmin = false;
+    return false;
+  }
+  try {
+    const result = await pvpClient.getAdminStatus();
+    app.ui.isAdmin = !!result?.isAdmin;
+    if (!app.ui.isAdmin) {
+      app.ui.adminStats = null;
+      app.ui.adminStatsError = "";
+    }
+    if (app.scene === "menu") render();
+    return app.ui.isAdmin;
+  } catch (err) {
+    app.ui.isAdmin = false;
+    return false;
+  }
+}
+
+let adminStatsLoading = false;
+async function refreshAdminStats() {
+  if (adminStatsLoading || !app.ui.isAdmin || !pvpClient.getAdminStats) return false;
+  adminStatsLoading = true;
+  app.ui.adminStatsLoading = true;
+  app.ui.adminStatsError = "";
+  if (app.scene === "adminStats") render();
+  try {
+    const result = await pvpClient.getAdminStats();
+    app.ui.adminStats = result?.stats || null;
+    if (!app.ui.adminStats) throw new Error("统计数据为空");
+    return true;
+  } catch (err) {
+    app.ui.adminStatsError = err?.message || "统计数据加载失败";
+    if (err?.code === "FORBIDDEN") app.ui.isAdmin = false;
+    return false;
+  } finally {
+    adminStatsLoading = false;
+    app.ui.adminStatsLoading = false;
+    if (app.scene === "adminStats") render();
+  }
+}
+
+let silentLoginRunning = false;
+let silentLoginPromise = null;
+async function silentLogin() {
+  if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) {
+    try {
+      if (!app.ui.authUser && pvpClient.getCurrentUser) {
+        const result = await pvpClient.getCurrentUser();
+        app.ui.authUser = result.user || null;
+        if (app.scene === "menu") promptProfileIfNeeded(!!result.needsProfile);
+      }
+      console.log("[user-login] cached token valid, skip wx.login");
+      refreshCloudMatchHistory(false);
+      refreshAdminStatus();
+      return true;
+    } catch (err) {
+      console.warn("[user-login] cached token invalid, relogin:", err?.message || err);
+      applyAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
+      saveAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
+    }
+  }
+  if (silentLoginRunning) return silentLoginPromise;
+  silentLoginRunning = true;
+  silentLoginPromise = (async () => {
+    try {
+      console.log("[user-login] starting silent login...");
+      const loginResult = await wxLogin("silent");
+      console.log("[user-login] wxLogin result:", JSON.stringify(loginResult));
+      const code = loginResult?.result?.code || "";
+      if (!code && !loginResult?.ok) throw new Error(loginResult?.error?.message || loginResult?.exception?.message || "wx.login 失败");
+      console.log("[user-login] calling pvpClient.login with code:", code.slice(0, 6) + "...");
+      const result = await pvpClient.login({ code, trigger: "silent" });
+      console.log("[user-login] login success, token:", result?.token ? result.token.slice(0, 8) + "..." : "MISSING");
+      const session = {
+        token: result.token,
+        expiresAt: result.expiresAt,
+        user: result.user || null,
+        tokenStorage: result.tokenStorage || ""
+      };
+      applyAuthSession(session);
+      saveAuthSession(session);
+      refreshCloudMatchHistory(false);
+      refreshAdminStatus();
+      if (app.scene === "menu") promptProfileIfNeeded(!!result.needsProfile);
+      return true;
+    } catch (err) {
+      console.error("[user-login] silent login FAILED:", err?.message || err, err);
+      return false;
+    } finally {
+      silentLoginRunning = false;
+      silentLoginPromise = null;
+    }
+  })();
+  return silentLoginPromise;
+}
+
+async function ensureCloudAuth() {
+  if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) return true;
+  return !!(await silentLogin());
+}
+
+function normalizeHistoryRecords(records = []) {
+  const seen = new Set();
+  const list = [];
+  (Array.isArray(records) ? records : []).forEach(item => {
+    if (!item || typeof item !== "object") return;
+    const key = String(item.recordKey || item.cloudId || "");
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    list.push({ ...item, syncState: "synced" });
+  });
+  return list.sort((a, b) => (b.time || 0) - (a.time || 0)).slice(0, 100);
+}
+
+function applyCloudHistoryRecords(records) {
+  app.ui.cloudHistoryRecords = normalizeHistoryRecords(records);
+}
+
+let pendingHistorySyncRunning = false;
+async function uploadMatchRecord(record) {
+  if (!record?.recordKey) {
+    console.error("[history] uploadMatchRecord: missing recordKey", record);
+    return false;
+  }
+  console.log("[history] uploading record:", record.recordKey, "syncState:", record.syncState);
+  const authed = await ensureCloudAuth();
+  console.log("[history] ensureCloudAuth:", authed, "token:", app.ui.authToken ? app.ui.authToken.slice(0, 8) + "..." : "NONE");
+  if (!authed) {
+    console.error("[history] upload skipped: not authed");
+    return false;
+  }
+  try {
+    const result = await pvpClient.recordMatchHistory(record);
+    console.log("[history] upload success:", JSON.stringify(result));
+    removeLocalMatchRecord(record.recordKey);
+    if (result?.record) applyCloudHistoryRecords([result.record].concat(app.ui.cloudHistoryRecords || []));
+    if (app.scene === "menu" || app.scene === "history") render();
+    return true;
+  } catch (err) {
+    console.error("[history] upload FAILED:", err?.message || err, err);
+    return false;
+  }
+}
+
+async function syncPendingMatchHistory() {
+  if (pendingHistorySyncRunning) return false;
+  if (!(await ensureCloudAuth())) return false;
+  pendingHistorySyncRunning = true;
+  try {
+    const localRecords = localMatchRecords();
+    for (const record of localRecords) await uploadMatchRecord(record);
+    return true;
+  } finally {
+    pendingHistorySyncRunning = false;
+  }
+}
+
+let cloudHistoryLoading = false;
+let cloudHistoryLoadedAt = 0;
+async function refreshCloudMatchHistory(force = false) {
+  if (cloudHistoryLoading) return false;
+  if (!force && Date.now() - cloudHistoryLoadedAt < 15000) return false;
+  cloudHistoryLoading = true;
+  app.ui.cloudHistoryLoading = true;
+  app.ui.cloudHistoryError = "";
+  if (app.scene === "history") render();
+  try {
+    if (!(await ensureCloudAuth())) throw new Error("云端登录失败");
+    await syncPendingMatchHistory();
+    const result = await pvpClient.listMatchHistory(100);
+    applyCloudHistoryRecords(result.history || []);
+    app.ui.cloudHistoryLoaded = true;
+    cloudHistoryLoadedAt = Date.now();
+    if (app.scene === "menu" || app.scene === "history") render();
+    return true;
+  } catch (err) {
+    app.ui.cloudHistoryError = err?.message || "云端战绩加载失败";
+    console.warn("[history] load cloud failed", err?.message || err);
+    if (app.scene === "menu" || app.scene === "history") render();
+    return false;
+  } finally {
+    cloudHistoryLoading = false;
+    app.ui.cloudHistoryLoading = false;
+    if (app.scene === "history") render();
+  }
+}
+
+setRecordMatchCloudHook(record => uploadMatchRecord(record));
+
+function clipboardErrorTip(error) {
+  const message = String(error?.message || error?.errMsg || error || "");
+  if (/privacy agreement|api scope|privacy/i.test(message)) return "复制失败：需在用户隐私保护指引声明剪贴板能力";
+  return message ? `复制失败：${message}` : "复制失败，请重试";
+}
+
+async function copyPvpRoomId() {
+  const roomId = app.pvp.roomId || "";
+  if (!roomId) return toast("暂无房间号");
+  const result = pvpClient.copyRoomIdResult ? await pvpClient.copyRoomIdResult(roomId) : { ok: pvpClient.copyRoomId(roomId) };
+  if (result.ok) return toast("房间号已复制");
+  return toast(clipboardErrorTip(result.error));
 }
 
 function rememberShareDebug(value) {
@@ -1371,8 +2104,8 @@ function currentPlayerSetup(ruleOverride = null) {
   const selectedIds = randomLineup ? [] : getActiveCustomDeckIds(settings, faction);
   const status = randomLineup ? { valid: false, ids: [] } : deckStatus(selectedIds, faction);
   const useCustomDeck = !randomLineup && rules.deckMode !== "autoOnly" && settings.pvpDeckMode === "custom" && status.valid;
-  // 不预设name，由云函数根据座位号分配 玩家一/玩家二
   return {
+    name: String(app.ui.authUser?.nickName || "").slice(0, 12),
     faction,
     leaderId: resolvePvpLeaderId(settings, faction),
     customDeckIds: useCustomDeck ? status.ids : []
@@ -1409,6 +2142,24 @@ function cardLabel(card) {
   return card ? (card.name || card.baseName || "主将") : "主将";
 }
 
+function applyRecordRoundMorale(morale, winner) {
+  const next = [morale[0], morale[1]];
+  if (winner == null) {
+    next[0] -= 1;
+    next[1] -= 1;
+  } else {
+    next[winner === 0 ? 1 : 0] -= 1;
+  }
+  return next.map(value => Math.max(0, value));
+}
+
+function moraleAfterRecordRounds(roundResults) {
+  return (Array.isArray(roundResults) ? roundResults : []).reduce((morale, result) => {
+    if (Array.isArray(result?.morale) && result.morale.length >= 2) return [result.morale[0] || 0, result.morale[1] || 0];
+    return applyRecordRoundMorale(morale, result?.winner == null ? null : result.winner);
+  }, [2, 2]);
+}
+
 function onlineMatchRecordKey(match) {
   const roomKey = app.pvp.roomId || "";
   if (match?.matchId) return `${roomKey}:${match.matchId}`;
@@ -1436,22 +2187,28 @@ function recordOnlineMatch(match) {
   else if (winner === oppIdx) winner = 1;
 
   const surrendered = match.endReason === "surrender";
+  const disconnected = match.endReason === "disconnect";
   let resultText;
   if (winner == null) resultText = "平局";
-  else if (winner === 0) resultText = surrendered ? "对方认输" : "你赢了";
-  else resultText = surrendered ? "你已认输" : "你输了";
+  else if (winner === 0) resultText = disconnected ? "对方掉线" : (surrendered ? "对方认输" : "你赢了");
+  else resultText = disconnected ? "你已掉线" : (surrendered ? "你已认输" : "你输了");
 
   const roundResults = (match.roundResults || []).map(r => ({
     round: r.round,
     scores: [r.scores?.[meIdx] || 0, r.scores?.[oppIdx] || 0],
-    winner: r.winner == null ? null : (r.winner === meIdx ? 0 : 1)
+    winner: r.winner == null ? null : (r.winner === meIdx ? 0 : 1),
+    morale: Array.isArray(r.morale) ? [r.morale[meIdx] || 0, r.morale[oppIdx] || 0] : undefined,
+    moraleLoss: Array.isArray(r.moraleLoss) ? [r.moraleLoss[meIdx] || 0, r.moraleLoss[oppIdx] || 0] : undefined
   }));
+  const morale = Array.isArray(match.morale) ? [match.morale[meIdx] || 0, match.morale[oppIdx] || 0] : moraleAfterRecordRounds(roundResults);
 
   recordMatch({
     time: Date.now(),
+    recordKey: `online:${app.pvp.roomId || "room"}:${match.matchId || recordKey}:${meIdx}`,
     resultText,
     winner,
     rounds: [me.roundsWon || 0, opp.roundsWon || 0],
+    morale,
     scores: [match.finalScores?.[meIdx] || 0, match.finalScores?.[oppIdx] || 0],
     roundResults,
     humanFaction: me.factionName || me.faction,
@@ -1464,7 +2221,9 @@ function recordOnlineMatch(match) {
     aiDeckMode: opp.deckMode || "random",
     difficulty: "pvp",
     mode: "online",
-    endReason: match.endReason || "normal"
+    endReason: match.endReason || "normal",
+    roomId: app.pvp.roomId || "",
+    matchId: match.matchId || ""
   });
   app.pvp.recordedResultKey = recordKey;
 }
@@ -1996,6 +2755,15 @@ function handleLaunchRoom() {
     && !handleSharedCardJoinFallback(initialOptions, "启动")) {
     console.log("[launch] 启动未检测到分享参数，保持主页");
   }
+  if (api.onHide) {
+    api.onHide(() => {
+      if (!activeSingleMatch()) return;
+      persistActiveSingleMatch();
+      clearAiTimer();
+      clearRecentPlayTimer();
+      clearRoundTransitionTimer();
+    });
+  }
   if (api.onShow) {
     api.onShow(options => {
       logShareEntryOptions("wx.onShow", options);
@@ -2010,6 +2778,7 @@ function handleLaunchRoom() {
       if (handleSharedRoomId(onShowRoomId, "onShow")) return;
       if (handleSharedRoute(onShowRoute, "onShow")) return;
       if (handleSharedCardJoinFallback(options, "onShow")) return;
+      resumeSuspendedSingleMatch();
       resumePvpRoomSync("wx.onShow");
       // 只在入口 query 明显带有 room/scene 关键字时才走兜底解析，避免正常切前台产生噪音
       if (!hasRoomHint(options) && !hasShareRouteHint(options)) return;
@@ -2024,6 +2793,7 @@ function handleLaunchRoom() {
   if (api.onNetworkStatusChange) {
     api.onNetworkStatusChange(status => {
       if (status?.isConnected) resumePvpRoomSync("network-reconnected");
+      // 断网不立即判负，服务端心跳超时（30s）后才由服务端结算掉线判负
     });
   }
 }
@@ -2051,7 +2821,7 @@ function isMyPvpTurn() {
 function submitPvpAction(battleAction) {
   if (!isOnlineMatch()) return false;
   if (app.pvp.submitting) return true;
-  if (!isMyPvpTurn() && battleAction.type !== "surrender" && battleAction.type !== "continueRound") {
+  if (!isMyPvpTurn() && battleAction.type !== "surrender" && battleAction.type !== "disconnectLoss" && battleAction.type !== "continueRound") {
     if (battleAction.type === "mulliganSwap") clearPendingPvpMulliganSwap();
     toast("等待对方行动");
     return true;
@@ -2093,6 +2863,7 @@ function scrollHandBy(deltaX) {
 
 function afterHumanAction() {
   if (!app.match) return;
+  persistActiveSingleMatch();
   app.ui.handScroll = clampHandScroll(app.ui.handScroll);
   if (app.match.over) setScene("result");
   else {
@@ -2106,6 +2877,18 @@ function performSurrenderMatch() {
   if (isOnlineMatch()) return submitPvpAction({ type: "surrender" });
   surrender(app.match, app.match.current);
   return setScene("result");
+}
+
+function performDisconnectLoss(source = "disconnect") {
+  if (!app.match || app.match.over) return false;
+  if (isOnlineMatch()) {
+    if (app.pvp.submitting) return true;
+    submitPvpAction({ type: "disconnectLoss", source });
+    return true;
+  }
+  surrender(app.match, 0, "disconnect");
+  setScene("result");
+  return true;
 }
 
 function performPass() {
@@ -2226,6 +3009,24 @@ function confirmPass() {
 }
 
 function handleMenu(action) {
+  if (app.ui.profileSheetOpen) {
+    if (action.id === "profileName") startNameKeyboard();
+    else if (action.id === "profileAvatar") chooseAvatarImage();
+    else if (action.id === "profileSave") { saveProfileDraft(); closeProfileSheet(); }
+    else if (action.id === "profileClose" || action.id === "profileMask") closeProfileSheet();
+    // profilePanel 仅拦截资料框内的空白点击，不关闭弹窗。
+    return;
+  }
+  if (action.id === "openProfile") {
+    if (shouldUseAvatarAuth()) {
+      app.ui.profileAuthGuide = true;
+      createProfileAuthButton("avatar");
+      render();
+      return;
+    }
+    openProfileSheet();
+    return;
+  }
   if (action.id === "start") {
     app.ui.deckReturnScene = "matchSetup";
     app.ui.matchSetupDropdown = "";
@@ -2241,6 +3042,13 @@ function handleMenu(action) {
     app.ui.historyScroll = 0;
     app.ui.historyLeaderDetailId = "";
     setScene("history");
+  }
+  if (action.id === "adminStats") {
+    if (!app.ui.isAdmin) return;
+    app.ui.adminStatsScroll = 0;
+    setScene("adminStats");
+    refreshAdminStats();
+    return;
   }
   if (action.id === "pvp") return enterPvpSetup();
   if (action.id === "rules") setScene("rules");
@@ -2742,8 +3550,7 @@ function handlePvpRoom(action) {
   if (action.id === "pvpCreate") return createPvpRoom();
   if (action.id === "pvpShare") return guideShare();
   if (action.id === "pvpCopy") {
-    if (pvpClient.copyRoomId(app.pvp.roomId)) toast("房间号已复制");
-    else toast(app.pvp.roomId || "暂无房间号");
+    copyPvpRoomId();
     return render();
   }
   if (action.id === "pvpJoin") return promptJoinPvpRoom();
@@ -2952,6 +3759,10 @@ function handleBattleCards(action) {
   render();
 }
 
+function handleAdminStats(action) {
+  if (action.id === "backAdminStats") return setScene("menu");
+}
+
 function handleAction(action) {
   vibrate();
   if (app.ui.mulliganSwapAnim) return;
@@ -2963,6 +3774,7 @@ function handleAction(action) {
   if (app.scene === "settings") return handleSettings(action);
   if (app.scene === "deckBuilder") return handleDeckBuilder(action);
   if (app.scene === "history") return handleHistory(action);
+  if (app.scene === "adminStats") return handleAdminStats(action);
   if (app.scene === "battle") return handleBattle(action);
   if (app.scene === "battleCards") return handleBattleCards(action);
   if (app.scene === "result") {
@@ -3066,6 +3878,53 @@ function battleLogHistoryScrollBounds() {
 function clampBattleLogHistoryScroll(value) {
   const { maxScroll } = battleLogHistoryScrollBounds();
   return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function adminStatsScrollBounds() {
+  return adminStatsScene.scrollBounds(view, app.ui.adminStats);
+}
+
+function clampAdminStatsScroll(value) {
+  const { maxScroll } = adminStatsScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollAdminStatsBy(deltaY) {
+  if (app.scene !== "adminStats") return false;
+  const before = app.ui.adminStatsScroll || 0;
+  const next = clampAdminStatsScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.5) {
+    app.ui.adminStatsScroll = next;
+    render();
+  }
+  return true;
+}
+
+let adminStatsScrollMotionId = 0;
+
+function cancelAdminStatsScrollInertia() {
+  adminStatsScrollMotionId += 1;
+}
+
+function startAdminStatsScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (app.scene !== "adminStats" || Math.abs(velocity) < 0.04) return;
+  const motionId = ++adminStatsScrollMotionId;
+  let lastTime = Date.now();
+  function step() {
+    if (motionId !== adminStatsScrollMotionId || app.scene !== "adminStats") return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const before = app.ui.adminStatsScroll || 0;
+    const next = clampAdminStatsScroll(before + velocity * elapsed);
+    app.ui.adminStatsScroll = next;
+    if (Math.abs(next - before) < 0.05) return;
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+  }
+  requestFrame(step);
 }
 
 function scrollBattleLogHistoryBy(deltaY) {
@@ -3210,21 +4069,65 @@ function scrollSettingDeckBy(deltaY) {
   if (app.scene !== "settings" || app.ui.settingCardDetailId || app.ui.settingDropdown) return false;
   const before = app.ui.settingDeckScroll || 0;
   const next = clampSettingDeckScroll(before - deltaY);
-  if (Math.abs(next - before) > 0.5) {
+  if (Math.abs(next - before) > 0.1) {
     app.ui.settingDeckScroll = next;
     render();
   }
   return true;
 }
 
+let settingDeckScrollMotionId = 0;
+
+function cancelSettingDeckScrollInertia() {
+  settingDeckScrollMotionId += 1;
+  app.ui.settingDeckScrolling = false;
+}
+
+function canScrollSettingDeck() {
+  return app.scene === "settings" && !app.ui.settingCardDetailId && !app.ui.settingDropdown;
+}
+
+function startSettingDeckScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (!canScrollSettingDeck() || Math.abs(velocity) < 0.04) return false;
+  const motionId = ++settingDeckScrollMotionId;
+  app.ui.settingDeckScrolling = true;
+  let lastTime = Date.now();
+
+  function finish() {
+    if (motionId !== settingDeckScrollMotionId) return;
+    app.ui.settingDeckScrolling = false;
+    render();
+  }
+
+  function step() {
+    if (motionId !== settingDeckScrollMotionId || !canScrollSettingDeck()) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const before = app.ui.settingDeckScroll || 0;
+    const next = clampSettingDeckScroll(before + velocity * elapsed);
+    app.ui.settingDeckScroll = next;
+    if (Math.abs(next - before) < 0.05) {
+      finish();
+      return;
+    }
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+    else finish();
+  }
+
+  requestFrame(step);
+  return true;
+}
+
 function handleSettingsSwipe(start, end) {
-  // 此函数保留给惯性滚动回弹等后续扩展使用
-  // 实时滚动已在 touchmove 中通过 scrollSettingDeckBy 处理
   return false;
 }
 
 function historyScrollBounds() {
-  return historyScene.scrollBounds(view);
+  return historyScene.scrollBounds(view, app.ui);
 }
 
 function canScrollHistory() {
@@ -3596,6 +4499,8 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
     cancelBattleScrollInertia();
     cancelHistoryScrollInertia();
     cancelBattleCardsPageScrollInertia();
+    cancelSettingDeckScrollInertia();
+    cancelAdminStatsScrollInertia();
     touchStartState = { point, startTime: Date.now() };
     startLongPress(point);
   });
@@ -3605,6 +4510,7 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
   wx.onTouchMove(event => {
     const point = normalizeTouch(event);
     if (!point || !touchStartState) return;
+
     
     // 实时跟踪卡牌详情滑动
     const detailId = app.ui.deckCardDetailId || app.ui.battleCardsDetailId || app.ui.battleCardDetailId || app.ui.settingCardDetailId || app.ui.matchSetupCardDetailId || app.ui.historyLeaderDetailId;
@@ -3617,6 +4523,34 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         const offset = Math.max(-maxOffset, Math.min(maxOffset, dx));
         app.ui.detailSwipe = { offset, animating: false };
         render();
+      }
+    }
+
+    if (app.scene === "adminStats") {
+      const bounds = adminStatsScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.adminStatsScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.adminStatsScrolling = true;
+      }
+      if (touchStartState.adminStatsScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollAdminStatsBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.adminStatsScrollVelocity;
+        touchStartState.adminStatsScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.adminStatsScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
+        return;
       }
     }
 
@@ -3730,19 +4664,31 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
       }
     }
 
-    // 我的牌组列表实时滚动
-    if (app.scene === "settings" && !app.ui.settingCardDetailId && !app.ui.settingDropdown) {
+    if (canScrollSettingDeck()) {
       const bounds = settingDeckScrollBounds();
       const start = touchStartState.point;
       const dx = point.x - start.x;
       const dy = point.y - start.y;
-      // 实时检测：当前点必须在列表范围内，且满足垂直滑动条件
-      if (bounds.maxScroll > 0 && point.y >= bounds.listTop - 10 && point.y <= bounds.listBottom + 10 && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+      if (!touchStartState.settingsDeckScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.settingsDeckScrolling = true;
+      }
+      if (touchStartState.settingsDeckScrolling) {
         clearLongPress();
+        app.ui.settingDeckScrolling = true;
         const last = touchStartState.lastPoint || start;
-        scrollSettingDeckBy(point.y - last.y);
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollSettingDeckBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.settingsDeckScrollVelocity;
+        touchStartState.settingsDeckScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
         touchStartState.settingsDeckScrolled = true;
         touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
         return;
       }
     }
@@ -3796,8 +4742,19 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       startHistoryScrollInertia((state.historyScrollVelocity || 0) * releaseFactor);
       return;
     }
+    if (state && state.adminStatsScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startAdminStatsScrollInertia((state.adminStatsScrollVelocity || 0) * releaseFactor);
+      return;
+    }
+    if (state && state.settingsDeckScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startSettingDeckScrollInertia((state.settingsDeckScrollVelocity || 0) * releaseFactor);
+      return;
+    }
     if (state && state.battleLogHistoryScrolled) return;
-    if (state && state.settingsDeckScrolled) return;
     if (handleBattleLogHistorySwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
     if (handleSettingsSwipe(start, point)) return;
@@ -3813,12 +4770,16 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
     if (app.ui.detailSwipe && !app.ui.detailSwipe.animating && (app.ui.detailSwipe.offset || 0) !== 0) {
       startDetailSwipeTransition(app.ui.detailSwipe.offset);
     }
+    cancelSettingDeckScrollInertia();
+    cancelAdminStatsScrollInertia();
     touchStartState = null;
   });
 }
 
 console.log("===== 章鱼牌 v20260720-ready-debug-v1 诊断代码已加载 =====");
-pvpClient.initCloud();
+loadAuthSession();
+silentLogin();
 setupShare();
+restoreInterruptedSingleMatch();
 handleLaunchRoom();
 render();

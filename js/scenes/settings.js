@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, card } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
@@ -11,6 +11,10 @@ const CARD_TABS = [
   { value: "hero", label: "传世" },
   { value: "special", label: "谋略/时局" }
 ];
+
+const COLUMNS = 4;
+const GAP = 8;
+const CARD_RATIO = 1.38;
 
 function selectedLeader(settings, faction) {
   const leaders = leadersFor(faction);
@@ -46,8 +50,8 @@ function optionSelectedValue(settings, field) {
 
 function pageLayout(view) {
   const top = view.safeTop + 28;
-  const factionY = top + 48;
-  const leaderY = top + 84;
+  const factionY = top + 66;
+  const leaderY = top + 102;
   const tabY = leaderY + 38;
   const listTop = tabY + 38;
   const bottomY = view.height - view.safeBottom - 48;
@@ -73,20 +77,16 @@ function selectedCount(ids, group) {
   return ids.filter(id => groupIds.has(id)).length;
 }
 
-function cardMetaText(card) {
-  const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/");
-  if (card.category === "weather" || card.category === "special") {
-    return [categoryLabel(card), rowName].filter(Boolean).join(" · ");
-  }
-  return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
-}
-
 function scrollBounds(view, itemCount) {
   const layout = pageLayout(view);
-  const rowH = 68;
+  const margin = 14;
+  const cardW = Math.floor((view.width - margin * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
+  const cardH = Math.round(cardW * CARD_RATIO);
+  const rowStep = cardH + GAP;
+  const rows = Math.ceil(itemCount / COLUMNS);
   const viewportH = Math.max(0, layout.listBottom - layout.listTop);
-  const contentH = itemCount * rowH;
-  return { ...layout, viewportH, contentH, maxScroll: Math.max(0, contentH - viewportH), rowH };
+  const contentH = rows ? rows * rowStep - GAP : 0;
+  return { ...layout, viewportH, contentH, maxScroll: Math.max(0, contentH - viewportH), margin, cardW, cardH, rowStep };
 }
 
 function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
@@ -122,7 +122,6 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
     text(ctx, shortText(option.label, isLeader ? 14 : 18), menuX + anchor.w / 2, y + (isLeader ? 14 : itemH / 2), 12, active ? "#ffffff" : "#2f2417", "center");
     if (isLeader) {
       text(ctx, shortText(option.hint, 20), menuX + anchor.w / 2, y + 29, 8, active ? "#efe6ff" : "#775c34", "center");
-      text(ctx, "长按看详情", menuX + anchor.w - 8, y + itemH / 2, 9, active ? "#e6dcff" : "#9a8a6f", "right");
     }
   });
 }
@@ -171,9 +170,11 @@ function draw(ctx, view, actions, ui = {}) {
   const groups = filteredCardGroups(faction, cardTab);
   const bounds = scrollBounds(view, groups.length);
   const safeScroll = Math.max(0, Math.min(scrollY || 0, bounds.maxScroll));
+  const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
 
   text(ctx, "我的牌组", view.width / 2, bounds.top, 24, "#2f2417", "center");
-  text(ctx, `${FACTION_LABELS[faction]} · 自定义牌组 · ${groups.length > 0 ? Math.min(groups.length, Math.floor(bounds.viewportH / bounds.rowH) + 1) : 0}/${groups.length}`, view.width / 2, bounds.top + 25, 12, "#775c34", "center");
+  text(ctx, `${FACTION_LABELS[faction]} · 已选 ${status.total}/40 · 总战力 ${status.score}`, view.width / 2, bounds.top + 25, 12, statusColor, "center");
+  text(ctx, `人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, bounds.top + 45, 11, "#775c34", "center");
   drawFactionTabs(ctx, view, actions, faction, bounds.factionY);
 
   const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: bounds.leaderY, w: view.width - 36, h: 30 };
@@ -181,71 +182,84 @@ function draw(ctx, view, actions, ui = {}) {
   actions.push(leaderRect);
   fillRoundRect(ctx, leaderRect.x, leaderRect.y, leaderRect.w, leaderRect.h, 10, "#7a5a95", "#1d4f3c");
   text(ctx, `领袖：${shortText(humanLeader ? displayName(humanLeader) : "未选择", 14)} ▾`, leaderRect.x + leaderRect.w / 2, leaderRect.y + 15, 12, "#ffffff", "center");
-  if (humanLeader) text(ctx, "长按看详情", leaderRect.x + leaderRect.w - 10, leaderRect.y + 15, 10, "#e6dcff", "right");
 
   drawCardTabs(ctx, view, actions, cardTab, bounds.tabY);
-
-  // 进度条
-  if (bounds.maxScroll > 0) {
-    const barW = Math.min(120, view.width - 80);
-    const barX = (view.width - barW) / 2;
-    const barY = bounds.listTop - 8;
-    const progress = bounds.maxScroll > 0 ? safeScroll / bounds.maxScroll : 0;
-    const thumbW = Math.max(20, barW * bounds.viewportH / (bounds.viewportH + bounds.maxScroll));
-    const thumbX = barX + progress * (barW - thumbW);
-    ctx.fillStyle = "rgba(119, 92, 52, 0.15)";
-    fillRoundRect(ctx, barX, barY, barW, 3, 2, "rgba(119, 92, 52, 0.15)");
-    fillRoundRect(ctx, thumbX, barY, thumbW, 3, 2, "#2f6f57");
-  }
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, bounds.listTop - 4, view.width, bounds.listBottom - bounds.listTop + 4);
   ctx.clip();
-  const startIdx = Math.floor(safeScroll / bounds.rowH);
-  const offsetY = -(safeScroll % bounds.rowH);
-  const endIdx = Math.min(groups.length, startIdx + Math.ceil(bounds.viewportH / bounds.rowH) + 2);
+  const startRow = Math.floor(safeScroll / bounds.rowStep);
+  const offsetY = -(safeScroll % bounds.rowStep);
+  const visibleRows = Math.ceil(bounds.viewportH / bounds.rowStep) + 1;
+  const isScrolling = !!ui.settingDeckScrolling;
+  const startIdx = startRow * COLUMNS;
+  const endIdx = Math.min(groups.length, (startRow + visibleRows) * COLUMNS);
   for (let i = startIdx; i < endIdx; i++) {
     const group = groups[i];
     if (!group) continue;
-    const card = group.card;
-    const y = bounds.listTop + (i - startIdx) * bounds.rowH + offsetY;
+    const item = group.card;
+    const col = i % COLUMNS;
+    const row = Math.floor(i / COLUMNS) - startRow;
+    const x = bounds.margin + col * (bounds.cardW + GAP);
+    const y = bounds.listTop + row * bounds.rowStep + offsetY;
+    if (y >= bounds.listBottom || y + bounds.cardH <= bounds.listTop) continue;
     const count = selectedCount(selectedIds, group);
     const selected = count > 0;
-    const full = count >= group.cards.length;
-    const disabled = (!selected && !canAddCard(status, card)) || full;
-    const groupIds = group.cards.map(item => item.id);
-    const rect = { id: "addSettingCard", cardIds: groupIds, cardId: card.id, x: 18, y, w: view.width - 36, h: 58 };
-    actions.push(rect);
-    fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 12, selected ? "#eff8ef" : (disabled ? "#eee7da" : "#fffaf0"), selected ? "#2f6f57" : "#dcc48d");
-    drawCardImage(ctx, { ...card, imageX: rect.x + 10, imageY: rect.y + 8, imageW: 42, imageH: 42 });
-    const x = rect.x + 62;
-    const maxCount = group.cards.length;
-    const baseName = short(displayName(card), 9);
-    const nameText = maxCount > 1 ? `${baseName} x${maxCount}` : baseName;
-    text(ctx, nameText, x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
-    if (selected && maxCount > 1) {
-      fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");
-      text(ctx, `${count}/${maxCount}`, x + 109, y + 15, 11, "#fff7d8", "center");
-    }
-    text(ctx, cardMetaText(card), x, y + 34, 11, "#775c34");
-    wrapText(ctx, cardSummary(card), x, y + 50, view.width - 178, 13, 1, 10, "#6f5a3a");
-    text(ctx, "长按看详情", view.width - 22, y + 41, 10, "#9a8a6f", "right");
+    const blocked = !selected && !canAddCard(status, item);
+    const groupIds = group.cards.map(card => card.id);
+    const hitY = Math.max(bounds.listTop, y);
+    const hitBottom = Math.min(bounds.listBottom, y + bounds.cardH);
+    actions.push({ id: "addSettingCard", cardIds: groupIds, cardId: item.id, x, y: hitY, w: bounds.cardW, h: hitBottom - hitY });
+    card(ctx, {
+      id: "addSettingCard",
+      cardId: item.id,
+      x,
+      y,
+      w: bounds.cardW,
+      h: bounds.cardH,
+      fill: selected ? "#eff8ef" : (blocked ? "#eee7da" : "#fffaf0"),
+      stroke: selected ? "#2f6f57" : (blocked ? "#c9bdac" : "#d8bd83"),
+      name: displayName(item),
+      baseName: item.baseName,
+      imageUrl: item.imageUrl,
+      summary: item.summary || item.abilityText,
+      category: categoryLabel(item),
+      faction: item.faction,
+      row: item.row,
+      abilities: item.abilities,
+      abilityDisplayNames: item.abilityDisplayNames,
+      hero: item.hero,
+      strength: item.category === "special" || item.category === "weather" ? "策" : item.strength,
+      nameMax: 4,
+      count: group.cards.length,
+      selectedCount: count,
+      skipImageLoad: isScrolling
+    });
   }
   ctx.restore();
 
-  // 底部渐变
-  if (bounds.maxScroll > 0 && safeScroll < bounds.maxScroll - 5) {
+  if (bounds.maxScroll > 0 && safeScroll < bounds.maxScroll - 0.5) {
     ctx.save();
-    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, bounds.listBottom - 30, 0, bounds.listBottom) : null;
-    if (fade) { fade.addColorStop(0, "rgba(255,250,240,0)"); fade.addColorStop(1, "rgba(255,250,240,0.92)"); ctx.fillStyle = fade; }
-    else ctx.fillStyle = "rgba(255,250,240,0.72)";
-    ctx.fillRect(0, bounds.listBottom - 30, view.width, 30);
+    const fade = ctx.createLinearGradient ? ctx.createLinearGradient(0, bounds.listBottom - 28, 0, bounds.listBottom) : null;
+    if (fade) {
+      fade.addColorStop(0, "rgba(247,241,229,0)");
+      fade.addColorStop(1, "rgba(247,241,229,0.94)");
+      ctx.fillStyle = fade;
+    } else ctx.fillStyle = "rgba(247,241,229,0.72)";
+    ctx.fillRect(0, bounds.listBottom - 28, view.width, 28);
     ctx.restore();
   }
+  if (bounds.maxScroll > 0) {
+    const trackX = view.width - 8;
+    const trackY = bounds.listTop + 4;
+    const trackH = Math.max(30, bounds.viewportH - 8);
+    const thumbH = Math.max(30, trackH * bounds.viewportH / bounds.contentH);
+    const thumbY = trackY + (trackH - thumbH) * (safeScroll / bounds.maxScroll);
+    fillRoundRect(ctx, trackX, trackY, 3, trackH, 1.5, "rgba(119,92,52,0.18)");
+    fillRoundRect(ctx, trackX - 1, thumbY, 5, thumbH, 2.5, "rgba(47,111,87,0.72)");
+  }
 
-  const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
-  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, bounds.toolY - 16, 12, statusColor, "center");
   const auto = { id: "autoCustomDeck", x: 18, y: bounds.toolY, w: (view.width - 42) / 2, h: 30 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 6, y: bounds.toolY, w: auto.w, h: 30 };
   actions.push(auto, clearBtn);
@@ -256,7 +270,7 @@ function draw(ctx, view, actions, ui = {}) {
   button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
   if (detail) {
-    const detailCards = detail.category === "leader" ? leadersFor(faction) : groups.map(g => g.card);
+    const detailCards = detail.category === "leader" ? leadersFor(faction) : groups.map(group => group.card);
     const currentIdx = detailCards.findIndex(card => card.id === detail.id);
     const leftCard = currentIdx > 0 ? detailCards[currentIdx - 1] : null;
     const rightCard = currentIdx >= 0 && currentIdx < detailCards.length - 1 ? detailCards[currentIdx + 1] : null;

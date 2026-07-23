@@ -1,11 +1,10 @@
-const ENV_ID = "cloud1-d7gbbwpnd7d68e1b8";
-const ROOM_COLLECTION = "game_rooms";
+const HTTP_API_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.ap-shanghai.app.tcloudbase.com/pvpRoom";
 const PVP_READY_DEBUG_VERSION = "20260720-ready-debug-v1";
 
-let cloudReady = false;
 let roomWatcher = null;
 let roomPollTimer = null;
 let roomWatchToken = 0;
+let authToken = "";
 
 const ROOM_POLL_INTERVAL_MS = 1500;
 
@@ -17,31 +16,61 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function initCloud() {
-  const api = wxApi();
-  if (!api || !api.cloud) return false;
-  if (!cloudReady) {
-    api.cloud.init({ env: ENV_ID, traceUser: true });
-    cloudReady = true;
+function setAuthToken(token) {
+  authToken = String(token || "");
+}
+
+function getAuthToken() {
+  return authToken;
+}
+
+function normalizeResult(result, fallbackMessage = "服务调用失败") {
+  if (!result || result.ok === false) {
+    const error = new Error(result?.message || fallbackMessage);
+    error.code = result?.code || "SERVICE_FAILED";
+    throw error;
   }
-  return true;
+  return result;
+}
+
+function callHttpRoom(action, data = {}) {
+  const api = wxApi();
+  if (!api?.request) return Promise.reject(new Error("当前环境不支持网络请求"));
+  if (!HTTP_API_URL) return Promise.reject(new Error("缺少 HTTP_API_URL 配置"));
+  return new Promise((resolve, reject) => {
+    api.request({
+      url: HTTP_API_URL,
+      method: "POST",
+      timeout: 10000,
+      header: {
+        "content-type": "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+      },
+      data: { action, token: authToken || undefined, ...data },
+      success: res => {
+        const result = res?.data;
+        try {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const error = new Error(result?.message || `HTTP ${res.statusCode}`);
+            error.code = result?.code || "HTTP_FAILED";
+            throw error;
+          }
+          resolve(normalizeResult(result, "HTTP 服务调用失败"));
+        } catch (err) {
+          reject(err);
+        }
+      },
+      fail: err => reject(new Error(err?.errMsg || "HTTP 服务请求失败"))
+    });
+  });
 }
 
 function callRoom(action, data = {}) {
-  const api = wxApi();
-  if (!initCloud() || !api.cloud.callFunction) return Promise.reject(new Error("当前环境不支持云开发"));
-  return api.cloud.callFunction({
-    name: "pvpRoom",
-    data: { action, ...data }
-  }).then(res => {
-    const result = res && res.result ? res.result : res;
-    if (!result || result.ok === false) {
-      const error = new Error(result?.message || "云函数调用失败");
-      error.code = result?.code || "CLOUD_FUNCTION_FAILED";
-      throw error;
-    }
-    return result;
-  });
+  return callHttpRoom(action, data);
+}
+
+function login(payload) {
+  return callRoom("login", payload || {});
 }
 
 function createRoom(setup, rules) {
@@ -54,18 +83,6 @@ function joinRoom(roomId, setup) {
 
 function getRoom(roomId) {
   return callRoom("getRoom", { roomId });
-}
-
-function getRoomFromDatabase(roomId) {
-  const api = wxApi();
-  if (!initCloud() || !api.cloud.database) return Promise.reject(new Error("当前环境不支持云数据库读取"));
-  const db = api.cloud.database({ env: ENV_ID });
-  return db.collection(ROOM_COLLECTION).doc(roomId).get().then(res => {
-    const room = res && res.data;
-    if (!room) throw new Error("房间不存在");
-    const safeRoomId = room.roomId || room._id || roomId;
-    return { roomId: safeRoomId, room: { ...room, roomId: safeRoomId, _id: safeRoomId } };
-  });
 }
 
 function roomReadyDebug(room) {
@@ -81,15 +98,7 @@ function roomReadyDebug(room) {
 }
 
 async function fetchRoom(roomId) {
-  let dbError = null;
   let getError = null;
-  try {
-    const result = await getRoomFromDatabase(roomId);
-    console.log("[pvp-ready-debug] fetchRoom source=database", roomId, roomReadyDebug(result.room));
-    return result;
-  } catch (err) {
-    dbError = err;
-  }
   try {
     const result = await getRoom(roomId);
     console.log("[pvp-ready-debug] fetchRoom source=getRoom", roomId, roomReadyDebug(result.room));
@@ -103,11 +112,10 @@ async function fetchRoom(roomId) {
     return result;
   } catch (returnError) {
     console.warn("[pvp-ready-debug] fetchRoom all failed", roomId, {
-      database: dbError?.errMsg || dbError?.message || String(dbError),
       getRoom: getError?.errMsg || getError?.message || String(getError),
       returnToRoom: returnError?.errMsg || returnError?.message || String(returnError)
     });
-    throw returnError || getError || dbError;
+    throw returnError || getError;
   }
 }
 
@@ -228,6 +236,59 @@ function leaveRoom(roomId) {
   return callRoom("leaveRoom", { roomId });
 }
 
+function recordMatchHistory(record) {
+  return callRoom("recordMatchHistory", { record });
+}
+
+function listMatchHistory(limit = 100) {
+  return callRoom("listMatchHistory", { limit });
+}
+
+function getLoginContext() {
+  return callRoom("getLoginContext");
+}
+
+function getCurrentUser() {
+  return callRoom("currentUser");
+}
+
+function getAdminStatus() {
+  return callRoom("getAdminStatus");
+}
+
+function getAdminStats() {
+  return callRoom("getAdminStats");
+}
+
+function saveWechatProfile(userInfo, userInfoResult) {
+  return callRoom("saveWechatProfile", { userInfo, userInfoResult });
+}
+
+function updateProfile(profile) {
+  return callRoom("updateProfile", { profile });
+}
+
+function fileExt(path = "") {
+  const match = String(path || "").match(/\.([a-z0-9]+)(?:\?|#|$)/i);
+  const ext = match ? match[1].toLowerCase() : "jpg";
+  return ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
+}
+
+function uploadAvatarFile(filePath) {
+  const api = wxApi();
+  if (!api?.getFileSystemManager || !filePath) return Promise.reject(new Error("当前环境不支持头像上传"));
+  return new Promise((resolve, reject) => {
+    api.getFileSystemManager().readFile({
+      filePath,
+      encoding: "base64",
+      success: res => callRoom("uploadAvatar", { ext: fileExt(filePath), imageBase64: res.data })
+        .then(resolve)
+        .catch(reject),
+      fail: err => reject(new Error(err?.errMsg || "头像读取失败"))
+    });
+  });
+}
+
 function closeRoomWatch() {
   roomWatchToken += 1;
   if (roomPollTimer) {
@@ -247,8 +308,6 @@ function roomUpdateKey(room) {
 }
 
 function watchRoom(roomId, onChange, onError) {
-  const api = wxApi();
-  if (!initCloud()) throw new Error("当前环境不支持云开发");
   closeRoomWatch();
   const watchToken = roomWatchToken;
   let lastDeliveredKey = "";
@@ -262,71 +321,64 @@ function watchRoom(roomId, onChange, onError) {
   };
   const pollRoom = () => {
     fetchRoom(roomId).then(result => deliver(result.room, "poll")).catch(err => {
-      if (watchToken === roomWatchToken) console.warn("[pvp] poll room failed", err && err.errMsg || err);
+      if (watchToken === roomWatchToken) {
+        console.warn("[pvp] poll room failed", err && err.errMsg || err);
+        if (onError) onError(err);
+      }
     });
   };
   roomPollTimer = setInterval(pollRoom, ROOM_POLL_INTERVAL_MS);
   pollRoom();
-
-  if (!api.cloud.database) {
-    console.warn("[pvp] 云数据库监听不可用，使用轮询同步房间");
-    return roomWatcher;
-  }
-
-  try {
-    const db = api.cloud.database({ env: ENV_ID });
-    console.log("[pvp] watchRoom 开始监听, roomId=", roomId);
-    roomWatcher = db.collection(ROOM_COLLECTION).doc(roomId).watch({
-      onChange(snapshot) {
-        console.log("[pvp] watch onChange 触发, type=", snapshot && snapshot.type,
-          "docChanges=", snapshot && snapshot.docChanges ? snapshot.docChanges.length : 0,
-          "docs=", snapshot && snapshot.docs ? snapshot.docs.length : 0);
-        const docs = snapshot && snapshot.docs ? snapshot.docs : [];
-        if (docs[0]) {
-          deliver(docs[0], "watch-docs");
-          return;
-        }
-        const changes = snapshot && snapshot.docChanges ? snapshot.docChanges : [];
-        if (changes.length > 0 && changes[0].doc) {
-          deliver(changes[0].doc, "watch-change");
-          return;
-        }
-        console.log("[pvp] watch onChange 但无有效文档数据, snapshot keys=", snapshot ? Object.keys(snapshot) : "null");
-      },
-      onError(err) {
-        console.error("[pvp] watch onError，继续使用轮询兜底:", err && err.errMsg || err);
-        if (watchToken === roomWatchToken && onError && !roomPollTimer) onError(err);
-      }
-    });
-  } catch (err) {
-    console.warn("[pvp] watchRoom 启动失败，使用轮询同步房间:", err && err.errMsg || err);
-  }
   return roomWatcher;
+}
+
+function plainClipboardError(err) {
+  return {
+    message: err?.errMsg || err?.message || String(err || "复制失败"),
+    errMsg: err?.errMsg || "",
+    code: err?.errCode || err?.code || ""
+  };
+}
+
+function copyTextResult(value) {
+  const api = wxApi();
+  if (!api || !api.setClipboardData) return Promise.resolve({ ok: false, error: { message: "当前环境不支持复制" } });
+  return new Promise(resolve => {
+    try {
+      api.setClipboardData({
+        data: String(value || ""),
+        success: res => resolve({ ok: true, result: res || {} }),
+        fail: err => {
+          console.warn("[pvp] setClipboardData failed", err);
+          resolve({ ok: false, error: plainClipboardError(err) });
+        }
+      });
+    } catch (err) {
+      console.warn("[pvp] setClipboardData exception", err);
+      resolve({ ok: false, error: plainClipboardError(err) });
+    }
+  });
 }
 
 function copyText(value) {
   const api = wxApi();
   if (!api || !api.setClipboardData) return false;
-  try {
-    api.setClipboardData({
-      data: String(value || ""),
-      success: () => {},
-      fail: err => console.warn("[pvp] setClipboardData failed", err)
-    });
-    return true;
-  } catch (err) {
-    console.warn("[pvp] setClipboardData exception", err);
-    return false;
-  }
+  copyTextResult(value);
+  return true;
 }
 
 function copyRoomId(roomId) {
   return copyText(roomId);
 }
 
+function copyRoomIdResult(roomId) {
+  return copyTextResult(roomId);
+}
+
 module.exports = {
-  ENV_ID,
-  initCloud,
+  setAuthToken,
+  getAuthToken,
+  login,
   createRoom,
   joinRoom,
   getRoom,
@@ -340,8 +392,19 @@ module.exports = {
   returnToRoom,
   submitAction,
   leaveRoom,
+  recordMatchHistory,
+  listMatchHistory,
+  getLoginContext,
+  getCurrentUser,
+  getAdminStatus,
+  getAdminStats,
+  saveWechatProfile,
+  updateProfile,
+  uploadAvatarFile,
   watchRoom,
   closeRoomWatch,
   copyText,
-  copyRoomId
+  copyTextResult,
+  copyRoomId,
+  copyRoomIdResult
 };

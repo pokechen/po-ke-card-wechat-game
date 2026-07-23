@@ -7,6 +7,7 @@ const SHARED_FILES = [
   ["shared/core/battle.js", "cloudfunctions/pvpRoom/shared/core/battle.js"],
   ["shared/core/cards.js", "cloudfunctions/pvpRoom/shared/core/cards.js"],
   ["shared/core/storage.js", "cloudfunctions/pvpRoom/shared/core/storage.js"],
+  ["shared/core/adminStats.js", "cloudfunctions/pvpRoom/shared/core/adminStats.js"],
   ["shared/data/zhangyu_cards.js", "cloudfunctions/pvpRoom/shared/data/zhangyu_cards.js"]
 ];
 

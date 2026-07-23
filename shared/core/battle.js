@@ -16,10 +16,29 @@ const {
 } = require("./cards");
 const { recordMatch, getActiveCustomDeckIds } = require("./storage");
 
+const DEFAULT_AI_STRATEGY = "optimized";
 const AI_DIFFICULTY = {
   easy: { blunder: 0.45, concede: false, valueNoise: 8, minLeadToStop: 99 },
   normal: { blunder: 0.1, concede: true, valueNoise: 2, minLeadToStop: 5 },
   hard: { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 }
+};
+const MATCH_MORALE = 2;
+
+const ADVANCED_AI = {
+  knownStateSearchDepth: 6,
+  maxActionsPerNode: 20,
+  scoreGainWeight: 1.35,
+  finalScoreGainWeight: 2.2,
+  futureResourceWeight: 0.62,
+  mustWinFutureWeight: 0.28,
+  finalFutureWeight: 0.12,
+  handDeltaWeight: 4.5,
+  scorchNetSwingNormal: 8,
+  scorchNetSwingFinal: 4,
+  weatherNetSwing: 6,
+  expectedCatchPerCard: 8,
+  terminalWin: 100000,
+  terminalLoss: -100000
 };
 
 function makePlayer(name, index, faction, difficulty, customDeckIds, leaderId) {
@@ -58,7 +77,13 @@ function scoiaChooserIndex(players) {
 function draw(player, count) {
   for (let i = 0; i < count; i++) {
     const card = player.deck.shift();
-    if (card) player.hand.push(card);
+    if (card) {
+      card.owner = player.index;
+      card.controller = player.index;
+      card.zone = "hand";
+      card.boardRow = null;
+      player.hand.push(card);
+    }
   }
 }
 
@@ -175,6 +200,14 @@ function swapHandCard(player, uid) {
   if (idx < 0) return false;
   const old = player.hand[idx];
   const fresh = player.deck.shift();
+  fresh.owner = player.index;
+  fresh.controller = player.index;
+  fresh.zone = "hand";
+  fresh.boardRow = null;
+  old.owner = player.index;
+  old.controller = player.index;
+  old.zone = "deck";
+  old.boardRow = null;
   player.hand[idx] = fresh;
   player.deck = shuffle(player.deck.concat(old));
   return true;
@@ -309,29 +342,37 @@ function leaderText(player) {
   return `${player.leader?.baseName || ""} ${player.leader?.leaderAbility || ""} ${player.leader?.abilityText || ""}`.toLowerCase();
 }
 
-function playWeatherFromLeader(state, name) {
-  if (/biting frost|边患/.test(name)) state.weather.melee = true;
-  else if (/impenetrable fog|蔽日|党争/.test(name)) state.weather.ranged = true;
-  else if (/torrential rain|倾盆|典籍/.test(name)) state.weather.siege = true;
+function playWeatherFromLeader(state, name, preferredRow) {
+  let row;
+  if (ROWS.includes(preferredRow)) row = preferredRow;
+  else if (/biting frost|边患/.test(name)) row = "melee";
+  else if (/impenetrable fog|蔽日|党争/.test(name)) row = "ranged";
+  else if (/torrential rain|倾盆|典籍/.test(name)) row = "siege";
   else {
-    const rows = ROWS.filter(row => !state.weather[row]);
-    state.weather[rows[0] || "melee"] = true;
+    const rows = ROWS.filter(item => !state.weather[item]);
+    row = rows[0] || "melee";
   }
+  const alreadyActive = !!state.weather[row];
+  state.weather[row] = true;
+  return alreadyActive ? [] : [row];
 }
 
-function takeBestDiscardToHand(state, fromIndex, toIndex) {
+function takeBestDiscardToHand(state, fromIndex, toIndex, targetUid) {
   const from = state.players[fromIndex];
   const to = state.players[toIndex];
   const candidates = from.discard.filter(card => card.category === "unit" || card.category === "hero");
-  if (!candidates.length) return false;
+  if (!candidates.length) return null;
   candidates.sort((a, b) => cardValue(b) - cardValue(a));
-  const card = candidates[0];
+  const card = candidates.find(item => item.uid === targetUid) || candidates[0];
   from.discard = from.discard.filter(item => item.uid !== card.uid);
   card.owner = toIndex;
+  card.controller = toIndex;
+  card.zone = "hand";
+  card.boardRow = null;
   card.playedBy = toIndex;
   to.hand.push(card);
   addLog(state, `${to.name}从弃牌堆取回「${cardLabel(card)}」。`);
-  return true;
+  return card;
 }
 
 function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
@@ -342,6 +383,12 @@ function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
   if (picks.length !== 2 || new Set(picks.map(card => card.uid)).size !== 2) return false;
   const picked = new Set(picks.map(card => card.uid));
   player.hand = player.hand.filter(card => !picked.has(card.uid));
+  picks.forEach(card => {
+    card.owner = playerIndex;
+    card.controller = playerIndex;
+    card.zone = "discard";
+    card.boardRow = null;
+  });
   player.discard.push(...picks);
   const before = player.hand.length;
   draw(player, 1);
@@ -352,6 +399,7 @@ function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
 
 function optimizeAgileRows(state, playerIndex) {
   const player = state.players[playerIndex];
+  let moved = 0;
   ROWS.forEach(row => {
     player.board[row].slice().forEach(card => {
       if (!hasAbility(card, "Agile") || !card.row || card.row.length < 2) return;
@@ -359,9 +407,11 @@ function optimizeAgileRows(state, playerIndex) {
       if (!best || best === row) return;
       player.board[row] = player.board[row].filter(item => item.uid !== card.uid);
       player.board[best].push(card);
+      moved += 1;
     });
   });
   addLog(state, `${player.name}调整机动单位到更优战线。`);
+  return moved;
 }
 
 function rowFromLeaderText(text) {
@@ -386,6 +436,9 @@ function boardTargetForCard(playerIndex, card) {
 function placeUnitOnBoard(state, playedBy, target, row, card) {
   card.playedBy = playedBy;
   card.owner = playedBy;
+  card.controller = target;
+  card.zone = "board";
+  card.boardRow = row;
   state.players[target].board[row].push(card);
 }
 
@@ -426,6 +479,9 @@ function discardBoardCard(state, controllerIndex, card, row = null, options = {}
     ? controllerIndex
     : (Number.isInteger(card.owner) && state.players[card.owner] ? card.owner : controllerIndex);
   card.owner = owner;
+  card.controller = owner;
+  card.zone = "discard";
+  card.boardRow = null;
   const avenger = summonAvengerOnLeave(state, owner, row, card, { nextRound: !!options.nextRound });
   queueSkyHoundSummon(state, owner, card);
   state.players[owner].discard.push(card);
@@ -447,7 +503,7 @@ function normalizePreferredRow(state, playerIndex, card, preferredRow) {
 }
 
 function needsHumanChoice(state, player, card, preferredRow) {
-  if (preferredRow || state.mode === "ai" && player.index !== 0) return false;
+  if (preferredRow || state.autoControlAll || state.mode === "ai" && player.index !== 0) return false;
   const rows = choiceRowsForCard(state, player.index, card);
   if (isHorn(card) || isMardroeme(card)) return rows.length > 1;
   return card.category !== "weather" && card.category !== "special" && rows.length > 1;
@@ -579,7 +635,7 @@ function markLeaderUsed(state, playerIndex, description) {
   });
 }
 
-function playCard(state, cardUid, preferredRow) {
+function playCard(state, cardUid, preferredRow, actionOptions = {}) {
   if (state.over || state.pending || state.roundTransition || (state.mulligan && state.mulligan.active)) return false;
   const player = currentPlayer(state);
   if (player.passed) return false;
@@ -613,7 +669,11 @@ function playCard(state, cardUid, preferredRow) {
     player.hand.splice(index, 1);
     const row = selectedRow || rowForCard(state, player.index, card);
     markLastPlayed(state, player.index, card, player.index, row);
-    resolveSpecial(state, player.index, card, row);
+    resolveSpecial(state, player.index, card, row, actionOptions);
+    card.owner = player.index;
+    card.controller = player.index;
+    card.zone = "discard";
+    card.boardRow = null;
     player.discard.push(card);
     addLog(state, `${player.name}打出${categoryLabel(card)}「${cardLabel(card)}」。`);
   } else {
@@ -623,7 +683,7 @@ function playCard(state, cardUid, preferredRow) {
     placeUnitOnBoard(state, player.index, target, row, card);
     addLog(state, `${player.name}打出「${cardLabel(card)}」到${target === player.index ? "己方" : "对方"}${ROW_LABELS[row]}。`);
     markLastPlayed(state, player.index, card, target, row);
-    resolveUnitAbility(state, player.index, target, row, card);
+    resolveUnitAbility(state, player.index, target, row, card, actionOptions);
   }
   if (!state.pending) afterPlay(state);
   return true;
@@ -640,10 +700,10 @@ function pass(state) {
   return true;
 }
 
-function useLeader(state, playerIndex) {
+function useLeader(state, playerIndex, actionOptions = {}) {
   if (state.over || state.pending || state.roundTransition || (state.mulligan && state.mulligan.active)) return false;
   const player = state.players[playerIndex];
-  if (!player || player.leaderUsed || !player.leader) return false;
+  if (!player || state.current !== playerIndex || player.passed || player.leaderUsed || !player.leader) return false;
   const text = leaderText(player);
   const discardsTwo = /discard 2 cards/.test(text);
   if (discardsTwo && player.hand.length < 2) return false;
@@ -660,7 +720,7 @@ function useLeader(state, playerIndex) {
   }
   player.leaderUsed = true;
   const locksOpponentLeader = /cancel your opponent|取消.*主将|cancel.*leader/.test(text);
-  markLeaderUsed(state, playerIndex, locksOpponentLeader ? "对手主将技能被封锁" : "主将技能");
+  markLeaderUsed(state, playerIndex, locksOpponentLeader ? "封锁：对手主将技能" : "主将技能");
   if (locksOpponentLeader) {
     state.players[otherIndex(playerIndex)].leaderUsed = true;
     addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」，对手主将技能被封锁。`);
@@ -679,36 +739,73 @@ function useLeader(state, playerIndex) {
       addLog(state, `侦察完成：查看对手 ${cards.length} 张手牌。`);
       appendLastBattleActionEffect(state, "侦察", result);
     } else if (/opponent.*discard|对手.*弃牌/.test(text)) {
-      if (!takeBestDiscardToHand(state, otherIndex(playerIndex), playerIndex)) draw(player, 1);
-  } else if (/restore a card from your discard|弃牌堆.*手牌/.test(text)) {
-    if (!takeBestDiscardToHand(state, playerIndex, playerIndex)) draw(player, 1);
-  } else if (/discard 2 cards/.test(text)) {
-    discardTwoDrawOne(state, playerIndex);
-  } else if (/shuffle all cards/.test(text)) {
-    state.players.forEach(item => {
-      item.deck = shuffle(item.deck.concat(item.discard));
-      item.discard = [];
-    });
-    addLog(state, "双方弃牌堆已洗回牌库。");
-  } else if (/move agile/.test(text)) {
-    optimizeAgileRows(state, playerIndex);
-  } else if (/pick any weather|pick a .*weather|biting frost|impenetrable fog|torrential rain/.test(text)) {
-    playWeatherFromLeader(state, text);
-  } else if (/clear|清除|拨云/.test(text)) {
-    state.weather = {};
-  } else if (/double|翻倍|horn|鼓舞|号令/.test(text)) {
-    const row = rowFromLeaderText(text) || bestOwnRow(state, playerIndex) || "melee";
-    state.rowHorn[playerIndex][row] = true;
-  } else if (/destroy|scorch|摧毁|奇策/.test(text)) {
-    doScorch(state, playerIndex, rowFromLeaderText(text), true, 10);
-  } else if (/draw|抽/.test(text)) {
-    draw(player, 1);
-  } else if (/half (of )?(their )?strength|lose half|半损|一半战力/i.test(text)) {
-    player.halfWeatherRound = state.round;
-    addLog(state, `${player.name}激活主将「${cardLabel(player.leader)}」：本回合己方单位在恶劣时局下仅损失一半战力。`);
-  } else {
-    addLog(state, "该主将能力已作为持续/被动效果处理。");
-  }
+      const taken = takeBestDiscardToHand(state, otherIndex(playerIndex), playerIndex, actionOptions.leaderTargetUid);
+      if (taken) appendLastBattleActionEffect(state, "取回", cardLabel(taken));
+      else {
+        const before = player.hand.length;
+        draw(player, 1);
+        const drawn = player.hand.length - before;
+        if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
+      }
+    } else if (/restore a card from your discard|弃牌堆.*手牌/.test(text)) {
+      const taken = takeBestDiscardToHand(state, playerIndex, playerIndex, actionOptions.leaderTargetUid);
+      if (taken) appendLastBattleActionEffect(state, "取回", cardLabel(taken));
+      else {
+        const before = player.hand.length;
+        draw(player, 1);
+        const drawn = player.hand.length - before;
+        if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
+      }
+    } else if (/discard 2 cards/.test(text)) {
+      const result = discardTwoDrawOne(state, playerIndex, actionOptions.leaderDiscardUids);
+      if (result) {
+        const drawResult = result.drawn > 0 ? `，抽牌x${result.drawn}` : "";
+        appendLastBattleActionEffect(state, "弃牌", `${result.picks.map(cardLabel).join("、")}${drawResult}`);
+      }
+    } else if (/shuffle all cards/.test(text)) {
+      const count = state.players.reduce((sum, item) => sum + item.discard.length, 0);
+      state.players.forEach(item => {
+        item.discard.forEach(card => {
+          card.owner = item.index;
+          card.controller = item.index;
+          card.zone = "deck";
+          card.boardRow = null;
+        });
+        item.deck = shuffle(item.deck.concat(item.discard));
+        item.discard = [];
+      });
+      addLog(state, "双方弃牌堆已洗回牌库。");
+      if (count > 0) appendLastBattleActionEffect(state, "洗牌", `弃牌堆x${count}`);
+    } else if (/move agile/.test(text)) {
+      const moved = optimizeAgileRows(state, playerIndex);
+      if (moved > 0) appendLastBattleActionEffect(state, "调度", `通才x${moved}`);
+    } else if (/pick any weather|pick a .*weather|biting frost|impenetrable fog|torrential rain/.test(text)) {
+      const rows = playWeatherFromLeader(state, text, actionOptions.leaderRow);
+      if (rows.length) appendLastBattleActionEffect(state, "时局", rows.map(row => ROW_LABELS[row]).join("、"));
+    } else if (/clear|清除|拨云/.test(text)) {
+      const clearedRows = ROWS.filter(row => state.weather[row]).map(row => ROW_LABELS[row]);
+      state.weather = {};
+      if (clearedRows.length) appendLastBattleActionEffect(state, "晴天", `清除${clearedRows.join("、")}`);
+    } else if (/double|翻倍|horn|鼓舞|号令/.test(text)) {
+      const row = rowFromLeaderText(text) || (ROWS.includes(actionOptions.leaderRow) ? actionOptions.leaderRow : null) || bestOwnRow(state, playerIndex) || "melee";
+      const wasActive = !!state.rowHorn[playerIndex][row];
+      state.rowHorn[playerIndex][row] = true;
+      const boosted = (state.players[playerIndex].board[row] || []).filter(card => !card.hero).length;
+      if (!wasActive) appendLastBattleActionEffect(state, "鼓舞", boosted ? `${ROW_LABELS[row]}x${boosted}` : ROW_LABELS[row]);
+    } else if (/destroy|scorch|摧毁|奇策/.test(text)) {
+      doScorch(state, playerIndex, rowFromLeaderText(text), true, 10);
+    } else if (/draw|抽/.test(text)) {
+      const before = player.hand.length;
+      draw(player, 1);
+      const drawn = player.hand.length - before;
+      if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
+    } else if (/half (of )?(their )?strength|lose half|半损|一半战力/i.test(text)) {
+      player.halfWeatherRound = state.round;
+      addLog(state, `${player.name}激活主将「${cardLabel(player.leader)}」：本回合己方单位在恶劣时局下仅损失一半战力。`);
+      appendLastBattleActionEffect(state, "半损", "本回合");
+    } else {
+      addLog(state, "该主将能力已作为持续/被动效果处理。");
+    }
   }
   afterPlay(state);
   return true;
@@ -752,7 +849,7 @@ function advanceTurn(state) {
   settlePassedState(state);
 }
 
-function resolveSpecial(state, playerIndex, card, row) {
+function resolveSpecial(state, playerIndex, card, row, actionOptions = {}) {
   if (isClearWeather(card)) {
     const clearedRows = ROWS.filter(item => state.weather[item]).map(item => ROW_LABELS[item]);
     state.weather = {};
@@ -780,11 +877,11 @@ function resolveSpecial(state, playerIndex, card, row) {
     return;
   }
   if (isScorch(card)) return doScorch(state, playerIndex, null, false, 0);
-  if (isDecoy(card)) return doDecoy(state, playerIndex);
+  if (isDecoy(card)) return doDecoy(state, playerIndex, actionOptions.decoyTargetUid);
   if (isMardroeme(card)) return transformBerserkers(state, row || bestBerserkerRow(state, playerIndex) || "melee");
 }
 
-function resolveUnitAbility(state, playedBy, target, row, card) {
+function resolveUnitAbility(state, playedBy, target, row, card, actionOptions = {}) {
   if (hasAbility(card, "Spy")) {
     const player = state.players[playedBy];
     const before = player.hand.length;
@@ -795,18 +892,24 @@ function resolveUnitAbility(state, playedBy, target, row, card) {
   }
   if (hasAbility(card, "Medic")) {
     const candidates = reviveCandidates(state, playedBy);
-    if (isHumanControlled(state, playedBy) && candidates.length) {
+    const sequence = Array.isArray(actionOptions.medicTargetUids)
+      ? actionOptions.medicTargetUids
+      : (actionOptions.medicTargetUid ? [actionOptions.medicTargetUid] : []);
+    const sequenceIndex = Number(actionOptions.medicTargetIndex || 0);
+    const selectedUid = sequence[sequenceIndex];
+    const selected = selectedUid && candidates.find(item => item.uid === selectedUid);
+    if (selected) {
+      reviveCardByUid(state, playedBy, selected.uid, { ...actionOptions, medicTargetIndex: sequenceIndex + 1 });
+    } else if (isHumanControlled(state, playedBy) && candidates.length) {
       state.pending = { type: "revive", playerIndex: playedBy, candidates, title: "选择举荐复归目标" };
       addLog(state, "请选择要复归的人物，或跳过。 ");
     } else reviveBest(state, playedBy);
   }
   if (isHorn(card)) {
     const targetRow = row || bestOwnRow(state, playedBy) || "melee";
-    const wasActive = !!state.rowHorn[playedBy][targetRow];
-    state.rowHorn[playedBy][targetRow] = true;
     addLog(state, `${state.players[playedBy].name}在${ROW_LABELS[targetRow]}鼓舞士气。`);
     const boosted = (state.players[playedBy].board[targetRow] || []).filter(item => !item.hero).length;
-    if (!wasActive && boosted) appendLastBattleActionEffect(state, "鼓舞", `${ROW_LABELS[targetRow]}x${boosted}`);
+    if (boosted) appendLastBattleActionEffect(state, "鼓舞", `${ROW_LABELS[targetRow]}x${boosted}`);
   }
   if (hasAbility(card, "Muster")) doMuster(state, playedBy, target, row, card);
   if (hasAbility(card, "Summon Shield Maidens")) summonByName(state, playedBy, target, row, "岳家军");
@@ -871,6 +974,7 @@ function summonByName(state, playedBy, target, row, baseName) {
 }
 
 function isHumanControlled(state, playerIndex) {
+  if (state.autoControlAll) return false;
   return state.mode !== "ai" || playerIndex === 0;
 }
 
@@ -889,10 +993,11 @@ function isReviveCandidate(card) {
 function reviveCandidates(state, playerIndex) {
   return state.players[playerIndex].discard
     .filter(isReviveCandidate)
+    .filter(card => !hasAbility(card, "Muster")) // 集结为一次性效果，复活不会再触发，济世/复起均不复活集结单位
     .sort((a, b) => cardValue(b) - cardValue(a));
 }
 
-function reviveCardByUid(state, playerIndex, uid) {
+function reviveCardByUid(state, playerIndex, uid, actionOptions = {}) {
   const player = state.players[playerIndex];
   const card = reviveCandidates(state, playerIndex).find(item => item.uid === uid);
   if (!card) return false;
@@ -902,8 +1007,71 @@ function reviveCardByUid(state, playerIndex, uid) {
   placeUnitOnBoard(state, playerIndex, target, row, card);
   addLog(state, `举荐生效：${player.name}复归「${cardLabel(card)}」到${target === playerIndex ? "己方" : "对方"}${ROW_LABELS[row]}。`);
   appendLastBattleActionEffect(state, "济世", cardLabel(card));
-  resolveUnitAbility(state, playerIndex, target, row, card);
+  resolveUnitAbility(state, playerIndex, target, row, card, actionOptions);
   return true;
+}
+
+function bestMedicReplayValue(state, playerIndex) {
+  return reviveCandidates(state, playerIndex).reduce((best, card) => Math.max(best, medicTargetValue(state, playerIndex, card.uid)), 0);
+}
+
+function decoyMedicReplayValue(state, playerIndex, card) {
+  if (!card || card.hero || !hasAbility(card, "Medic")) return 0;
+  const replayValue = bestMedicReplayValue(state, playerIndex);
+  if (replayValue <= 0) return 0;
+  // 边际递减：济世被请辞反复回收时，每次复用的价值依次衰减，避免高估链式刷分
+  const reuse = card.medicReuseCount || 0;
+  const decay = reuse === 0 ? 1 : Math.pow(0.6, reuse);
+  return (10 + replayValue * 0.6) * decay;
+}
+
+// 对手是否持有能摧毁己方“最高战力”非传世人物的威胁（奇策/釜底抽薪或对应主将能力）。
+function opponentHighestThreat(state, opponentIndex) {
+  const opp = state.players[opponentIndex];
+  if (!opp || opp.passed) return false; // 已过牌无法发动点杀
+  if (!(opp.hand || []).length) return false; // 无手牌则无实际点杀威胁
+  if ((opp.hand || []).some(card => isScorch(card))) return true;
+  const text = leaderText(opp);
+  if (!opp.leaderUsed && /摧毁|奇策|scorch|destroy/i.test(text)) return true;
+  return false;
+}
+
+// 该卡是否是其所在阵线当前最高战力的非传世人物。
+function isHighestNonHeroOnRow(state, playerIndex, card, row) {
+  const cards = state.players[playerIndex].board[row] || [];
+  const maxEff = cards.filter(c => !c.hero).reduce((m, c) => Math.max(m, c.effective || 0), 0);
+  return maxEff > 0 && (card.effective || 0) >= maxEff;
+}
+
+// 防御性价值：收回即将被对手奇策/釜底抽薪点掉的最高战力非传世人物，
+// 等同于保住该卡当前战场战力，避免被白吃。
+function decoyDefensiveValue(state, playerIndex, card, row) {
+  if (card.hero) return 0;
+  const effective = card.effective || 0;
+  if (effective < 8) return 0; // 低战力牌不值得消耗请辞抢救
+  if (!isHighestNonHeroOnRow(state, playerIndex, card, row)) return 0;
+  if (!opponentHighestThreat(state, otherIndex(playerIndex))) return 0;
+  return Math.max(4, effective * 0.8);
+}
+
+// 集结（集贤）回收价值：仅当牌库/手牌仍有同名可集结卡时给收益，
+// 否则首次打出时已全数召唤上场，收回再打无牌可集结（收益归零）。
+function decoyMusterValue(state, playerIndex, card) {
+  if (!hasAbility(card, "Muster")) return 0;
+  return musterPowerBonus(state, playerIndex, card);
+}
+
+// 请辞目标排序价值：只应对“真实可回收再利用”的目标——
+// 济世二次复活、防御性抢救被奇策点掉的最高战力牌、尚有名可集结的集贤。
+function decoyTargetSortValueOptimized(state, playerIndex, card, row) {
+  let value = cardValue(card) + decoyMedicReplayValue(state, playerIndex, card);
+  value += decoyMusterValue(state, playerIndex, card);
+  if (row) value += decoyDefensiveValue(state, playerIndex, card, row);
+  return value;
+}
+
+function decoyTargetSortValue(state, playerIndex, card, row) {
+  return decoyTargetSortValueOptimized(state, playerIndex, card, row);
 }
 
 function decoyTargets(state, playerIndex) {
@@ -914,7 +1082,7 @@ function decoyTargets(state, playerIndex) {
       if (!card.hero) targets.push({ row, card });
     });
   });
-  return targets.sort((a, b) => cardValue(b.card) - cardValue(a.card));
+  return targets.sort((a, b) => decoyTargetSortValue(state, playerIndex, b.card, b.row) - decoyTargetSortValue(state, playerIndex, a.card, a.row));
 }
 
 function doDecoyTarget(state, playerIndex, uid) {
@@ -926,7 +1094,11 @@ function doDecoyTarget(state, playerIndex, uid) {
   const avenger = summonAvengerOnLeave(state, owner, entry.row, entry.card);
   queueSkyHoundSummon(state, owner, entry.card);
   entry.card.owner = playerIndex;
+  entry.card.controller = playerIndex;
+  entry.card.zone = "hand";
+  entry.card.boardRow = null;
   entry.card.playedBy = playerIndex;
+  if (hasAbility(entry.card, "Medic")) entry.card.medicReuseCount = (entry.card.medicReuseCount || 0) + 1; // 济世被请辞回收，记录复用次数用于边际递减
   player.hand.push(entry.card);
   addLog(state, `${player.name}收回「${cardLabel(entry.card)}」。`);
   return { card: entry.card, avenger };
@@ -977,10 +1149,11 @@ function doScorch(state, playerIndex, row, opponentOnly, minEffective = 10) {
   if (avengers.length) appendLastBattleActionEffect(state, "召唤陆抗", avengerEffectText(avengers));
 }
 
-function doDecoy(state, playerIndex) {
+function doDecoy(state, playerIndex, targetUid) {
   const targets = decoyTargets(state, playerIndex);
   if (!targets.length) return addLog(state, "请辞归隐没有可收回的人物。");
-  const result = doDecoyTarget(state, playerIndex, targets[0].card.uid);
+  const selected = targets.find(item => item.card.uid === targetUid) || targets[0];
+  const result = doDecoyTarget(state, playerIndex, selected.card.uid);
   if (result?.card) appendLastBattleActionEffect(state, "请辞", cardLabel(result.card));
   if (result?.avenger) appendLastBattleActionEffect(state, "召唤陆抗", avengerEffectText([result.avenger]));
 }
@@ -1061,6 +1234,44 @@ function removeFromBoardToDiscard(state, playerIndex, row, uid) {
   return discardBoardCard(state, playerIndex, player.board[row].splice(idx, 1)[0], row);
 }
 
+function normalizeMorale(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.max(0, Math.min(MATCH_MORALE, amount)) : MATCH_MORALE;
+}
+
+function applyRoundMorale(morale, winnerIndex) {
+  const next = [normalizeMorale(morale?.[0]), normalizeMorale(morale?.[1])];
+  if (winnerIndex == null) {
+    next[0] -= 1;
+    next[1] -= 1;
+  } else {
+    next[otherIndex(winnerIndex)] -= 1;
+  }
+  return next.map(value => Math.max(0, value));
+}
+
+function moraleFromRoundResults(results) {
+  return (Array.isArray(results) ? results : []).reduce((morale, result) => {
+    if (Array.isArray(result?.morale) && result.morale.length >= 2) {
+      return [normalizeMorale(result.morale[0]), normalizeMorale(result.morale[1])];
+    }
+    return applyRoundMorale(morale, result?.winner == null ? null : result.winner);
+  }, [MATCH_MORALE, MATCH_MORALE]);
+}
+
+function moraleLoss(before, after) {
+  return [Math.max(0, before[0] - after[0]), Math.max(0, before[1] - after[1])];
+}
+
+function matchWinnerByMorale(morale) {
+  if (morale[0] === morale[1]) return null;
+  return morale[0] > morale[1] ? 0 : 1;
+}
+
+function moraleLine(before, after) {
+  return `军心 ${before[0]}:${before[1]} → ${after[0]}:${after[1]}`;
+}
+
 function finishRound(state) {
   if (state.roundTransition) return;
   recalcScores(state);
@@ -1072,12 +1283,15 @@ function finishRound(state) {
   if (s0 > s1) winnerIndex = 0;
   if (s1 > s0) winnerIndex = 1;
   if (s0 === s1) winnerIndex = tieWinner(state);
+  const moraleBefore = moraleFromRoundResults(state.roundResults);
+  const moraleAfter = applyRoundMorale(moraleBefore, winnerIndex);
+  const moraleDelta = moraleLoss(moraleBefore, moraleAfter);
   if (winnerIndex === null) {
-    addLog(state, `第 ${state.round} 回合平局：${s0} : ${s1}，本局不计胜负，稍后进入下一局。`);
+    addLog(state, `第 ${state.round} 回合平局：${s0} : ${s1}，双方军心各失 1 点，${moraleLine(moraleBefore, moraleAfter)}。`);
   } else {
     const tieReason = s0 === s1 ? "（平分按阵营被动判定）" : "";
     state.players[winnerIndex].roundsWon += 1;
-    addLog(state, `第 ${state.round} 回合结束：${s0} : ${s1}，${state.players[winnerIndex].name}获胜${tieReason}。`);
+    addLog(state, `第 ${state.round} 回合结束：${s0} : ${s1}，${state.players[winnerIndex].name}获胜${tieReason}，${state.players[otherIndex(winnerIndex)].name}军心 -1，${moraleLine(moraleBefore, moraleAfter)}。`);
     if (state.players[winnerIndex].faction === "Northern Realms") {
       draw(state.players[winnerIndex], 1);
       addLog(state, "开国群雄被动：获胜后抽 1 张牌。");
@@ -1086,16 +1300,19 @@ function finishRound(state) {
   markBattleAction(state, {
     type: "roundResult",
     text: winnerIndex === null
-      ? `双方放弃本局：平局，比分 ${s0} : ${s1}。`
-      : `双方放弃本局：${state.players[winnerIndex].name}获胜，比分 ${s0} : ${s1}。`
+      ? `双方放弃本局：平局，比分 ${s0} : ${s1}，双方军心 -1。`
+      : `双方放弃本局：${state.players[winnerIndex].name}获胜，比分 ${s0} : ${s1}，${state.players[otherIndex(winnerIndex)].name}军心 -1。`
   });
-  state.roundResults.push({ round: state.round, scores: [s0, s1], winner: winnerIndex });
+  state.roundResults.push({ round: state.round, scores: [s0, s1], winner: winnerIndex, morale: moraleAfter, moraleLoss: moraleDelta });
   state.roundTransition = {
     seq: state.lastPlayedSeq || 0,
     round: state.round,
     scores: [s0, s1],
     winner: winnerIndex,
-    matchOver: state.players.some(player => player.roundsWon >= 2) || state.round >= 3,
+    moraleBefore,
+    morale: moraleAfter,
+    moraleLoss: moraleDelta,
+    matchOver: moraleAfter.some(value => value <= 0) || state.round >= 3,
     nextRound: state.round + 1
   };
 }
@@ -1183,6 +1400,10 @@ function cleanupRound(state) {
       delete token.retainedRow;
       delete token.retainedSource;
       delete token.retainedOriginName;
+      token.owner = pi;
+      token.controller = pi;
+      token.zone = "board";
+      token.boardRow = row;
       player.board[row].push(token);
       if (source) {
         const origin = originName ? `（${originName}）` : "";
@@ -1214,7 +1435,7 @@ function applySkelligePerk(state) {
 }
 
 function recordFinishedMatch(state) {
-  if (state.historyRecorded) return;
+  if (state.suppressRecording || state.historyRecorded) return;
   const p0 = state.players[0];
   const p1 = state.players[1];
   recordMatch({
@@ -1222,6 +1443,7 @@ function recordFinishedMatch(state) {
     resultText: state.resultText,
     winner: state.winner,
     rounds: [p0.roundsWon, p1.roundsWon],
+    morale: moraleFromRoundResults(state.roundResults),
     scores: state.finalScores,
     roundResults: state.roundResults.slice(),
     humanFaction: p0.factionName,
@@ -1247,16 +1469,24 @@ function finishMatch(state) {
   state.finalScores = [totalScore(state.players[0]), totalScore(state.players[1])];
   const p0 = state.players[0];
   const p1 = state.players[1];
-  if (p0.roundsWon === p1.roundsWon) {
+  const morale = moraleFromRoundResults(state.roundResults);
+  state.morale = morale;
+  if (state.roundResults.length) {
+    state.winner = matchWinnerByMorale(morale);
+  } else if (p0.roundsWon === p1.roundsWon) {
     state.winner = null;
-    state.resultText = "平局";
   } else {
     state.winner = p0.roundsWon > p1.roundsWon ? 0 : 1;
-    if (state.mode === "online") state.resultText = `${state.players[state.winner].name}获胜`;
-    else state.resultText = state.winner === 0 ? "你赢了" : "系统获胜";
+  }
+  if (state.winner == null) {
+    state.resultText = "平局";
+  } else if (state.mode === "online") {
+    state.resultText = `${state.players[state.winner].name}获胜`;
+  } else {
+    state.resultText = state.winner === 0 ? "你赢了" : "系统获胜";
   }
   recordFinishedMatch(state);
-  addLog(state, `整局结束：${state.resultText}。`);
+  addLog(state, `整局结束：${state.resultText}，${moraleLine([MATCH_MORALE, MATCH_MORALE], morale)}。`);
   return true;
 }
 
@@ -1331,17 +1561,54 @@ function weatherDamage(state, playerIndex, row) {
 }
 
 function bestDecoyTarget(state, playerIndex) {
-  const targets = [];
-  ROWS.forEach(row => state.players[playerIndex].board[row].forEach(card => { if (!card.hero) targets.push({ row, card }); }));
-  return targets.sort((a, b) => cardValue(b.card) - cardValue(a.card))[0] || null;
+  return decoyTargets(state, playerIndex)[0] || null;
 }
 
 // 估算召唤类能力带来的额外收益：岳飞「召唤岳家军」会把己方手牌与牌库中所有的
 // 「岳家军」部署到疆场，并触发同盟（Tight Bond）翻倍。把这些将被召唤卡牌的净
 // 增量战力计入本次出牌收益，让自动出牌把「岳飞 + 岳家军」当作一个整体来决策
 // （即岳飞与岳家军绑定，优先一起打出，而非先零散打出岳家军）。
+function playerValuePool(state, playerIndex) {
+  const player = state.players[playerIndex];
+  if (!player) return [];
+  const board = ROWS.flatMap(row => player.board[row] || []);
+  return player.hand.concat(player.deck || [], player.discard || [], board, player.retained || []);
+}
+
+function relatedMusterCards(state, playerIndex, card, sources) {
+  return sources.filter(item => {
+    if (item.uid === card.uid) return false;
+    if (card.musterTarget) return item.baseName === card.musterTarget;
+    if (card.musterGroup) return item.musterGroup === card.musterGroup;
+    return item.baseName === card.baseName;
+  });
+}
+
+function tightBondPowerBonus(state, playerIndex, card, row) {
+  if (!hasAbility(card, "Tight Bond")) return 0;
+  const partners = (state.players[playerIndex].board[row] || []).filter(item => item.baseName === card.baseName && hasAbility(item, "Tight Bond"));
+  if (!partners.length) return 0;
+  const countBefore = partners.length;
+  const countAfter = countBefore + 1;
+  const partnerStrength = partners.reduce((sum, item) => sum + (item.strength || 0), 0);
+  const before = partnerStrength * countBefore;
+  const after = (partnerStrength + (card.strength || 0)) * countAfter;
+  return Math.max(0, after - before - (card.strength || 0));
+}
+
+function musterPowerBonus(state, playerIndex, card) {
+  if (!hasAbility(card, "Muster")) return 0;
+  const related = relatedMusterCards(state, playerIndex, card, state.players[playerIndex].deck || []);
+  if (!related.length) return 0;
+  return related.reduce((sum, item) => sum + (item.strength || 0), 0) + related.length * 2;
+}
+
 function summonPowerBonus(state, playerIndex, card) {
-  if (!hasAbility(card, "Summon Shield Maidens")) return 0;
+  if (!hasAbility(card, "Summon Shield Maidens")) {
+    if (hasAbility(card, "Summon Avenger")) return 19;
+    if (hasAbility(card, "Summon Sky Hound")) return 12;
+    return 0;
+  }
   const player = state.players[playerIndex];
   const existing = (player.board.melee || []).filter(c => c.baseName === "岳家军");
   const toSummon = [];
@@ -1379,7 +1646,13 @@ function estimatePlayGain(state, playerIndex, card) {
     const scorchRow = card.category === "special" ? null : rowForCard(state, playerIndex, card);
     return scorchGain(state, playerIndex, scorchRow, opponentOnly, minEffective);
   }
-  if (isDecoy(card)) return bestDecoyTarget(state, playerIndex) ? 5 : -3;
+  if (isDecoy(card)) {
+    const target = bestDecoyTarget(state, playerIndex);
+    if (!target) return -3;
+    // 决胜局无法跨回合再回收，降低门槛更积极使用请辞锁定胜势
+    const threshold = state.round >= 3 ? 8 : 12;
+    return decoyTargetSortValue(state, playerIndex, target.card, target.row) >= threshold ? 5 : -1;
+  }
   if (isMardroeme(card)) {
     const row = rowForCard(state, playerIndex, card);
     return row && countBerserkers(state, playerIndex, row) ? 6 : -2;
@@ -1390,9 +1663,9 @@ function estimatePlayGain(state, playerIndex, card) {
   if (!card.hero && state.rowHorn[playerIndex][row]) value *= 2;
   if (hasAbility(card, "Spy")) value = -(card.strength || 0) + 14;
   if (hasAbility(card, "Medic")) value += 6;
-  if (hasAbility(card, "Muster")) value += 6;
-  if (hasAbility(card, "Tight Bond")) value += 4;
-  if (hasAbility(card, "Morale Boost")) value += 3;
+  if (hasAbility(card, "Muster")) value += musterPowerBonus(state, playerIndex, card);
+  if (hasAbility(card, "Tight Bond")) value += tightBondPowerBonus(state, playerIndex, card, row);
+  if (hasAbility(card, "Morale Boost")) value += 1;
   if (card.hero) value += 1;
   // 召唤类能力：把将被召唤的卡牌战力（含同盟翻倍）计入本次出牌收益，
   // 使岳飞与其岳家军在对战 AI 中被视为一个整体（绑定出牌）。
@@ -1408,68 +1681,686 @@ function scorchGain(state, playerIndex, row, opponentOnly, minEffective = 10) {
   return targets.filter(item => (item.card.effective || 0) === max).reduce((sum, item) => sum + (item.pi === otherIndex(playerIndex) ? max : -max), 0);
 }
 
+function aiConfigFor(player) {
+  return AI_DIFFICULTY[player?.difficulty || "normal"] || AI_DIFFICULTY.normal;
+}
+
 function aiStep(state) {
   if (state.mode !== "ai" || state.over || state.roundTransition || state.current !== 1 || (state.mulligan && state.mulligan.active)) return;
-  const ai = state.players[1];
-  const cfg = AI_DIFFICULTY[ai.difficulty || "normal"] || AI_DIFFICULTY.normal;
-  if (ai.hand.length === 0) return pass(state);
-  const canPayLeaderDiscard = !/discard 2 cards/.test(leaderText(ai)) || ai.hand.length >= 2;
-  if (!ai.leaderUsed && canPayLeaderDiscard && shouldUseLeader(state, cfg)) return useLeader(state, 1);
-  const decision = aiDecideTurn(state, cfg);
+  return autoStep(state, { playerIndex: 1 });
+}
+
+function autoStep(state, options = {}) {
+  if (!state || state.over || state.pending || state.roundTransition || (state.mulligan && state.mulligan.active)) return false;
+  const playerIndex = Number.isInteger(options.playerIndex) ? options.playerIndex : state.current;
+  const player = state.players[playerIndex];
+  if (!player || state.current !== playerIndex || player.passed) return false;
+  const cfg = options.cfg || aiConfigFor(player);
+  state.strategy = cfg.strategy || state.strategy || DEFAULT_AI_STRATEGY;
+  if (player.hand.length === 0) return pass(state);
+  const decision = aiDecideTurn(state, cfg, playerIndex);
   if (decision.action === "pass") return pass(state);
-  if (decision.card) playCard(state, decision.card.uid, decision.row);
+  if (decision.action === "leader") return useLeader(state, playerIndex, decision);
+  if (decision.card) return playCard(state, decision.card.uid, decision.row, decision);
+  return false;
 }
 
-function shouldUseLeader(state, cfg) {
-  if (cfg.blunder && Math.random() < cfg.blunder) return false;
-  const ai = state.players[1];
-  const diff = totalScore(ai) - totalScore(state.players[0]);
-  if (diff > -8 && state.round < 3) return false;
-  const text = leaderText(ai);
-  if (/draw|抽/.test(text)) return ai.hand.length <= state.players[0].hand.length;
-  if (/clear|weather/.test(text)) return Object.keys(state.weather).length > 0;
-  if (/half (of )?(their )?strength|lose half|半损|一半战力/i.test(text)) return Object.keys(state.weather).length > 0 && diff < 0;
-  return diff < -6;
+function aiDecideTurn(state, cfg, playerIndex = 1) {
+  return aiDecideTurnDocumentV2(state, cfg, playerIndex);
 }
 
-function aiDecideTurn(state, cfg) {
+function mustContestRound(state, playerIndex) {
+  const morale = moraleFromRoundResults(state.roundResults);
+  return morale[playerIndex] <= 1 || state.players[otherIndex(playerIndex)].roundsWon >= 1;
+}
+
+function roundSecuredByDiff(state, playerIndex, diff) {
+  return diff > 0 || diff === 0 && tieWinner(state) === playerIndex;
+}
+
+function scoreToSecureRound(state, playerIndex, diff) {
+  if (roundSecuredByDiff(state, playerIndex, diff)) return 0;
+  return tieWinner(state) === playerIndex ? -diff : 1 - diff;
+}
+
+function cloneAiState(state) {
+  const copy = JSON.parse(JSON.stringify(state));
+  copy.autoControlAll = true;
+  copy.suppressRecording = true;
+  return copy;
+}
+
+function canUseLeaderAction(state, playerIndex) {
+  const player = state.players[playerIndex];
+  if (!player || player.passed || player.leaderUsed || !player.leader || state.current !== playerIndex) return false;
+  return !/discard 2 cards/.test(leaderText(player)) || player.hand.length >= 2;
+}
+
+function executeAiAction(state, playerIndex, action) {
+  if (!action || state.current !== playerIndex) return false;
+  if (action.action === "pass") return pass(state);
+  if (action.action === "leader") return useLeader(state, playerIndex, action);
+  const card = state.players[playerIndex].hand.find(item => item.uid === action.card?.uid || item.uid === action.cardUid);
+  return !!card && playCard(state, card.uid, action.row, action);
+}
+
+function simulateActionStats(state, playerIndex, action) {
   recalcScores(state);
-  const ai = state.players[1];
-  const human = state.players[0];
-  const me = totalScore(ai);
-  const opp = totalScore(human);
-  const diff = me - opp;
-  const candidates = aiBestCards(state, cfg);
-  const best = candidates[0];
-  const mustContest = human.roundsWon >= 1;
-  // 我方手牌打完后自动放弃：系统继续把剩余手牌逐张打出，展示分数变化，不直接结束本回合
-  if (human.passed && human.autoPassed) {
-    return best ? { action: "play", card: best.card, row: best.row } : { action: "pass" };
-  }
-  if (human.passed) {
-    if (diff > 0) return { action: "pass" };
-    if (best && best.gain >= -diff + 1) return { action: "play", card: best.card, row: best.row };
-    if (!mustContest && cfg.concede) return { action: "pass" };
-    return best ? { action: "play", card: best.card, row: best.row } : { action: "pass" };
-  }
-  if (cfg.concede && !mustContest && diff < -18 && best && best.gain < Math.abs(diff) - 8 && ai.hand.length <= human.hand.length) return { action: "pass" };
-  if (!mustContest && diff >= cfg.minLeadToStop && diff >= 8 && best && best.gain < 8 && state.round < 3) return { action: "pass" };
-  if (!best) return { action: "pass" };
-  return { action: "play", card: best.card, row: best.row };
+  const beforeMe = totalScore(state.players[playerIndex]);
+  const beforeOpp = totalScore(state.players[otherIndex(playerIndex)]);
+  const beforeHandDelta = state.players[playerIndex].hand.length - state.players[otherIndex(playerIndex)].hand.length;
+  const copy = cloneAiState(state);
+  copy.current = playerIndex;
+  const ok = executeAiAction(copy, playerIndex, action);
+  recalcScores(copy);
+  const afterMe = totalScore(copy.players[playerIndex]);
+  const afterOpp = totalScore(copy.players[otherIndex(playerIndex)]);
+  const afterHandDelta = copy.players[playerIndex].hand.length - copy.players[otherIndex(playerIndex)].hand.length;
+  return {
+    ok,
+    afterMe,
+    afterOpp,
+    diffAfter: afterMe - afterOpp,
+    gain: afterMe - afterOpp - (beforeMe - beforeOpp),
+    selfGain: afterMe - beforeMe,
+    opponentGain: afterOpp - beforeOpp,
+    handDeltaGain: afterHandDelta - beforeHandDelta,
+    handDeltaAfter: afterHandDelta,
+    state: copy
+  };
 }
 
-function aiBestCards(state, cfg) {
-  const ai = state.players[1];
-  const scored = ai.hand.map(card => {
-    let gain = estimatePlayGain(state, 1, card);
-    if (cfg.valueNoise) gain += (Math.random() * 2 - 1) * cfg.valueNoise;
-    return { card, row: rowForCard(state, 1, card), gain };
-  }).sort((a, b) => b.gain - a.gain);
-  if (cfg.blunder && Math.random() < cfg.blunder && scored.length > 1) {
-    const i = 1 + Math.floor(Math.random() * (scored.length - 1));
-    const t = scored[0]; scored[0] = scored[i]; scored[i] = t;
+function boardHasSpy(player) {
+  return ROWS.some(row => (player.board[row] || []).some(card => hasAbility(card, "Spy")));
+}
+
+function discardHasAbility(player, ability) {
+  return (player.discard || []).some(card => hasAbility(card, ability));
+}
+
+function futureCardValue(state, playerIndex, card) {
+  let value = Math.max(1, cardValue(card, { pool: playerValuePool(state, playerIndex) }));
+  if (hasAbility(card, "Spy")) value += state.round < 3 ? 12 : -6;
+  if (hasAbility(card, "Medic")) value += discardHasAbility(state.players[playerIndex], "Spy") ? 8 : 2;
+  if (isScorch(card) || card.category === "weather" || isHorn(card)) value += state.round < 3 ? 5 : 1;
+  if (card.hero && state.round < 3) value += 5;
+  if (hasAbility(card, "Muster") || hasAbility(card, "Summon Shield Maidens")) value += state.round < 3 ? 4 : 1;
+  return value;
+}
+
+function resourceCostForCard(state, playerIndex, card) {
+  let cost = futureCardValue(state, playerIndex, card);
+  if (hasAbility(card, "Spy")) {
+    const drawValue = Math.min(2, state.players[playerIndex].deck.length) * 5;
+    cost = Math.max(1, (card.strength || 0) - drawValue + (state.round >= 3 ? 10 : 1));
   }
-  return scored;
+  if (state.round >= 3) cost *= 0.35;
+  return cost;
+}
+
+function knownFuturePower(state, playerIndex) {
+  return state.players[playerIndex].hand.reduce((sum, card) => sum + futureCardValue(state, playerIndex, card), 0);
+}
+
+function visibleCounterRisk(state, playerIndex, action, stats) {
+  const opponent = state.players[otherIndex(playerIndex)];
+  const card = action.card;
+  let risk = opponent.passed || opponent.hand.length === 0 ? 0 : Math.min(10, opponent.hand.length * 1.2);
+  if (!opponent.leaderUsed) risk += 2;
+  if (!card) return risk;
+  const row = action.row || rowForCard(state, playerIndex, card);
+  if (row && !card.hero) {
+    const count = (stats.state.players[playerIndex].board[row] || []).filter(item => !item.hero).length;
+    if (count >= 4 && state.round < 3) risk += 3;
+  }
+  if ((hasAbility(card, "Tight Bond") || hasAbility(card, "Muster") || isHorn(card)) && state.round < 3 && !opponent.passed) risk += 4;
+  return risk;
+}
+
+function advancedFutureWeight(state, playerIndex) {
+  if (state.round >= 3) return ADVANCED_AI.finalFutureWeight;
+  return mustContestRound(state, playerIndex) ? ADVANCED_AI.mustWinFutureWeight : ADVANCED_AI.futureResourceWeight;
+}
+
+// 请辞价值按回合缩放：决胜局(第3局)回收关键牌收益更高，首局回合多可后续操作略降。
+function decoyRoundFactor(state) {
+  if (state.round >= 3) return 1.15;
+  if (state.round <= 1) return 0.9;
+  return 1;
+}
+
+// 请辞目标价值：济世二次复活 + 尚有名可集结的集贤 + 防御性抢救被奇策点掉的最高战力牌，
+// 并按回合缩放（决胜局更积极）。
+function decoyTargetValueOptimized(state, playerIndex, uid) {
+  const entry = decoyTargets(state, playerIndex).find(item => item.card.uid === uid);
+  if (!entry) return -30;
+  const card = entry.card;
+  let value = futureCardValue(state, playerIndex, card) - (card.effective || card.strength || 0);
+  if (hasAbility(card, "Medic")) value += 14 + decoyMedicReplayValue(state, playerIndex, card);
+  if (isScorch(card) && card.category !== "special") value += 10;
+  value += decoyMusterValue(state, playerIndex, card);
+  value += decoyDefensiveValue(state, playerIndex, card, entry.row);
+  return value > 0 ? value * decoyRoundFactor(state) : value;
+}
+
+function decoyTargetValue(state, playerIndex, uid) {
+  return decoyTargetValueOptimized(state, playerIndex, uid);
+}
+
+function medicTargetValue(state, playerIndex, uid) {
+  const card = reviveCandidates(state, playerIndex).find(item => item.uid === uid);
+  if (!card) return 0;
+  let value = cardValue(card, { pool: playerValuePool(state, playerIndex) });
+  if (hasAbility(card, "Spy")) value += state.round < 3 ? 32 : 8;
+  if (hasAbility(card, "Medic")) value += 16;
+  if (hasAbility(card, "Tight Bond")) {
+    const row = rowForCard(state, playerIndex, card) || "melee";
+    const partners = state.players[playerIndex].board[row].filter(item => item.baseName === card.baseName).length;
+    value += partners * 8;
+  }
+  if (isScorch(card) && card.category !== "special") value += 10;
+  return value;
+}
+
+function leaderActionValue(state, playerIndex, stats) {
+  const player = state.players[playerIndex];
+  const text = leaderText(player);
+  let value = stats.gain * 1.5;
+  if (/draw|抽|discard 2 cards|弃置 2 张/.test(text)) value += stats.handDeltaGain * 8;
+  if (/clear|清除|拨云/.test(text) && !Object.keys(state.weather).length) value -= 24;
+  if (/double|翻倍|horn|鼓舞|号令/.test(text) && stats.selfGain <= 0) value -= 24;
+  if (/destroy|scorch|摧毁|奇策/.test(text) && stats.gain < ADVANCED_AI.scorchNetSwingFinal) value -= 16;
+  if (/weather|边患|党争|典籍/.test(text) && stats.gain < ADVANCED_AI.weatherNetSwing) value -= 14;
+  if (/cancel your opponent|取消.*主将|cancel.*leader/.test(text)) value += state.players[otherIndex(playerIndex)].leaderUsed ? -24 : 8;
+  return value;
+}
+
+function scoreAiCandidateAdvanced(state, cfg, playerIndex, action) {
+  const opponent = state.players[otherIndex(playerIndex)];
+  const diff = totalScore(state.players[playerIndex]) - totalScore(opponent);
+  const mustContest = mustContestRound(state, playerIndex);
+  const cost = action.card ? resourceCostForCard(state, playerIndex, action.card) : (action.action === "leader" ? 10 : 0);
+  const stats = simulateActionStats(state, playerIndex, action);
+  if (!stats.ok) return { ...action, score: ADVANCED_AI.terminalLoss, cost, stats };
+
+  const scoreGainWeight = state.round >= 3 ? ADVANCED_AI.finalScoreGainWeight : ADVANCED_AI.scoreGainWeight;
+  let score = stats.gain * scoreGainWeight
+    - cost * advancedFutureWeight(state, playerIndex)
+    + stats.handDeltaGain * ADVANCED_AI.handDeltaWeight
+    + (knownFuturePower(stats.state, playerIndex) - knownFuturePower(state, playerIndex)) * 0.18
+    - visibleCounterRisk(state, playerIndex, action, stats);
+
+  if (mustContest && roundSecuredByDiff(state, playerIndex, stats.diffAfter)) score += 24;
+  if (action.action === "leader") score += leaderActionValue(state, playerIndex, stats);
+  const card = action.card;
+  if (card && hasAbility(card, "Spy")) score += state.round < 3 ? 22 : -16;
+  if (card && isDecoy(card)) score += decoyTargetValue(state, playerIndex, action.decoyTargetUid);
+  if (card && hasAbility(card, "Medic")) score += medicTargetValue(state, playerIndex, action.medicTargetUid);
+
+  const controlGain = card ? estimatePlayGain(state, playerIndex, card) : stats.gain;
+  if (card && isScorch(card)) {
+    const threshold = state.round >= 3 || mustContest ? ADVANCED_AI.scorchNetSwingFinal : ADVANCED_AI.scorchNetSwingNormal;
+    score += controlGain >= threshold ? 12 + controlGain : -18;
+  }
+  if (card && card.category === "weather" && !isClearWeather(card)) score += controlGain >= ADVANCED_AI.weatherNetSwing ? 10 + controlGain : -14;
+  if (card && isClearWeather(card)) score += controlGain >= ADVANCED_AI.weatherNetSwing ? 8 : -12;
+  if (card && (isHorn(card) || card.hero || hasAbility(card, "Muster") || hasAbility(card, "Summon Shield Maidens")) && state.round < 3 && !mustContest && !opponent.passed) score -= 8;
+  if (!mustContest && state.round < 3 && diff < -10 && cost > 12 && stats.diffAfter <= 0) score -= 14;
+  if (!mustContest && state.round < 3 && diff > 0 && stats.diffAfter > 18) score -= Math.min(16, stats.diffAfter - 18);
+
+  return { ...action, gain: stats.gain, score, cost, stats };
+}
+
+function evaluateAdvancedPass(state, playerIndex) {
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const diff = totalScore(player) - totalScore(opponent);
+  const mustContest = mustContestRound(state, playerIndex);
+  if (opponent.passed) return roundSecuredByDiff(state, playerIndex, diff) ? 5000 : (mustContest ? -5000 : 100);
+  if (mustContest && !roundSecuredByDiff(state, playerIndex, diff)) return -800;
+  if (state.round >= 3) return roundSecuredByDiff(state, playerIndex, diff) ? 80 : -120;
+
+  const handDelta = player.hand.length - opponent.hand.length;
+  const cardsToCatch = Math.ceil(Math.max(0, diff + scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / ADVANCED_AI.expectedCatchPerCard);
+  let value = -24 + handDelta * 5;
+  if (!mustContest && handDelta >= 2 && diff >= -4) value += 34;
+  if (!mustContest && diff >= 8 && cardsToCatch >= 2) value += 28;
+  if (!mustContest && diff < -16 && handDelta <= 0) value += 26;
+  if (!mustContest && player.hand.length <= opponent.hand.length && diff < -20) value += 18;
+  return value;
+}
+
+function evaluateAdvancedPassOptimized(state, playerIndex) {
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const diff = totalScore(player) - totalScore(opponent);
+  const mustContest = mustContestRound(state, playerIndex);
+  if (opponent.passed) return roundSecuredByDiff(state, playerIndex, diff) ? 5000 : (mustContest ? -5000 : 100);
+  if (mustContest && !roundSecuredByDiff(state, playerIndex, diff)) return -800;
+  if (state.round >= 3) return roundSecuredByDiff(state, playerIndex, diff) ? 80 : -120;
+
+  const handDelta = player.hand.length - opponent.hand.length;
+  const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / ADVANCED_AI.expectedCatchPerCard);
+  let value = -28 + Math.max(-3, Math.min(3, handDelta)) * 3;
+  if (!mustContest && diff >= 8 && opponentCardsToCatch >= 2) value += 28;
+  if (!mustContest && diff >= ADVANCED_AI.expectedCatchPerCard * 2 && opponent.hand.length > 0) value += 18;
+  if (!mustContest && diff < -16 && handDelta <= 0) value += 26;
+  if (!mustContest && player.hand.length <= opponent.hand.length && diff < -20) value += 18;
+  return value;
+}
+
+function medicTargetSequences(state, playerIndex, maxDepth = 3) {
+  const candidates = reviveCandidates(state, playerIndex);
+  const sequences = [];
+  function visit(pool, sequence, depth) {
+    pool.forEach(card => {
+      const next = sequence.concat(card.uid);
+      if (hasAbility(card, "Medic") && depth < maxDepth) {
+        const remaining = pool.filter(item => item.uid !== card.uid);
+        if (remaining.length) visit(remaining, next, depth + 1);
+        else sequences.push(next);
+      } else sequences.push(next);
+    });
+  }
+  visit(candidates, [], 1);
+  return sequences.slice(0, ADVANCED_AI.maxActionsPerNode);
+}
+
+function leaderActionsDocumentV2(state, playerIndex) {
+  if (!canUseLeaderAction(state, playerIndex)) return [];
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const text = leaderText(player);
+  if (/discard 2 cards/.test(text)) {
+    const cards = player.hand.slice().sort((a, b) => futureCardValue(state, playerIndex, a) - futureCardValue(state, playerIndex, b));
+    const actions = [];
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) actions.push({ action: "leader", leaderDiscardUids: [cards[i].uid, cards[j].uid] });
+    }
+    return actions.slice(0, ADVANCED_AI.maxActionsPerNode);
+  }
+  if (/opponent.*discard|对手.*弃牌/.test(text)) {
+    return opponent.discard.filter(card => card.category === "unit" || card.category === "hero")
+      .map(card => ({ action: "leader", leaderTargetUid: card.uid }));
+  }
+  if (/restore a card from your discard|弃牌堆.*手牌/.test(text)) {
+    return player.discard.filter(card => card.category === "unit" || card.category === "hero")
+      .map(card => ({ action: "leader", leaderTargetUid: card.uid }));
+  }
+  if (/clear|清除|拨云/.test(text)) return Object.keys(state.weather).length ? [{ action: "leader" }] : [];
+  if (/shuffle all cards/.test(text)) return state.players.some(item => item.discard.length) ? [{ action: "leader" }] : [];
+  if (/move agile/.test(text)) {
+    const movable = ROWS.some(row => player.board[row].some(card => hasAbility(card, "Agile") && card.row?.length > 1 && bestRowForCard(state, playerIndex, card) !== row));
+    return movable ? [{ action: "leader" }] : [];
+  }
+  if (/cancel your opponent|取消.*主将|cancel.*leader/.test(text)) return opponent.leaderUsed ? [] : [{ action: "leader" }];
+  if (/look at 3 random/.test(text)) return opponent.hand.length ? [{ action: "leader" }] : [];
+  if (/pick any weather/.test(text)) return ROWS.filter(row => !state.weather[row]).map(row => ({ action: "leader", leaderRow: row }));
+  if (/pick a .*weather|biting frost|impenetrable fog|torrential rain|边患|党争|典籍/.test(text)) {
+    const row = rowFromLeaderText(text) || (/边患/.test(text) ? "melee" : /党争/.test(text) ? "ranged" : /典籍/.test(text) ? "siege" : null);
+    return row && !state.weather[row] ? [{ action: "leader", leaderRow: row }] : [];
+  }
+  if (/double|翻倍|horn|鼓舞|号令/.test(text)) {
+    const fixed = rowFromLeaderText(text);
+    const rows = fixed ? [fixed] : ROWS;
+    return rows.filter(row => !state.rowHorn[playerIndex][row] && player.board[row].some(card => !card.hero))
+      .map(row => ({ action: "leader", leaderRow: row }));
+  }
+  if (/destroy|scorch|摧毁|奇策/.test(text)) {
+    const row = rowFromLeaderText(text);
+    recalcScores(state);
+    return collectScorchTargets(state, playerIndex, row, true, 10).length ? [{ action: "leader", leaderRow: row }] : [];
+  }
+  return [{ action: "leader" }];
+}
+
+function cardActionsDocumentV2(state, playerIndex, card) {
+  const rows = choiceRowsForCard(state, playerIndex, card);
+  const targetRows = rows.length ? rows : [rowForCard(state, playerIndex, card) || null];
+  const decoys = isDecoy(card) ? decoyTargets(state, playerIndex) : [null];
+  const medicSequences = hasAbility(card, "Medic") ? medicTargetSequences(state, playerIndex) : [null];
+  if (isDecoy(card) && !decoys.length) return [];
+  if (hasAbility(card, "Medic") && !medicSequences.length) return [];
+  const actions = [];
+  targetRows.forEach(row => {
+    if (isHorn(card)) {
+      const beneficiaries = (state.players[playerIndex].board[row] || []).filter(item => !item.hero).length;
+      if (!beneficiaries || state.rowHorn[playerIndex][row]) return;
+    }
+    if (isMardroeme(card) && countBerserkers(state, playerIndex, row) === 0) return;
+    decoys.forEach(decoy => {
+      medicSequences.forEach(sequence => {
+        actions.push({
+          action: "play",
+          card,
+          row,
+          ...(decoy ? { decoyTargetUid: decoy.card.uid } : {}),
+          ...(sequence ? { medicTargetUids: sequence, medicTargetUid: sequence[0] } : {})
+        });
+      });
+    });
+  });
+  return actions;
+}
+
+function generateLegalAiActionsDocumentV2(state, playerIndex, options = {}) {
+  if (!state || state.over || state.pending || state.roundTransition || state.current !== playerIndex || state.players[playerIndex]?.passed) return [];
+  const actions = state.players[playerIndex].hand.flatMap(card => cardActionsDocumentV2(state, playerIndex, card));
+  actions.push(...leaderActionsDocumentV2(state, playerIndex));
+  if (options.includePass !== false) actions.push({ action: "pass" });
+  return actions;
+}
+
+function roundPlayedCardCount(state, playerIndex) {
+  return (state.playedHistory || []).filter(entry => entry.round === state.round && entry.actionType === "card" && entry.playerIndex === playerIndex).length;
+}
+
+function musterFutureConsumption(state, playerIndex, card) {
+  if (!hasAbility(card, "Muster") && !hasAbility(card, "Summon Shield Maidens")) return 0;
+  const player = state.players[playerIndex];
+  const related = item => {
+    if (hasAbility(card, "Summon Shield Maidens")) return item.baseName === "岳家军";
+    if (card.musterTarget) return item.baseName === card.musterTarget;
+    if (card.musterGroup) return item.musterGroup === card.musterGroup;
+    return item.baseName === card.baseName;
+  };
+  const sources = hasAbility(card, "Summon Shield Maidens") ? player.hand.concat(player.deck) : player.deck;
+  return sources
+    .filter(item => item.uid !== card.uid && related(item))
+    .reduce((sum, item) => sum + futureCardValue(state, playerIndex, item), 0);
+}
+
+function visibleFactionThreat(state, playerIndex) {
+  const opponent = state.players[otherIndex(playerIndex)];
+  let threat = 0;
+  if (opponent.faction === "Northern Realms") threat += 4;
+  if (opponent.faction === "Monsters") {
+    const units = ROWS.flatMap(row => opponent.board[row] || []);
+    threat += units.length ? units.reduce((sum, card) => sum + (card.effective || card.strength || 0), 0) / units.length : 0;
+  }
+  if (opponent.faction === "Skellige" && state.round < 3) {
+    const values = opponent.discard.filter(isReviveCandidate).map(cardValue).sort((a, b) => b - a).slice(0, 2);
+    threat += values.reduce((sum, value) => sum + value, 0) * 0.35;
+  }
+  return threat;
+}
+
+function factionActionAdjustment(state, playerIndex, action) {
+  const opponent = state.players[otherIndex(playerIndex)];
+  const card = action.card;
+  if (!card) return 0;
+  let value = 0;
+  if (opponent.faction === "Monsters") {
+    if (card.baseName === "边患四起" || isScorch(card)) value += 8;
+    if (hasAbility(card, "Muster") && state.round < 3) value -= 4;
+  }
+  if (opponent.faction === "Northern Realms") {
+    if (card.baseName === "典籍散佚" || isScorch(card)) value += 5;
+  }
+  if (opponent.faction === "Skellige" && state.round === 2 && state.players[playerIndex].roundsWon > 0) {
+    value += Math.max(0, action.gain || 0) * 0.2;
+  }
+  return value;
+}
+
+function optimisticReachableDiff(state, playerIndex) {
+  const player = state.players[playerIndex];
+  const diff = totalScore(player) - totalScore(state.players[otherIndex(playerIndex)]);
+  const gains = player.hand.map(card => Math.max(0, estimatePlayGain(state, playerIndex, card)));
+  const leaderGain = canUseLeaderAction(state, playerIndex) ? Math.max(0, totalScore(player), 4) : 0;
+  return diff + gains.reduce((sum, gain) => sum + gain, 0) + leaderGain;
+}
+
+function documentSearchStateKey(state) {
+  return JSON.stringify({
+    round: state.round,
+    current: state.current,
+    weather: state.weather,
+    horn: state.rowHorn,
+    morale: moraleFromRoundResults(state.roundResults),
+    players: state.players.map(player => ({
+      faction: player.faction,
+      hand: player.hand.map(card => card.uid).sort(),
+      board: ROWS.map(row => player.board[row].map(card => `${card.uid}:${card.effective || 0}`).sort()),
+      discard: player.discard.map(card => card.uid).sort(),
+      passed: player.passed,
+      leaderUsed: player.leaderUsed,
+      retained: (player.retained || []).map(card => card.uid).sort(),
+      score: totalScore(player)
+    }))
+  });
+}
+
+function documentWinningResourceScore(state, playerIndex, resourceCost, actions) {
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const diff = totalScore(player) - totalScore(opponent);
+  return knownFuturePower(state, playerIndex) - resourceCost - Math.max(0, diff) * 0.15 - actions.length * 0.1;
+}
+
+function searchBestWinningSequenceDocumentV2(state, cfg, playerIndex) {
+  const queue = [{ state: cloneAiState(state), actions: [], resourceCost: 0 }];
+  const visited = new Map();
+  let bestPlan = null;
+  while (queue.length) {
+    const node = queue.shift();
+    recalcScores(node.state);
+    const player = node.state.players[playerIndex];
+    const opponent = node.state.players[otherIndex(playerIndex)];
+    const diff = totalScore(player) - totalScore(opponent);
+    const secured = roundSecuredByDiff(node.state, playerIndex, diff);
+    if (secured) {
+      const score = documentWinningResourceScore(node.state, playerIndex, node.resourceCost, node.actions);
+      const overkill = Math.max(0, diff);
+      if (!bestPlan || score > bestPlan.score || score === bestPlan.score && overkill < bestPlan.overkill) {
+        bestPlan = { actions: node.actions.slice(), score, overkill };
+      }
+    }
+    if (node.actions.length >= ADVANCED_AI.knownStateSearchDepth) continue;
+    let actions = generateLegalAiActionsDocumentV2(node.state, playerIndex, { includePass: false });
+    if (secured) actions = actions.filter(action => action.card && isDecoy(action.card));
+    const scored = actions
+      .map(action => scoreDocumentActionV2(node.state, cfg, playerIndex, action))
+      .filter(item => item.stats?.ok)
+      .sort((a, b) => a.cost - b.cost || b.score - a.score)
+      .slice(0, ADVANCED_AI.maxActionsPerNode);
+    scored.forEach(action => {
+      const next = action.stats.state;
+      const planActions = node.actions.concat(action);
+      const nextCost = node.resourceCost + action.cost;
+      if (next.roundTransition) {
+        if (next.roundTransition.winner === playerIndex) {
+          const score = documentWinningResourceScore(next, playerIndex, nextCost, planActions);
+          const overkill = Math.max(0, next.roundTransition.scores[playerIndex] - next.roundTransition.scores[otherIndex(playerIndex)]);
+          if (!bestPlan || score > bestPlan.score || score === bestPlan.score && overkill < bestPlan.overkill) {
+            bestPlan = { actions: planActions, score, overkill };
+          }
+        }
+        return;
+      }
+      if (next.over || next.current !== playerIndex && !next.players[otherIndex(playerIndex)].passed) return;
+      const key = documentSearchStateKey(next);
+      if (visited.has(key) && visited.get(key) <= nextCost) return;
+      visited.set(key, nextCost);
+      queue.push({ state: next, actions: planActions, resourceCost: nextCost });
+    });
+  }
+  return bestPlan;
+}
+
+function scoreDocumentActionV2(state, cfg, playerIndex, action) {
+  const base = scoreAiCandidateAdvanced(state, cfg, playerIndex, action);
+  if (!base.stats?.ok) return base;
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const morale = moraleFromRoundResults(state.roundResults);
+  const nextMorale = base.stats.state.roundTransition?.morale || morale;
+  const lifeDeltaBefore = morale[playerIndex] - morale[otherIndex(playerIndex)];
+  const lifeDeltaAfter = nextMorale[playerIndex] - nextMorale[otherIndex(playerIndex)];
+  let score = base.score + (lifeDeltaAfter - lifeDeltaBefore) * 2500;
+  score -= visibleFactionThreat(state, playerIndex) * 0.2;
+  score += factionActionAdjustment(state, playerIndex, { ...action, gain: base.gain });
+  if (action.card) {
+    score -= musterFutureConsumption(state, playerIndex, action.card) * (state.round < 3 ? 0.45 : 0.08);
+    if (hasAbility(action.card, "Spy")) {
+      const actualDraws = Math.min(2, player.deck.length);
+      score += actualDraws * 8 - (action.card.strength || 0) * (state.round >= 3 ? 1.3 : 0.35);
+    }
+    if (Array.isArray(action.medicTargetUids)) {
+      score += action.medicTargetUids.reduce((sum, uid) => sum + medicTargetValue(state, playerIndex, uid), 0) * 0.2;
+    }
+  }
+  if (base.stats.state.roundTransition) {
+    const winner = base.stats.state.roundTransition.winner;
+    if (winner === playerIndex) score += mustContestRound(state, playerIndex) ? ADVANCED_AI.terminalWin : 5000;
+    else if (mustContestRound(state, playerIndex)) score += ADVANCED_AI.terminalLoss;
+  }
+  if (opponent.hand.length > 4 && !opponent.leaderUsed && action.card && (isHorn(action.card) || hasAbility(action.card, "Tight Bond") || hasAbility(action.card, "Muster"))) score -= 6;
+  return { ...base, score };
+}
+
+function analyzeDocumentTurnV2Legacy(state, cfg, playerIndex = 1) {
+  recalcScores(state);
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false })
+    .map(action => scoreDocumentActionV2(state, cfg, playerIndex, action))
+    .filter(action => action.stats?.ok)
+    .sort((a, b) => b.score - a.score || b.gain - a.gain);
+  const best = candidates[0];
+  const mustContest = mustContestRound(state, playerIndex);
+  const diff = totalScore(player) - totalScore(opponent);
+  let decision = best || { action: "pass" };
+  let forcedRuleApplied = "NONE";
+
+  if (opponent.passed) {
+    const plan = searchBestWinningSequenceDocumentV2(state, cfg, playerIndex);
+    if (plan?.actions?.length) {
+      decision = plan.actions[0];
+      forcedRuleApplied = "OPPONENT_PASSED_MIN_RESOURCE_PLAN";
+    } else if (roundSecuredByDiff(state, playerIndex, diff)) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "OPPONENT_PASSED_ROUND_SECURED";
+    } else if (!mustContest) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "OPPONENT_PASSED_CONCEDE_ROUND";
+    }
+  } else if (!mustContest && optimisticReachableDiff(state, playerIndex) < 1) {
+    decision = { action: "pass" };
+    forcedRuleApplied = "MATHEMATICALLY_UNREACHABLE";
+  } else if (mustContest) {
+    decision = best || { action: "pass" };
+    forcedRuleApplied = "MUST_AVOID_MATCH_LOSS";
+  } else {
+    const myPlayed = roundPlayedCardCount(state, playerIndex);
+    const opponentPlayed = roundPlayedCardCount(state, otherIndex(playerIndex));
+    const handDelta = player.hand.length - opponent.hand.length;
+    const northernPenalty = opponent.faction === "Northern Realms" ? 6 : 0;
+    const passValue = evaluateAdvancedPass(state, playerIndex) - northernPenalty;
+    if (state.round === 1 && opponentPlayed - myPlayed >= 2 && diff < 0 && best && best.cost > 12) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "FIRST_ROUND_RESOURCE_ADVANTAGE";
+    } else if (state.round === 1 && handDelta >= 2 && diff >= -4) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "FIRST_ROUND_HAND_ADVANTAGE";
+    } else if (state.round < 3 && diff >= ADVANCED_AI.expectedCatchPerCard * 2 && opponent.hand.length > 0) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "LEAD_REQUIRES_TWO_CARDS_TO_CATCH";
+    } else if (best && passValue >= best.score + 20 && cfg.concede) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "ROUND_BUDGET_PASS";
+    }
+  }
+
+  return {
+    decision,
+    forcedRuleApplied,
+    visibleStateScoreBefore: diff,
+    visibleStateScoreAfter: decision.stats?.diffAfter ?? diff,
+    immediateNetSwing: decision.stats?.gain ?? 0,
+    preservedResourceValue: knownFuturePower(decision.stats?.state || state, playerIndex),
+    visibleCounterRisk: decision.stats ? visibleCounterRisk(state, playerIndex, decision, decision.stats) : 0,
+    overcommitPenalty: decision.card && state.round < 3 ? musterFutureConsumption(state, playerIndex, decision.card) : 0,
+    alternativeActionsTop3: candidates.slice(0, 3).map(action => ({ action: action.action, cardId: action.card?.id || "", score: action.score }))
+  };
+}
+
+function analyzeDocumentTurnV2Optimized(state, cfg, playerIndex = 1) {
+  recalcScores(state);
+  const player = state.players[playerIndex];
+  const opponent = state.players[otherIndex(playerIndex)];
+  const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false })
+    .map(action => scoreDocumentActionV2(state, cfg, playerIndex, action))
+    .filter(action => action.stats?.ok)
+    .sort((a, b) => b.score - a.score || b.gain - a.gain);
+  const best = candidates[0];
+  const mustContest = mustContestRound(state, playerIndex);
+  const diff = totalScore(player) - totalScore(opponent);
+  let decision = best || { action: "pass" };
+  let forcedRuleApplied = "NONE";
+
+  if (opponent.passed) {
+    const plan = searchBestWinningSequenceDocumentV2(state, cfg, playerIndex);
+    if (plan?.actions?.length) {
+      decision = plan.actions[0];
+      forcedRuleApplied = "OPPONENT_PASSED_MIN_RESOURCE_PLAN";
+    } else if (roundSecuredByDiff(state, playerIndex, diff)) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "OPPONENT_PASSED_ROUND_SECURED";
+    } else if (!mustContest) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "OPPONENT_PASSED_CONCEDE_ROUND";
+    }
+  } else if (!mustContest && optimisticReachableDiff(state, playerIndex) < 1) {
+    decision = { action: "pass" };
+    forcedRuleApplied = "MATHEMATICALLY_UNREACHABLE";
+  } else if (mustContest) {
+    decision = best || { action: "pass" };
+    forcedRuleApplied = "MUST_AVOID_MATCH_LOSS";
+  } else {
+    const northernPenalty = opponent.faction === "Northern Realms" ? 6 : 0;
+    const passValue = evaluateAdvancedPassOptimized(state, playerIndex) - northernPenalty;
+    const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / ADVANCED_AI.expectedCatchPerCard);
+    if (state.round < 3 && diff >= ADVANCED_AI.expectedCatchPerCard && opponentCardsToCatch >= 2 && opponent.hand.length > 0 && (!best || best.cost > 8 || diff >= ADVANCED_AI.expectedCatchPerCard * 2)) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "LEAD_REQUIRES_TWO_CARDS_TO_CATCH";
+    } else if (best && passValue >= best.score + 20 && cfg.concede) {
+      decision = { action: "pass" };
+      forcedRuleApplied = "ROUND_BUDGET_PASS";
+    }
+  }
+
+  return {
+    decision,
+    forcedRuleApplied,
+    visibleStateScoreBefore: diff,
+    visibleStateScoreAfter: decision.stats?.diffAfter ?? diff,
+    immediateNetSwing: decision.stats?.gain ?? 0,
+    preservedResourceValue: knownFuturePower(decision.stats?.state || state, playerIndex),
+    visibleCounterRisk: decision.stats ? visibleCounterRisk(state, playerIndex, decision, decision.stats) : 0,
+    overcommitPenalty: decision.card && state.round < 3 ? musterFutureConsumption(state, playerIndex, decision.card) : 0,
+    alternativeActionsTop3: candidates.slice(0, 3).map(action => ({ action: action.action, cardId: action.card?.id || "", score: action.score }))
+  };
+}
+
+function analyzeDocumentTurnV2(state, cfg = {}, playerIndex = 1) {
+  return (cfg.strategy || DEFAULT_AI_STRATEGY) === "optimized"
+    ? analyzeDocumentTurnV2Optimized(state, cfg, playerIndex)
+    : analyzeDocumentTurnV2Legacy(state, cfg, playerIndex);
+}
+
+function aiDecideTurnDocumentV2(state, cfg, playerIndex = 1) {
+  const analysis = analyzeDocumentTurnV2(state, cfg, playerIndex);
+  return { ...analysis.decision, analysis: {
+    forcedRuleApplied: analysis.forcedRuleApplied,
+    visibleStateScoreBefore: analysis.visibleStateScoreBefore,
+    visibleStateScoreAfter: analysis.visibleStateScoreAfter,
+    immediateNetSwing: analysis.immediateNetSwing,
+    preservedResourceValue: analysis.preservedResourceValue,
+    visibleCounterRisk: analysis.visibleCounterRisk,
+    overcommitPenalty: analysis.overcommitPenalty,
+    alternativeActionsTop3: analysis.alternativeActionsTop3
+  } };
 }
 
 function resolvePending(state, choice = {}) {
@@ -1544,6 +2435,10 @@ function resolvePending(state, choice = {}) {
     markLastPlayed(state, playerIndex, card, playerIndex, null);
     const result = !choice.skip && choice.uid ? doDecoyTarget(state, playerIndex, choice.uid) : null;
     if (!result) addLog(state, `${player.name}不收回人物。`);
+    card.owner = playerIndex;
+    card.controller = playerIndex;
+    card.zone = "discard";
+    card.boardRow = null;
     player.discard.push(card);
     addLog(state, `${player.name}打出${categoryLabel(card)}「${cardLabel(card)}」。`);
     if (result?.card) appendLastBattleActionEffect(state, "请辞", cardLabel(result.card));
@@ -1572,18 +2467,22 @@ function cancelPending(state) {
   return resolvePending(state, { skip: true });
 }
 
-function surrender(state, playerIndex = 0) {
+function surrender(state, playerIndex = 0, reason = "surrender") {
   if (!state || state.over) return false;
+  const disconnected = reason === "disconnect";
   recalcScores(state);
   state.over = true;
   state.pending = null;
   state.roundTransition = null;
-  state.endReason = "surrender";
+  state.endReason = disconnected ? "disconnect" : "surrender";
   state.winner = otherIndex(playerIndex);
-  state.resultText = playerIndex === 0 ? "你已认输" : `${state.players[playerIndex].name}认输`;
+  state.morale = playerIndex === 0 ? [0, MATCH_MORALE] : [MATCH_MORALE, 0];
+  state.resultText = disconnected
+    ? (playerIndex === 0 ? "你已掉线" : `${state.players[playerIndex].name}掉线`)
+    : (playerIndex === 0 ? "你已认输" : `${state.players[playerIndex].name}认输`);
   state.finalScores = [totalScore(state.players[0]), totalScore(state.players[1])];
   recordFinishedMatch(state);
-  addLog(state, `${state.players[playerIndex].name}选择认输。`);
+  addLog(state, disconnected ? `${state.players[playerIndex].name}掉线，本局判负。` : `${state.players[playerIndex].name}选择认输。`);
   return true;
 }
 
@@ -1595,6 +2494,11 @@ module.exports = {
   mulliganSwap,
   finishMulligan,
   aiStep,
+  autoStep,
+  aiDecideTurn,
+  analyzeAiTurn: analyzeDocumentTurnV2,
+  generateLegalAiActions: generateLegalAiActionsDocumentV2,
+  searchBestWinningSequenceFromKnownState: searchBestWinningSequenceDocumentV2,
   continueRoundTransition,
   resolvePending,
   cancelPending,
@@ -1605,5 +2509,6 @@ module.exports = {
   hasActiveHalfWeatherLeader,
   recalcScores,
   estimatePlayGain,
-  cardLabel
+  cardLabel,
+  reviveCandidates
 };
