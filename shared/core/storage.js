@@ -7,9 +7,38 @@ let recordMatchCloudHook = null;
 
 const DEFAULT_SAVE = {
   finishedTutorial: false,
+  // 新手指引分步进度：done 表示用户已操作完成，count 表示已提醒次数（上限见 MAX_GUIDE_REMIND）
+  // leaderSkill 需「长按查看」+「使用技能」两者都完成才算 done，故额外记录 longPressed / usedSkill
+  guides: {
+    cardDetail: { done: false, count: 0 },
+    leaderSkill: { done: false, count: 0, longPressed: false, usedSkill: false },
+    battleRecord: { done: false, count: 0 },
+    fieldCardDetail: { done: false, count: 0 }
+  },
+  // 分步指引在当前对局序列中的游标，保证「每轮对局最多一个、按序触发、未完成的再触发」
+  guideCursor: 0,
   // 只允许保存离线/上传失败的待同步战绩；云端已存在的战绩以 match_history 为准
   pendingHistory: []
 };
+
+// 把存档中的 guides 归一化成完整结构，兼容旧版本缺失字段
+function normalizeGuides(raw) {
+  const def = DEFAULT_SAVE.guides;
+  const src = (raw && raw.guides) || {};
+  const out = {};
+  Object.keys(def).forEach((key) => {
+    const item = src[key] || {};
+    out[key] = {
+      done: !!item.done,
+      count: Number.isFinite(item.count) ? item.count : 0
+    };
+    if (key === "leaderSkill") {
+      out[key].longPressed = !!item.longPressed;
+      out[key].usedSkill = !!item.usedSkill;
+    }
+  });
+  return out;
+}
 
 const DEFAULT_SETTINGS = {
   mode: "ai",
@@ -134,8 +163,12 @@ function loadSave() {
   const save = getStorage(SAVE_KEY, DEFAULT_SAVE);
   // 兼容旧版本：旧 save.history 只迁移未同步记录，已同步/云端记录不再作为本地数据源。
   const pendingHistory = pendingOnly([].concat(save.pendingHistory || [], save.history || []));
+  const guides = normalizeGuides(save);
+  const guideCursor = Number.isFinite(save.guideCursor) ? save.guideCursor : 0;
   const normalized = {
     finishedTutorial: !!save.finishedTutorial,
+    guides,
+    guideCursor,
     pendingHistory
   };
   // 清理旧版本地战绩/统计字段，避免同一份云端战绩同时存在本地与数据库。
@@ -157,6 +190,8 @@ function saveProgress(patch = {}) {
   const current = loadSave();
   return setStorage(SAVE_KEY, {
     finishedTutorial: patch.finishedTutorial == null ? current.finishedTutorial : !!patch.finishedTutorial,
+    guides: patch.guides == null ? current.guides : patch.guides,
+    guideCursor: patch.guideCursor == null ? current.guideCursor : patch.guideCursor,
     pendingHistory: current.pendingHistory
   });
 }
@@ -165,6 +200,8 @@ function replaceMatchHistory(history) {
   const current = loadSave();
   return setStorage(SAVE_KEY, {
     finishedTutorial: current.finishedTutorial,
+    guides: current.guides,
+    guideCursor: current.guideCursor,
     pendingHistory: pendingOnly(history)
   });
 }
@@ -208,7 +245,12 @@ function recordMatch(result) {
   const current = loadSave();
   const record = normalizeMatchRecord(result, current.pendingHistory.length);
   const pendingHistory = pendingOnly([record].concat(current.pendingHistory || []));
-  const saved = setStorage(SAVE_KEY, { finishedTutorial: current.finishedTutorial, pendingHistory });
+  const saved = setStorage(SAVE_KEY, {
+    finishedTutorial: current.finishedTutorial,
+    guides: current.guides,
+    guideCursor: current.guideCursor,
+    pendingHistory
+  });
   console.log("[storage] recordMatch queued locally until cloud sync, recordKey:", record.recordKey, "hookSet:", !!recordMatchCloudHook);
   if (recordMatchCloudHook) {
     Promise.resolve(recordMatchCloudHook(record)).catch(err => {

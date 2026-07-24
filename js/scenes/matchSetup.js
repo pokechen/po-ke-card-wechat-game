@@ -106,7 +106,7 @@ function drawRow(ctx, actions, spec, opened, anchors) {
   }
 }
 
-function drawSetupDropdown(ctx, view, actions, settings, field, anchors) {
+function drawSetupDropdown(ctx, view, actions, settings, field, anchors, closeId = "closeMatchSetupDropdown") {
   const anchor = anchors[field];
   if (!anchor) return;
   const options = setupOptions(settings, field);
@@ -120,7 +120,7 @@ function drawSetupDropdown(ctx, view, actions, settings, field, anchors) {
   const menuX = Math.max(8, Math.min(anchor.x - (menuW - anchor.w), view.width - menuW - 8));
   const menuY = Math.max(view.safeTop + 8, Math.min(anchor.y + anchor.h + 6, view.height - view.safeBottom - menuH - 8));
 
-  actions.push({ id: "closeMatchSetupDropdown", x: 0, y: 0, w: view.width, h: view.height });
+  actions.push({ id: closeId, x: 0, y: 0, w: view.width, h: view.height });
   ctx.save();
   ctx.fillStyle = "rgba(38, 28, 18, 0.2)";
   ctx.fillRect(0, 0, view.width, view.height);
@@ -248,4 +248,4 @@ function draw(ctx, view, actions, ui = {}) {
   }
 }
 
-module.exports = { draw };
+module.exports = { draw, setupOptions, selectedValue, drawRow, drawSetupDropdown, selectedLeader, currentHumanFaction };

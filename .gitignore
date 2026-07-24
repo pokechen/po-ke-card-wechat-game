@@ -7,4 +7,4 @@ project.private.config.json
 # 本地工具缓存
 .kuai.yaml
 
-/temp
+/tmp

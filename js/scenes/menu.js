@@ -150,7 +150,7 @@ function historySummary(history) {
 
 function latestMatchLine(item) {
   if (!item) return "";
-  const title = item.resultText || (item.endReason === "surrender" ? "认输" : "已结束");
+  const title = item.endReason === "disconnect" ? (item.ranked ? "排位掉线" : "掉线") : (item.resultText || (item.endReason === "surrender" ? "认输" : "已结束"));
   return `最近一局：${title} · ${formatTime(item.time)}`;
 }
 

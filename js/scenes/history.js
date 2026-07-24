@@ -239,7 +239,7 @@ function draw(ctx, view, actions, ui = {}) {
     fillRoundRect(ctx, 18, y, view.width - 36, ROW_H, 13, style.fill, style.color);
     fillRoundRect(ctx, 24, y + 4, 5, ROW_H - 8, 3, style.color);
     if (badge) drawStreakBadge(ctx, badge, view.width - 14, y);
-    const title = item.resultText || (item.endReason === "surrender" ? "认输" : "已结束");
+    const title = item.endReason === "disconnect" ? (item.ranked ? "排位掉线" : "掉线") : (item.resultText || (item.endReason === "surrender" ? "认输" : "已结束"));
     const avatarSize = ROW_H - 12;
     const avatarY = y + 6;
     drawLeaderAvatar(ctx, actions, humanLeader, 32, avatarY, avatarSize, style.color);

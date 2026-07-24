@@ -618,7 +618,7 @@ function rankRulesForProfile(profile = {}) {
   };
 }
 
-function safeFaction(value, fallback = "random") {
+function safeRankFaction(value, fallback = "random") {
   const raw = String(value || "");
   if (raw === "random") return "random";
   return FACTION_KEYS.includes(raw) ? raw : fallback;
@@ -628,7 +628,7 @@ function sanitizeRankPlayerSetup(input = {}, rules = {}) {
   if (rules.forcePlayerRandom) {
     return { faction: "random", leaderId: "random", deckMode: "auto", customDeckIds: [] };
   }
-  const faction = safeFaction(input.faction || input.humanFaction, "random");
+  const faction = safeRankFaction(input.faction || input.humanFaction, "random");
   const customDeckIds = safeArray(input.customDeckIds || input.humanCustomDeckIds).map(id => safeText(id, 80)).filter(Boolean).slice(0, 40);
   const customValid = faction !== "random" && customDeckIds.length && deckStatus(customDeckIds, faction).valid;
   const deckMode = input.deckMode === "custom" && rules.allowCustomDeck && customValid ? "custom" : "auto";
@@ -718,21 +718,27 @@ function rankResultSummary(finalState = {}) {
 function validateRankFinish(match, summary, event) {
   const flags = [];
   const hardInvalid = [];
-  if (!summary.roundResults.length) hardInvalid.push("MISSING_ROUND_RESULTS");
+  const surrendered = summary.endReason === "surrender";
+  const disconnected = summary.endReason === "disconnect";
+  const earlyEnd = surrendered || disconnected;
+  if (!summary.roundResults.length && !earlyEnd) hardInvalid.push("MISSING_ROUND_RESULTS");
   const roundWins = summary.roundResults.filter(item => item.winner === 0).length;
   const roundLosses = summary.roundResults.filter(item => item.winner === 1).length;
   if (roundWins !== summary.roundsWon || roundLosses !== summary.roundsLost) hardInvalid.push("RESULT_ROUND_MISMATCH");
+  if (earlyEnd && summary.result !== "loss") hardInvalid.push("EARLY_END_RESULT_MISMATCH");
   if (match.ruleSnapshot?.forcePlayerRandom && summary.humanDeckMode === "custom") hardInvalid.push("TOP_TIER_CUSTOM_DECK");
   if (safeText(event.clientVersion, 40) === "") flags.push("MISSING_CLIENT_VERSION");
   const durationMs = safeNumber(event.durationMs, 0);
-  if (durationMs > 0 && durationMs < 30000) flags.push("DURATION_TOO_SHORT");
+  if (durationMs > 0 && durationMs < 30000 && !earlyEnd) flags.push("DURATION_TOO_SHORT");
   if (safeNumber(match.expireAt, 0) && now() > safeNumber(match.expireAt, 0)) hardInvalid.push("MATCH_TIMEOUT");
   return hardInvalid.length
     ? { validationStatus: "invalid", riskFlags: hardInvalid.concat(flags) }
     : (flags.length ? { validationStatus: "suspicious", riskFlags: flags } : { validationStatus: "valid", riskFlags: [] });
 }
 
-function rankResultText(result) {
+function rankResultText(result, endReason = "normal") {
+  if (endReason === "disconnect") return result === "loss" ? "排位掉线" : "对方掉线";
+  if (endReason === "surrender") return result === "loss" ? "排位认输" : "对方认输";
   if (result === "win") return "排位胜利";
   if (result === "loss") return "排位失败";
   return "排位平局";
@@ -751,7 +757,7 @@ function buildRankHistoryRecord(match, summary, delta, validationStatus, riskFla
   return {
     time: now(),
     recordKey: `rank:${rankMatchId}`,
-    resultText: abnormal ? "数据异常" : rankResultText(delta.result),
+    resultText: abnormal ? "数据异常" : rankResultText(delta.result, summary.endReason),
     winner: abnormal ? null : summary.winner,
     rounds: summary.rounds,
     morale: summary.morale,

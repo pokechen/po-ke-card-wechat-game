@@ -1,6 +1,7 @@
 const { clear, text, button, fillRoundRect, card, wrapText, drawCardImage, short } = require("../ui/canvas");
 const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility } = require("../core/cards");
 const { totalScore, rowScore, handOwnerIndex, hasActiveHalfWeatherLeader } = require("../core/battle");
+const { loadSave } = require("../core/storage");
 const { drawDetail } = require("./cardDetail");
 
 const FIELD_FONT = "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", sans-serif";
@@ -15,7 +16,7 @@ function measureTextWidth(ctx, content, size) {
   return width;
 }
 
-function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, centerY) {
+function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, centerY, ui) {
   const leader = player.leader;
   const active = state.current === playerIndex && !state.over && !(state.mulligan && state.mulligan.active);
   const local = localPlayerIndex(state);
@@ -38,6 +39,7 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
     const action = { id: "leaderAvatar", playerIndex, cardId: leader.id, x, y, w: avatar, h: avatar };
     actions.push(action);
     drawCardImage(ctx, { ...leader, imageFill: true, imageX: x, imageY: y, imageW: avatar, imageH: avatar });
+    if (playerIndex === local) ui.__guideLeader = { x, y, w: avatar, h: avatar };
     if (player.leaderUsed) {
       ctx.save();
       ctx.fillStyle = "rgba(38, 28, 18, 0.48)";
@@ -190,6 +192,8 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
   const top = view.safeTop + (topOffset || 78);
   const gap = 6;
   const sideGap = 34;
+  // 重置场上卡牌指引目标，仅在确有场上卡牌时记录，供 fieldCardDetail 指引按需指向
+  ui.__guideFieldCard = null;
   const availableH = (bottomLimit || (view.height - view.safeBottom - 180)) - top - gap * 5 - sideGap;
   const rowH = Math.max(44, Math.min(92, Math.floor(availableH / 6)));
   const local = localPlayerIndex(state);
@@ -200,7 +204,7 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
     if (!player) return;
     const isEnemySide = visualIndex === 0;
     const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + sideGap;
-    const header = drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16);
+    const header = drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16, ui);
     if (isEnemySide) drawRoundResultMarkers(ctx, view, state, header);
     else drawSharedDiscardPileButton(ctx, view, actions, state, header);
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
@@ -270,6 +274,8 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
         const detail = { id: "battleCardDetail", cardId: item.id, cardUid: item.uid, playerIndex, row, scrollKey, maxScroll, x: hitX, y: y + 5, w: hitRight - hitX, h: cardH };
         actions.push(detail);
         drawFieldCard(ctx, item, drawRect, rowH, suppressed);
+        // 记录首个战场卡牌作为 fieldCardDetail 指引的指向目标
+        if (cardIndex === 0 && !ui.__guideFieldCard) ui.__guideFieldCard = { x: detail.x, y: detail.y, w: detail.w, h: detail.h };
       });
       ctx.restore();
       if (maxScroll > 0) {
@@ -406,6 +412,7 @@ function drawHand(ctx, view, actions, state, ui) {
     const hitRight = Math.min(viewportRight, x + bounds.cardW);
     actions.push({ ...spec, x: hitX, w: hitRight - hitX });
     card(ctx, spec);
+    if (index === 0) ui.__guideHandCard = { x: hitX, y: startY, w: hitRight - hitX, h: cardH };
   });
   ctx.restore();
 
@@ -1508,6 +1515,96 @@ function drawCardGuide(ctx, view, actions) {
   button(ctx, { ...close, label: "知道了", size: 12, fill: "#2f6f57" });
 }
 
+function guideStrokeRoundRect(ctx, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r || 0, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// 分步指引气泡 + 指向目标的脉冲高亮环。仅作视觉引导，不拦截目标自身的点击/长按。
+function drawGuidePointer(ctx, view, actions, target, title, lines) {
+  const cx = target.x + target.w / 2;
+  const cy = target.y + target.h / 2;
+  const bubbleW = Math.min(view.width - 48, 280);
+  const bubbleH = 96;
+  const bubbleX = (view.width - bubbleW) / 2;
+  const bubbleY = Math.max(view.safeTop + 64, Math.round(view.height / 2 - bubbleH / 2));
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 320);
+  ctx.save();
+  ctx.strokeStyle = `rgba(47,111,87,${0.55 + 0.4 * pulse})`;
+  ctx.lineWidth = 3;
+  const pad = 6 + 5 * pulse;
+  guideStrokeRoundRect(ctx, target.x - pad, target.y - pad, target.w + pad * 2, target.h + pad * 2, 12);
+  ctx.restore();
+  fillRoundRect(ctx, bubbleX, bubbleY, bubbleW, bubbleH, 14, "#2f6f57", "#1f4d3a");
+  text(ctx, title, bubbleX + bubbleW / 2, bubbleY + 26, 15, "#fff7d8", "center");
+  lines.forEach((ln, i) => text(ctx, ln, bubbleX + bubbleW / 2, bubbleY + 52 + i * 20, 12, "#eaf6ee", "center"));
+  ctx.save();
+  ctx.strokeStyle = "rgba(47,111,87,0.85)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bubbleX + bubbleW / 2, bubbleY + bubbleH);
+  ctx.lineTo(cx, cy);
+  ctx.stroke();
+  ctx.restore();
+  const dismiss = { id: "dismissGuide", x: bubbleX + bubbleW - 66, y: bubbleY + 8, w: 54, h: 24 };
+  actions.push(dismiss);
+  button(ctx, { ...dismiss, label: "稍后", size: 11, fill: "#3f7d61" });
+}
+
+function drawStepGuide(ctx, view, actions, state, ui) {
+  const step = ui.activeGuide;
+  if (!step || ui.guideDismissed || ui.showCardGuide) return;
+  // 二次校验：从存档重新读取当前指引的 done/count 状态，防止因存储异常、缓存不一致等导致超限指引仍被渲染
+  const save = loadSave();
+  const g = save.guides && save.guides[step];
+  if (!g || g.done || (Number.isFinite(g.count) && g.count > 3)) {
+    ui.activeGuide = "";
+    return;
+  }
+  const isMulligan = state.mulligan && state.mulligan.active;
+  if (state.roundTransition || isMulligan || state.over) return;
+  if (ui.battleCardDetailId || ui.battleCardDetailUid) return;
+  if (ui.battleLogHistoryOpen) return;
+  const local = localPlayerIndex(state);
+  const currentIsLocal = state.mode === "online" ? state.current === local : state.current === 0;
+  if (!currentIsLocal) return;
+  let target = null;
+  let title = "";
+  let lines = [];
+  if (step === "cardDetail") {
+    target = ui.__guideHandCard;
+    title = "看卡牌详情";
+    lines = ["长按手牌", "查看卡牌效果与说明"];
+  } else if (step === "leaderSkill") {
+    target = ui.__guideLeader;
+    const g = loadSave().guides.leaderSkill;
+    if (g && g.longPressed && !g.done) {
+      title = "使用主将技能";
+      lines = ["已查看主将技能", "点击主将头像使用技能"];
+    } else {
+      title = "看主将技能";
+      lines = ["长按主将头像查看技能", "点击主将头像使用技能"];
+    }
+  } else if (step === "battleRecord") {
+    target = ui.__guideLog;
+    title = "看对战记录";
+    lines = ["点击这里", "查看本局对战记录"];
+  } else if (step === "fieldCardDetail") {
+    target = ui.__guideFieldCard;
+    title = "看场上卡牌";
+    lines = ["长按场上的卡牌", "查看它的效果与说明"];
+  }
+  if (!target) return;
+  drawGuidePointer(ctx, view, actions, target, title, lines);
+}
+
 function draw(ctx, view, actions, state, ui = {}) {
   clear(ctx, view.width, view.height);
   ensurePendingDetail(state, ui);
@@ -1555,6 +1652,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   drawRows(ctx, view, actions, state, ui, weatherNames.length ? 90 : 78, logY - 10);
   const logAction = { id: "battleLog", x: 12, y: logY, w: view.width - 24, h: logH };
   actions.push(logAction);
+  ui.__guideLog = logAction;
   fillRoundRect(ctx, logAction.x, logAction.y, logAction.w, logAction.h, 10, "#fff4cf", "#d19330");
   fillRoundRect(ctx, logAction.x + 6, logAction.y + 5, 4, logAction.h - 10, 2, "#c46a2b");
   ctx.save();
@@ -1592,6 +1690,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   if (ui.showCardGuide && !state.roundTransition && !isMulligan && !state.over && (state.mode === "online" ? state.current === local : state.current === 0)) {
     drawCardGuide(ctx, view, actions);
   }
+  drawStepGuide(ctx, view, actions, state, ui);
   drawLeaderRevealPanel(ctx, view, actions, state, ui);
   if (detail) {
     const entries = detailCardEntries(state, ui, view);

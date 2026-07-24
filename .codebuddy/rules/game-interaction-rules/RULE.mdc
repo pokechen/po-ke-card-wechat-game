@@ -95,6 +95,14 @@ CodeBuddy 在本项目中新增或修改游戏界面、交互逻辑时，必须�
 - 如果新策略胜率不高于旧策略，则不得直接替换旧策略，也不得删除旧策略；需要分析胜率下降或未提升的原因，包括停牌时机、资源保留、目标选择、主将使用、卡牌组合、阵营差异和先后手偏差等，并将测试结果与原因告知用户，由用户决定继续优化新策略还是回滚并保留旧策略。
 - 未完成上述 `100` 场对比验证时，不得声称新策略优于旧策略，也不得将新策略作为正式策略发布。
 
+## 对比脚本 maxSteps 溢出处理
+
+- 自动对战/压测脚本（`scripts/simulate-ai-matches.js`、`scripts/bench-*.js`）中 `runPreparedMatch` 的 `maxSteps` 是单场对局的模拟步数硬上限，超过即抛出 `超过最大步数` 错误并中断整轮脚本。
+- 正确实现的对局（最多 3 局、牌库/手牌有限、手牌打空会自动 pass）步数有限，通常远低于 `1200`。因此一旦触发 `maxSteps` 溢出，**几乎可以肯定是 `shared/core/battle.js` 核心逻辑出现了不收敛（死循环）的 bug**，例如某回合永远走不到“双方都 pass”、`pending` 反复重建/清不掉、或弹回/重打出组合导致手牌永不耗尽；这不是脚本参数（如 deck 大小、`maxSteps` 取值）配错，也**绝不能靠调大 `maxSteps` 蒙混过去**。
+- 运行对比脚本时若遇到 `maxSteps` 溢出，**必须立即停止继续对比，先排查并修复代码问题，修复完成后再重新执行对比脚本**；不得在未修复的情况下强行把 `maxSteps` 调大重跑或跳过验证。
+- 排查方法：把 `maxSteps` 临时抬到很大（如 `20000`），在 `runPreparedMatch` 中当 `steps` 超过阈值（如 `1000`）时打印 `state.pending`、`current`、双方 `hand` 长度、上一步动作等信息，定位空转状态；修复 `battle.js` 后按项目规则执行 `node scripts/sync-pvp-core.js` 同步 PVP 核心，再跑 `100` 场回归验证。
+- 此类不收敛对线上玩家同样致命（客户端无该保险丝会直接卡死对局），属于必须修复的硬 bug，应优先于胜率对比处理。
+
 ## PVP 共享核心同步
 
 - 当修改以下共享文件后，需要手动同步到云函数目录：
@@ -114,17 +122,44 @@ node scripts/sync-pvp-core.js
 
 ## 云函数自动同步 CloudBase
 
-- 当修改 `cloudfunctions/` 下任意云函数代码、依赖或配置，或修改会影响云函数的共享核心文件（`shared/core/battle.js`、`shared/core/cards.js`、`shared/core/storage.js`、`shared/data/zhangyu_cards.js`）后，修改完毕必须自动同步到 CloudBase。
+- 当修改 `cloudfunctions/` 下任意云函数代码、依赖或配置，或修改会影响云函数的共享核心文件（`shared/core/battle.js`、`shared/core/cards.js`、`shared/core/storage.js`、`shared/data/zhangyu_cards.js`）后，修改完毕**必须自动同步到 CloudBase，且无需询问用户确认**（不要弹出"是否同步"之类的确认，直接执行并回报结果）。
 - 同步目标环境默认使用 `po-ke-card-d0gg2ewaac3e700c4`。
 - 同步前必须先执行 `node scripts/sync-pvp-core.js`，确保 PVP 共享核心已复制到 `cloudfunctions/pvpRoom/shared/`。
 - 同步云函数时优先使用 CloudBase 集成能力更新云函数代码，避免本地 `tcb fn code update --deployMode cos` 造成控制台出现 `函数更新失败 / ResourceNotFound.Entryfile` 状态。
 - 同步后必须调用相关云函数验证：`pvpRoom` 至少调用 `{ "action": "getLoginContext" }`，`adminStats` 至少调用 `{}`，确认返回 `ok: true`。
+
+### CloudBase 集成 `login` 端口冲突的绕过经验
+
+- **现象**：在本机（macOS / CodeBuddy 集成运行环境）调用 CloudBase 集成的 `login` 工具会失败，报错 `All 15 ports are in use (3721~3735), failed to start server`。
+- **根因**：端口 `3721~3735` 已被 **CodeBuddy 自带的 CloudBase 集成助手（MCP helper，进程名 `integration-mcp/tcb/index.cjs`）** 占用，它是 IDE 进程的一部分，**不能杀掉**；`login` 又试图再起一个本地登录服务、复用同一批端口，因此必然冲突。
+- **结论**：`login` 在此环境不是部署的前置必要步骤——集成助手本身已经是鉴通通道，无需再独立登录。
+- **正确做法**：跳过 `login`，直接调用集成的 `updateFunctionCode`（参数为 `name` + `functionRootPath`，指向 `cloudfunctions` 目录）更新云函数代码；该调用经由已运行的集成助手完成，不会触发端口冲突，也不会出现 `ResourceNotFound.Entryfile`。更新成功后用 `invokeFunction` 调 `{ "action": "getLoginContext" }` 验证。
+- **注意**：不要尝试 `kill` 占用 `3721~3735` 的 `CodeBuddy CN Helper (Plugin)` 进程，否则会破坏 IDE 的 CloudBase 集成连接。
 - 若自动同步失败，不得声称已完成部署；需要说明失败原因、当前云端函数状态，以及是否影响线上可用版本。
 
 ## 管理后台静态托管自动同步
 
-- 当修改 `admin/index.html` 后，修改完毕必须自动同步到 CloudBase 静态网站托管。
+- 当修改 `admin/index.html` 后，修改完毕必须自动同步到 CloudBase 静态网站托管，**同样无需询问用户确认，直接执行并回报结果**。
 - 同步目标环境默认使用 `po-ke-card-d0gg2ewaac3e700c4`，上传目标路径固定为 `admin/index.html`。
 - 同步时使用 CloudBase 静态托管上传能力，将本地 `/Users/chendongchao/Downloads/code/po-ke-card/po-ke-card-wechat-game/admin/index.html` 上传到云端 `admin/index.html`。
 - 同步完成后需要向用户提供带随机或时间戳查询参数的访问地址，格式为 `https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/admin/?v=时间戳`，避免 CDN 缓存影响查看。
 - 若自动同步失败，不得声称已完成同步；需要说明失败原因和当前可访问的线上地址。
+
+## 新手指引分步添加规范
+
+新增任何「分步新手指引」都必须遵循统一逻辑，保证用户引导体验一致、可维护。当前已实现的指引步骤（`GUIDE_STEPS`）为：`cardDetail`（长按手牌看详情）、`leaderSkill`（长按主将头像看技能 + 点击使用技能）、`battleRecord`（查看对战记录）、`fieldCardDetail`（长按场上卡牌看详情）。每条指引的通用规则：
+
+- 引导用户去操作（点击或长按），用户完成对应操作后记录为「已完成」，之后不再提醒。
+- 若用户始终未操作，最多提醒 `MAX_GUIDE_REMIND`（当前为 `3`）次；达到 3 次后即使仍未完成，也不再主动提醒该指引。
+- 每轮对局最多只触发一个提醒；`GUIDE_STEPS` 中未完成且提醒次数未达上限的步骤按顺序循环触发，触发完毕会把仍未完成且未超限的指引再从头触发（由 `guideCursor` 游标 + `done`/`count` 状态控制），避免一直展示同一个指引。
+- 长按类指引只监控「长按」动作作为完成条件（如 `markGuideByLongPress`）；点击类指引监控对应点击动作（如 `battleRecord` 在 `openBattleLogHistory` 里 `markGuideDone`）。
+- 部分指引需要多个子动作都完成才算 `done`（如 `leaderSkill` 需 `longPressed` 与 `usedSkill` 都为 true），则在 `guides` 中保存对应子字段，并在气泡文案里给出进度反馈。
+
+新增一条指引时，必须同步修改以下位置，缺一不可：
+
+1. `shared/core/storage.js`：在 `DEFAULT_SAVE.guides` 增加该步骤的默认状态（普通指引为 `{ done: false, count: 0 }`；需要多子动作的再加子字段），并在 `normalizeGuides` 中保证旧存档兼容（多子字段需单独 copy，参考 `leaderSkill`）。
+2. `game.js`：在 `GUIDE_STEPS` 数组按期望触发顺序加入该步骤 key（位置决定触发次序）；在 `markGuideByLongPress` / `markGuideDone` 等完成判定处接入对应的 `actionId` 或触发点（长按监控见 `markGuideByLongPress`，点击监控见各 `openXxx` 入口）。
+3. `js/scenes/battleScene.js`：在对应绘制处把指引指向目标的命中区域记录到 `ui.__guideXxx`（参考 `ui.__guideHandCard` / `ui.__guideLeader` / `ui.__guideLog` / `ui.__guideFieldCard`，无目标时置 `null` 以便「条件满足才显示」），并在 `drawStepGuide` 增加该步骤的分支（设置 `target`、气泡 `title`、`lines`，无 `target` 时不绘制）。
+4. 若该指引只在特定条件满足时才显示（如 `fieldCardDetail` 需场上已有卡牌），除在目标记录处把不存在时置 `null` 外，无需在 `drawStepGuide` 额外判断——`if (!target) return;` 已天然处理「条件不满足不显示」。
+
+部署要求：因为指引状态存于 `shared/core/storage.js`（属于影响云函数的共享核心文件），修改后必须按「PVP 共享核心同步」与「云函数自动同步 CloudBase」规则同步并部署，无需询问用户确认。

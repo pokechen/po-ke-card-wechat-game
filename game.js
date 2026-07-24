@@ -106,6 +106,7 @@ const app = {
     settingDeckPage: 0,
     settingDeckScroll: 0,
     matchSetupDropdown: "",
+    rankSetupDropdown: "",
     deckSlotDropdown: "",
     historyScroll: 0,
     historyLeaderDetailId: "",
@@ -158,6 +159,7 @@ setImageRenderHook(() => {
 const RECENT_PLAY_AUTO_DISMISS_MS = 2000;
 const ROUND_TRANSITION_NOTICE_MS = RECENT_PLAY_AUTO_DISMISS_MS * 2;
 const ACTIVE_SINGLE_MATCH_KEY = "zhangyu.single-match.active.v1";
+const PENDING_RANK_RESULT_KEY = "zhangyu.rank-result.pending.v1";
 let activeSingleMatchSnapshot = "";
 const PAGE_TRANSITION_MS = 180;
 const DETAIL_SWIPE_MS = 220;
@@ -210,6 +212,76 @@ function persistActiveSingleMatch() {
   }
 }
 
+function savePendingRankResult(match, durationMs) {
+  if (!match?.ranked || !match.rankMatchId || !match.over || match.rankSubmitted) return null;
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.setStorageSync) return null;
+  const payload = {
+    version: 1,
+    savedAt: Date.now(),
+    rankMatchId: match.rankMatchId,
+    finalStateSummary: rankFinalSummary(match),
+    clientVersion: "wechat-game",
+    durationMs: Math.max(0, durationMs || 0)
+  };
+  try {
+    api.setStorageSync(PENDING_RANK_RESULT_KEY, payload);
+    return payload;
+  } catch (err) {
+    console.warn("[rank] 保存待同步排位结算失败", err?.message || err);
+    return null;
+  }
+}
+
+function readPendingRankResult() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.getStorageSync) return null;
+  try {
+    const payload = api.getStorageSync(PENDING_RANK_RESULT_KEY) || null;
+    return payload?.version === 1 && payload.rankMatchId && payload.finalStateSummary ? payload : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function clearPendingRankResult(rankMatchId = "") {
+  const pending = readPendingRankResult();
+  if (rankMatchId && pending && pending.rankMatchId !== rankMatchId) return;
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.removeStorageSync) return;
+  try { api.removeStorageSync(PENDING_RANK_RESULT_KEY); } catch (err) {}
+}
+
+function retryPendingRankResult(source = "retry") {
+  const pending = readPendingRankResult();
+  if (!pending || app.rank.retryingPendingRankResult) return false;
+  if (app.match?.rankMatchId === pending.rankMatchId && app.match.rankSubmitting) return false;
+  app.rank.retryingPendingRankResult = true;
+  pvpClient.finishRankMatch(pending.rankMatchId, pending.finalStateSummary, pending.clientVersion || "wechat-game", pending.durationMs || 0).then(result => {
+    clearPendingRankResult(pending.rankMatchId);
+    app.rank.retryingPendingRankResult = false;
+    app.rank.profile = result.profile || app.rank.profile;
+    app.rank.resultDelta = result.delta || app.rank.resultDelta;
+    if (app.match?.rankMatchId === pending.rankMatchId) {
+      app.match.rankSubmitted = true;
+      app.match.rankSubmitting = false;
+      app.match.rankDelta = result.delta || null;
+      app.match.rankSubmitError = "";
+    }
+    refreshCloudMatchHistory(false);
+    render();
+  }).catch(err => {
+    app.rank.retryingPendingRankResult = false;
+    if (err?.code === "RANK_ALREADY_FINISHED") {
+      clearPendingRankResult(pending.rankMatchId);
+      loadRankProfile(true);
+      return;
+    }
+    console.warn("[rank] 待同步排位结算重试失败", source, err?.message || err);
+  });
+  return true;
+}
+
 function restoreInterruptedSingleMatch() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api?.getStorageSync) return false;
@@ -223,6 +295,11 @@ function restoreInterruptedSingleMatch() {
     app.match = JSON.parse(JSON.stringify(source));
     surrender(app.match, 0, "disconnect");
     app.scene = "result";
+    if (app.match.ranked) {
+      const durationMs = Math.max(0, Date.now() - (app.match.rankStartedAt || Date.now()));
+      savePendingRankResult(app.match, durationMs);
+      setTimeout(submitRankResultIfNeeded, 0);
+    }
     console.log("[single-match] 检测到重新进入前未完成的单机对局，已判负结算");
     return true;
   } catch (err) {
@@ -234,6 +311,18 @@ function restoreInterruptedSingleMatch() {
 
 function resumeSuspendedSingleMatch() {
   if (app.scene !== "battle" || !activeSingleMatch()) return false;
+  // 排位对局若中断超过 60 秒，视为掉线判负而非恢复
+  if (app.match.ranked) {
+    const api = typeof wx !== "undefined" ? wx : null;
+    let snap = null;
+    try { snap = api?.getStorageSync?.(ACTIVE_SINGLE_MATCH_KEY) || null; } catch (err) {}
+    const savedAt = snap && typeof snap.savedAt === "number" ? snap.savedAt : 0;
+    if (savedAt && (Date.now() - savedAt > 60000)) {
+      clearActiveSingleMatchSnapshot();
+      performDisconnectLoss("suspend-timeout");
+      return true;
+    }
+  }
   render();
   if (!app.match.pending) scheduleAi();
   return true;
@@ -973,7 +1062,7 @@ function setScene(scene) {
   persistActiveSingleMatch();
   app.scene = scene;
   if (scene === "menu") {
-    silentLogin().then(() => {
+    ensureCloudAuth().then(() => {
       if (app.scene === "menu") promptProfileIfNeeded(profileNeedsNickname());
     });
   }
@@ -984,6 +1073,7 @@ function setScene(scene) {
 
 function startMatch(optionsPatch = {}) {
   clearAiTimer();
+  if (app._rankDisconnectTimer) { clearTimeout(app._rankDisconnectTimer); app._rankDisconnectTimer = null; }
   app.ui.handScroll = 0;
   app.ui.battleCardDetailId = "";
   app.ui.battleCardDetailUid = "";
@@ -1013,6 +1103,9 @@ function startMatch(optionsPatch = {}) {
     app.match.rankProfileBefore = app.rank.profile || null;
   }
   app.ui.showCardGuide = !loadSave().finishedTutorial;
+  app.ui.activeGuide = "";
+  app.ui.guideDismissed = false;
+  if (!app.ui.showCardGuide) pickActiveGuide();
   openMulliganGuideDetail();
   setScene("battle");
 }
@@ -1284,7 +1377,27 @@ async function silentLogin() {
 }
 
 async function ensureCloudAuth() {
-  if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) return true;
+  if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) {
+    try {
+      if (!app.ui.authUser && pvpClient.getCurrentUser) {
+        const result = await pvpClient.getCurrentUser();
+        if (result && result.user) {
+          app.ui.authUser = result.user;
+          saveAuthSession({
+            token: app.ui.authToken,
+            expiresAt: app.ui.authExpiresAt,
+            tokenStorage: app.ui.authTokenStorage || ""
+          });
+          render();
+        }
+      }
+      refreshCloudMatchHistory(false);
+      refreshAdminStatus();
+    } catch (err) {
+      console.warn("[user-login] refresh user data failed", err?.message || err);
+    }
+    return true;
+  }
   return !!(await silentLogin());
 }
 
@@ -2479,7 +2592,7 @@ function createPvpRoom() {
   });
 }
 
-function joinPvpRoom(roomId) {
+async function joinPvpRoom(roomId) {
   const safeRoomId = normalizePvpRoomId(roomId);
   if (!safeRoomId) return toast("请输入4位数字房间号");
   console.log("[pvp] joinPvpRoom 开始, roomId=", safeRoomId);
@@ -2487,6 +2600,19 @@ function joinPvpRoom(roomId) {
   app.pvp.roomId = safeRoomId;
   app.pvp.loading = true;
   setScene("pvpRoom");
+  // 新用户通过分享二维码/分享卡片进入时，静默登录可能尚未完成，先确保拿到登录态再请求加入房间，
+  // 否则云函数 authOpenid 会因没有 token 而拒绝，表现为“账号不存在”。
+  try {
+    await ensureCloudAuth();
+  } catch (loginErr) {
+    console.warn("[pvp] joinPvpRoom 静默登录失败", loginErr);
+  }
+  if (!pvpClient.getAuthToken()) {
+    app.pvp.loading = false;
+    app.pvp.error = "登录失败，请稍后重试";
+    render();
+    return;
+  }
   pvpClient.joinRoom(safeRoomId, currentPlayerSetup()).then(result => {
     console.log("[pvp] joinRoom 云函数返回成功, roomId=", result.roomId,
       "playerIndex=", result.playerIndex, "room.status=", result.room?.status,
@@ -2811,6 +2937,7 @@ function handleLaunchRoom() {
       if (handleSharedCardJoinFallback(options, "onShow")) return;
       resumeSuspendedSingleMatch();
       resumePvpRoomSync("wx.onShow");
+      retryPendingRankResult("wx.onShow");
       // 只在入口 query 明显带有 room/scene 关键字时才走兜底解析，避免正常切前台产生噪音
       if (!hasRoomHint(options) && !hasShareRouteHint(options)) return;
       setTimeout(() => {
@@ -2821,10 +2948,24 @@ function handleLaunchRoom() {
       }, 300);
     });
   }
+  app._rankDisconnectTimer = null;
   if (api.onNetworkStatusChange) {
     api.onNetworkStatusChange(status => {
-      if (status?.isConnected) resumePvpRoomSync("network-reconnected");
-      // 断网不立即判负，服务端心跳超时（30s）后才由服务端结算掉线判负
+      if (status?.isConnected) {
+        resumePvpRoomSync("network-reconnected");
+        retryPendingRankResult("network-reconnected");
+        if (app._rankDisconnectTimer) { clearTimeout(app._rankDisconnectTimer); app._rankDisconnectTimer = null; }
+        return;
+      }
+      // 排位/AI 单机对局断网：延迟 8 秒后自动判负（给短暂抖动恢复机会）
+      const match = app.match;
+      if (!match || match.over || match.mode !== "ai") return;
+      if (app._rankDisconnectTimer) return;
+      app._rankDisconnectTimer = setTimeout(() => {
+        app._rankDisconnectTimer = null;
+        if (!app.match || app.match.over || app.match.mode !== "ai") return;
+        performDisconnectLoss("network-disconnect");
+      }, 8000);
     });
   }
 }
@@ -3486,6 +3627,7 @@ function loadRankProfile(force = false) {
 
 function openRankSetup() {
   resetRankTransient();
+  app.ui.rankSetupDropdown = "";
   setScene("rankSetup");
   loadRankProfile(true);
 }
@@ -3578,7 +3720,10 @@ function submitRankResultIfNeeded() {
   app.rank.submitting = true;
   render();
   const durationMs = Math.max(0, Date.now() - (match.rankStartedAt || Date.now()));
-  pvpClient.finishRankMatch(match.rankMatchId, rankFinalSummary(match), "wechat-game", durationMs).then(result => {
+  const pending = savePendingRankResult(match, durationMs);
+  const summary = pending?.finalStateSummary || rankFinalSummary(match);
+  pvpClient.finishRankMatch(match.rankMatchId, summary, "wechat-game", durationMs).then(result => {
+    clearPendingRankResult(match.rankMatchId);
     match.rankSubmitted = true;
     match.rankSubmitting = false;
     match.rankDelta = result.delta || null;
@@ -3590,6 +3735,15 @@ function submitRankResultIfNeeded() {
     render();
   }).catch(err => {
     match.rankSubmitting = false;
+    if (err?.code === "RANK_ALREADY_FINISHED") {
+      clearPendingRankResult(match.rankMatchId);
+      match.rankSubmitted = true;
+      match.rankSubmitError = "";
+      app.rank.submitting = false;
+      loadRankProfile(true);
+      render();
+      return;
+    }
     match.rankSubmitError = err.message || "排位结算失败";
     app.rank.submitting = false;
     render();
@@ -3614,12 +3768,57 @@ function openRankPublicProfile(userId) {
   });
 }
 
+function rankTierRangeText(tier) {
+  if (!Number.isFinite(tier.maxPower)) return `${tier.minPower}+`;
+  return `${tier.minPower}-${tier.maxPower}`;
+}
+
+function showRankRuleHelp() {
+  app.rank.helpPanel = app.rank.helpPanel === "rule" ? null : "rule";
+  render();
+}
+
+function showRankPrestigeHelp() {
+  app.rank.helpPanel = app.rank.helpPanel === "prestige" ? null : "prestige";
+  render();
+}
+
 function handleRankSetup(action) {
   if (action.id === "rankBack") return setScene("menu");
-  if (action.id === "rankLeaderboard") return openRankLeaderboard();
   if (action.id === "rankRefreshProfile") return loadRankProfile(true);
-  if (action.id === "rankEditSetup") return setScene("matchSetup");
   if (action.id === "rankStart") return startRankMatch();
+  if (action.id === "rankRuleHelp") return showRankRuleHelp();
+  if (action.id === "rankPrestigeHelp") return showRankPrestigeHelp();
+  if (action.id === "closeRankHelpPanel") { app.rank.helpPanel = null; return render(); }
+  if (action.id === "closeRankSetupDropdown" || action.id === "closeMatchSetupDropdown") {
+    app.ui.rankSetupDropdown = "";
+    return render();
+  }
+  const rules = app.rank.rules || {};
+  if (rules.forcePlayerRandom) return render(); // 帝王段位不可修改阵容
+  if (action.id === "selectMatchSetupOption") {
+    if (action.field === "humanFaction" || action.field === "humanLeader") {
+      applyMatchSetupOption(action);
+      app.ui.rankSetupDropdown = "";
+      return render();
+    }
+    return render();
+  }
+  if (action.id === "humanFaction" || action.id === "humanLeader") {
+    app.ui.rankSetupDropdown = app.ui.rankSetupDropdown === action.id ? "" : action.id;
+    return render();
+  }
+  if (action.id === "toggleRankDeckMode") {
+    const settings = loadSettings();
+    const faction = settings.humanLineupMode === "random" ? "random" : settings.humanFaction;
+    const selectedIds = faction === "random" ? [] : getActiveCustomDeckIds(settings, faction);
+    const status = faction === "random" ? { valid: false } : deckStatus(selectedIds, faction);
+    const useCustomDeck = faction !== "random" && status.valid && settings.customDeckEnabled;
+    if (!status.valid) return render();
+    saveSettings({ customDeckEnabled: !useCustomDeck });
+    return render();
+  }
+  render();
 }
 
 function handleRankLeaderboard(action) {
@@ -3807,6 +4006,10 @@ function handleBattle(action) {
     saveProgress({ finishedTutorial: true });
     return render();
   }
+  if (action.id === "dismissGuide") {
+    app.ui.guideDismissed = true;
+    return render();
+  }
   if (!app.match) return;
   if (action.id === "dismissLeaderReveal") {
     const local = app.match.mode === "online" && Number.isInteger(app.match.localPlayerIndex) ? app.match.localPlayerIndex : 0;
@@ -3912,7 +4115,7 @@ function handleBattle(action) {
       return render();
     }
     if (action.id === "leaderAvatar") {
-      if (action.playerIndex === app.match.current && !app.match.mulligan?.active) return submitPvpAction({ type: "leader" });
+      if (action.playerIndex === app.match.current && !app.match.mulligan?.active) { markLeaderSkillPart("usedSkill"); return submitPvpAction({ type: "leader" }); }
       return render();
     }
     if (app.match.mulligan?.active) {
@@ -3935,19 +4138,20 @@ function handleBattle(action) {
     return afterHumanAction();
   }
   if (app.match.mode === "ai" && app.match.current !== 0) return;
-  if (action.id === "leaderAvatar") {
-    if (action.playerIndex === app.match.current && !app.match.mulligan?.active) {
-      useLeader(app.match, action.playerIndex);
-      return afterHumanAction();
+    if (action.id === "leaderAvatar") {
+      if (action.playerIndex === app.match.current && !app.match.mulligan?.active) {
+        useLeader(app.match, action.playerIndex);
+        markLeaderSkillPart("usedSkill");
+        return afterHumanAction();
+      }
+      return render();
     }
-    return render();
-  }
   if (app.match.mulligan?.active) {
     if (action.id === "card") return handleMulliganSwap(action.cardUid);
     if (action.id === "mulliganDone") { finishMulligan(app.match); app.ui.mulliganHandOrder = null; return afterHumanAction(); }
     return;
   }
-  if (action.id === "leader") useLeader(app.match, app.match.current);
+  if (action.id === "leader") { useLeader(app.match, app.match.current); markLeaderSkillPart("usedSkill"); }
   if (action.id === "card") playCard(app.match, action.cardUid);
   if (action.id === "pass") return confirmPass();
   afterHumanAction();
@@ -4628,6 +4832,87 @@ function handleTap(point) {
 }
 
 const LONG_PRESS_MS = 380;
+
+// 分步新手指引：按序逐个触发，每轮对局最多一个；用户完成则不再提醒，未完成且未达三次的指引循环触发，达到三次后停止提醒
+const GUIDE_STEPS = ["cardDetail", "leaderSkill", "battleRecord", "fieldCardDetail"];
+const MAX_GUIDE_REMIND = 3;
+
+function pickActiveGuide() {
+  app.ui.activeGuide = "";
+  app.ui.guideDismissed = false;
+  const save = loadSave();
+  const guides = save.guides || {};
+  const n = GUIDE_STEPS.length;
+
+  // 收集所有「未完成且未超限」的可用指引
+  const available = [];
+  for (let i = 0; i < n; i += 1) {
+    const step = GUIDE_STEPS[i];
+    const g = guides[step];
+    const cnt = Number.isFinite(g && g.count) ? g.count : 0;
+    if (g && !g.done && cnt < MAX_GUIDE_REMIND) {
+      available.push(step);
+    }
+  }
+
+  // 没有可用指引则不显示任何气泡
+  if (available.length === 0) return;
+
+  // 从 guideCursor 开始向后找最近的可用指引，实现真正的顺序循环
+  const cursor = (((save.guideCursor || 0) % n) + n) % n;
+  let selectedStep = null;
+  let selectedIdx = -1;
+  for (let i = 0; i < n; i += 1) {
+    const idx = (cursor + i) % n;
+    const step = GUIDE_STEPS[idx];
+    if (available.indexOf(step) !== -1) {
+      selectedStep = step;
+      selectedIdx = idx;
+      break;
+    }
+  }
+
+  if (!selectedStep) return;
+
+  // 累加次数并持久化（强制确保 count 为数字）
+  app.ui.activeGuide = selectedStep;
+  const g = guides[selectedStep];
+  g.count = (Number.isFinite(g.count) ? g.count : 0) + 1;
+  saveProgress({ guides: save.guides, guideCursor: (selectedIdx + 1) % n });
+}
+
+function markGuideDone(step) {
+  const save = loadSave();
+  const g = save.guides && save.guides[step];
+  if (!g || g.done) {
+    if (app.ui.activeGuide === step) app.ui.activeGuide = "";
+    return;
+  }
+  g.done = true;
+  saveProgress({ guides: save.guides });
+  if (app.ui.activeGuide === step) app.ui.activeGuide = "";
+}
+
+// 长按类指引只监控长按：长按主将头像=查看主将技能，长按手牌=查看手牌详情，长按场上卡牌=查看场上卡牌详情
+function markGuideByLongPress(actionId) {
+  if (app.scene !== "battle" || !app.match) return;
+  if (app.match.mulligan && app.match.mulligan.active) return;
+  if (actionId === "leaderAvatar") markLeaderSkillPart("longPressed");
+  else if (actionId === "card") markGuideDone("cardDetail");
+  else if (actionId === "battleCardDetail") markGuideDone("fieldCardDetail");
+  else if (actionId === "targetChoice") markGuideDone("cardDetail");
+}
+
+// 主将技能指引需「长按查看」+「使用技能」两者都完成；part 为 longPressed 或 usedSkill
+function markLeaderSkillPart(part) {
+  const save = loadSave();
+  const g = save.guides && save.guides.leaderSkill;
+  if (!g) return;
+  g[part] = true;
+  if (g.longPressed && g.usedSkill) g.done = true;
+  saveProgress({ guides: save.guides });
+  if (g.done && app.ui.activeGuide === "leaderSkill") app.ui.activeGuide = "";
+}
 const LONG_PRESS_MOVE = 12;
 
 function openBattleCardDetail(cardId, cardUid) {
@@ -4640,6 +4925,7 @@ function openBattleCardDetail(cardId, cardUid) {
 }
 
 function openBattleLogHistory() {
+  markGuideDone("battleRecord");
   app.ui.battleLogHistoryOpen = true;
   app.ui.battleLogHistoryScroll = 0;
   vibrate();
@@ -4725,6 +5011,7 @@ function startLongPress(point) {
     touchStartState.longPressTimer = null;
     touchStartState.longPressFired = true;
     onLongPress();
+    markGuideByLongPress(action.id);
   }, LONG_PRESS_MS);
 }
 
@@ -5040,8 +5327,9 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
 
 console.log("===== 章鱼牌 v20260720-ready-debug-v1 诊断代码已加载 =====");
 loadAuthSession();
-silentLogin();
+ensureCloudAuth().then(() => retryPendingRankResult("startup-auth")).catch(err => console.warn("[rank] 启动登录/补交结算失败", err?.message || err));
 setupShare();
 restoreInterruptedSingleMatch();
+retryPendingRankResult("startup");
 handleLaunchRoom();
 render();

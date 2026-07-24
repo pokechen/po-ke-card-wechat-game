@@ -307,7 +307,45 @@ function isClearWeatherCard(card) {
   return card.category === "weather" && /拨云见日|晴空|Clear Weather/i.test(card.baseName || card.name || "");
 }
 
-function cardValue(card, context = {}) {
+// 判断一组卡牌（牌组/已选卡）中是否存在「奋起」单位。
+// 破釜沉舟（Mardroeme）只会转化场上的奋起人物，牌组中若没有奋起单位则毫无价值，
+// 因此它的记分与是否入组都依赖牌组是否含有奋起。
+function deckHasBerserker(list) {
+  return Array.isArray(list) && list.some(card => hasAbility(card, "Berserker"));
+}
+
+function isMardroemeCard(card) {
+  return hasAbility(card, "Mardroeme") || (card.baseName || card.name) === "破釜沉舟";
+}
+
+// 特殊/时局牌的能力加分配置。
+// 人物牌有基础战力 + 能力加分，而特殊/时局牌基础战力为 0、只有能力加分，
+// 因此这里把特殊牌的能力加分提到与强力人物相当的水平，使牌组总战力与自动组牌排序更合理。
+const SPECIAL_BONUS = {
+  commanderHorn: 15,   // 战鼓齐鸣·鼓舞：翻倍一条阵线，价值接近强力人物
+  scorchUnitTianDan: 9, // 田单·奇策（人物牌，保留原值）
+  scorchSpecial: 15,   // 釜底抽薪·奇策：摧毁最高战力非传世人物
+  scorchUnitOther: 5,  // 其他带奇策的人物牌
+  mardroeme: 11,       // 破釜沉舟·破釜：触发奋起转化
+  decoy: 13,           // 请辞归隐·请辞：回收单位再打出（基础分，medic 联动另计）
+  weatherClear: 9,     // 拨云见日：清除时局
+  weatherOther: 12     // 其余时局：压制对方一条阵线
+};
+
+// 旧版加分（用于胜率对比基线，勿删）
+const SPECIAL_BONUS_BASELINE = {
+  commanderHorn: 9,
+  scorchUnitTianDan: 9,
+  scorchSpecial: 8,
+  scorchUnitOther: 5,
+  mardroeme: 6,
+  decoy: 0,
+  weatherClear: 3,
+  weatherOther: 6
+};
+
+function cardValueBase(card, context, bonus) {
+  const b = bonus || SPECIAL_BONUS;
   const strength = card.strength || 0;
   const spy = hasAbility(card, "Spy");
   let value = spy ? 20 - strength : strength;
@@ -317,28 +355,51 @@ function cardValue(card, context = {}) {
   if (hasAbility(card, "Muster")) value += musterBonus(card, context);
   value += summonBonus(card, context);
   if (hasAbility(card, "Morale Boost")) value += 1;
-  if (hasAbility(card, "Mardroeme")) value += 6;
+  if (hasAbility(card, "Mardroeme")) value += b.mardroeme;
   if (hasAbility(card, "Berserker")) value += 3;
   if (hasAbility(card, "Agile")) value += 2;
   const name = cleanCardName(card.baseName || card.name);
-  if (hasAbility(card, "Commander's Horn") || name === "战鼓齐鸣") value += 9;
-  if (hasAbility(card, "Scorch") || name === "釜底抽薪") value += name === "田单" ? 9 : (card.category === "special" || name === "釜底抽薪" ? 8 : 5);
-  if (card.category === "weather") value += isClearWeatherCard(card) ? 3 : 6;
+  if (hasAbility(card, "Commander's Horn") || name === "战鼓齐鸣") value += b.commanderHorn;
+  if (hasAbility(card, "Scorch") || name === "釜底抽薪") {
+    value += name === "田单" ? b.scorchUnitTianDan : (card.category === "special" || name === "釜底抽薪" ? b.scorchSpecial : b.scorchUnitOther);
+  }
+  if (isDecoyCard(card)) value += b.decoy;
+  if (card.category === "weather") value += isClearWeatherCard(card) ? b.weatherClear : b.weatherOther;
   return value;
 }
 
-function autoDeckCardValue(card, picked = [], pool = allCards()) {
-  let value = cardValue(card, { pool });
+function makeCardValue(bonus) {
+  return (card, context = {}) => cardValueBase(card, context, bonus);
+}
+
+// 对战 AI 决策与自动组牌排序使用原始加分，保持已验证过的对战策略与行为不变。
+const cardValue = makeCardValue(SPECIAL_BONUS_BASELINE);
+
+// 牌组「总战力」展示使用重平衡后的加分，使特殊/时局牌的分数更贴近其实际效果价值
+// （特殊牌基础战力为 0、只有能力加分，原加分偏低，展示上无法体现其真实价值）。
+// 破釜沉舟依赖牌组中的奋起单位，牌组无奋起时其展示分归零。
+const displayCardValueBase = makeCardValue(SPECIAL_BONUS);
+function displayCardValue(card, context = {}) {
+  const value = displayCardValueBase(card, context);
+  if (isMardroemeCard(card) && context.pool && !deckHasBerserker(context.pool)) {
+    return value - SPECIAL_BONUS.mardroeme;
+  }
+  return value;
+}
+
+function autoDeckCardValue(card, picked = [], pool = allCards(), baseValueFn = cardValue) {
+  let value = baseValueFn(card, { pool });
   if (isDecoyCard(card)) {
     const medicCount = picked.filter(item => !item.hero && hasAbility(item, "Medic")).length;
     if (medicCount) value += 12 + medicCount * 5;
   }
+  if (isMardroemeCard(card) && !deckHasBerserker(picked)) value = 0;
   return value;
 }
 
 function deckValueTotal(cards) {
   const list = Array.isArray(cards) ? cards : [];
-  return list.reduce((sum, card) => sum + cardValue(card, { pool: list }), 0);
+  return list.reduce((sum, card) => sum + displayCardValue(card, { pool: list }), 0);
 }
 
 function deckExpectedScore(cards) {
@@ -504,23 +565,30 @@ function selectAutoDeckCards(options = {}) {
   const faction = options.faction || FACTION_KEYS[0];
   const difficulty = options.difficulty || "normal";
   const strengthBias = !!options.strengthBias;
-  const config = {
-    easy: { unitTarget: 22, specialTarget: 3, topRatio: 0.95, randomPick: true, maxHeroes: 2, maxSpyCards: 1 },
+  // 旧简单基线（保留以便回归）：22/3 在 100 场验证中胜率 54%，高于 28/8 的 46%；
+  // 用户决策仍采用组牌更丰富的 28/8，故此处保留旧值为回归基线，不删除旧策略。
+  const OLD_EASY_BASE = { unitTarget: 22, specialTarget: 3, topRatio: 0.95, randomPick: true, maxHeroes: 2, maxSpyCards: 1 };
+  const baseConfig = {
+    easy: { unitTarget: 28, specialTarget: 8, topRatio: 0.95, randomPick: true, maxHeroes: 2, maxSpyCards: 1 },
     normal: { unitTarget: 25, specialTarget: 6, topRatio: 0.55, randomPick: true, maxHeroes: 5, maxSpyCards: 2 },
-    hard: { unitTarget: 28, specialTarget: 8, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxSpyCards: 99 }
+    // hard 已切换为「越困难牌组越小越强」策略：对比旧 28/8 的 100 场胜率 60%（60胜39负1平），22/4 为验证通过方案
+    hard: { unitTarget: 22, specialTarget: 4, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxSpyCards: 99 }
   }[difficulty] || { unitTarget: 24, specialTarget: 5, topRatio: 0.55, randomPick: true, maxHeroes: 5, maxSpyCards: 2 };
+  // deckProfile 允许实验性覆盖组牌配置（如回归对比传 28/8 复现旧基线）；不传则使用上面已验证的线上基线
+  const config = options.deckProfile ? { ...baseConfig, ...options.deckProfile } : baseConfig;
   const pool = eligibleCards(faction);
+  const valueFn = options.valueFn || cardValue;
   const unitGroups = groupCards(pool.filter(card => card.category === "unit" || card.category === "hero"))
-    .sort((a, b) => cardValue(b.card, { pool }) - cardValue(a.card, { pool }));
+    .sort((a, b) => valueFn(b.card, { pool }) - valueFn(a.card, { pool }));
   const specialGroups = groupCards(pool.filter(card => card.category === "special" || card.category === "weather"));
   const picked = [];
   const rankedSpecialGroups = () => specialGroups.slice()
-    .sort((a, b) => autoDeckCardValue(b.card, picked, pool) - autoDeckCardValue(a.card, picked, pool));
+    .sort((a, b) => autoDeckCardValue(b.card, picked, pool, valueFn) - autoDeckCardValue(a.card, picked, pool, valueFn));
   const usedUnits = {};
   let heroCount = 0;
   let spyCount = 0;
   while (picked.filter(card => card.category === "unit" || card.category === "hero").length < config.unitTarget) {
-    const group = pickFromGroups(unitGroups, usedUnits, config.topRatio, config.randomPick, strengthBias, card => cardValue(card, { pool }));
+    const group = pickFromGroups(unitGroups, usedUnits, config.topRatio, config.randomPick, strengthBias, card => valueFn(card, { pool }));
     if (!group) break;
     usedUnits[group.key] = true;
     const card = group.card;
@@ -538,8 +606,13 @@ function selectAutoDeckCards(options = {}) {
   markPickedGroups(specialGroups, usedSpecials, picked);
   while (picked.filter(card => card.category === "special" || card.category === "weather").length < config.specialTarget) {
     const rankedSpecials = rankedSpecialGroups();
-    const group = pickFromGroups(rankedSpecials, usedSpecials, config.topRatio, config.randomPick, strengthBias, card => autoDeckCardValue(card, picked, pool));
+    const group = pickFromGroups(rankedSpecials, usedSpecials, config.topRatio, config.randomPick, strengthBias, card => autoDeckCardValue(card, picked, pool, valueFn));
     if (!group) break;
+    // 破釜沉舟只转化场上的奋起单位，牌组中若没有奋起单位则毫无价值，直接排除不入组。
+    if (isMardroemeCard(group.card) && !deckHasBerserker(picked)) {
+      usedSpecials[group.key] = true;
+      continue;
+    }
     const maxCopies = specialGroupMaxCopies(group, picked);
     const already = specialPicked[group.key] || 0;
     if (already >= maxCopies) {
@@ -568,7 +641,7 @@ function buildDeck(owner, options = {}) {
   const faction = options.faction || FACTION_KEYS[owner % FACTION_KEYS.length];
   const difficulty = options.difficulty || "normal";
   const customStatus = deckStatus(options.customDeckIds, faction);
-  const picked = customStatus.valid ? customStatus.cards : selectAutoDeckCards({ faction, difficulty });
+  const picked = customStatus.valid ? customStatus.cards : selectAutoDeckCards({ faction, difficulty, valueFn: options.valueFn, deckProfile: options.deckProfile });
   return shuffle(picked).map(card => cloneCard(card, owner));
 }
 
@@ -606,6 +679,10 @@ module.exports = {
   cloneCard,
   shuffle,
   cardValue,
+  displayCardValue,
+  makeCardValue,
+  SPECIAL_BONUS,
+  SPECIAL_BONUS_BASELINE,
   deckValueTotal,
   deckExpectedScore,
   hasAbility,

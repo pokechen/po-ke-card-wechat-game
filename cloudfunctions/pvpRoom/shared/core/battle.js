@@ -24,9 +24,31 @@ const AI_DIFFICULTY = {
 };
 const MATCH_MORALE = 2;
 
+  // ===== 占位回合（领先时主动放弃）阈值的可调覆盖 =====
+  // 通过 autoStep 的 cfg.tuning 注入；不传则回落到 ADVANCED_AI 默认值（保持基线行为不变）。
+  function resolvePassTuning(cfg) {
+    const base = ADVANCED_AI;
+    const t = (cfg && cfg.tuning) || {};
+    const expectedCatchPerCard = (typeof t.expectedCatchPerCard === "number") ? t.expectedCatchPerCard : base.expectedCatchPerCard;
+    return {
+      expectedCatchPerCard,
+      passLeadMin: (typeof t.passLeadMin === "number") ? t.passLeadMin : expectedCatchPerCard,
+      minCardsToCatch: (typeof t.minCardsToCatch === "number") ? t.minCardsToCatch : 2,
+      unconditionalPassLead: (typeof t.unconditionalPassLead === "number") ? t.unconditionalPassLead : expectedCatchPerCard * 2,
+      passCostFloor: (typeof t.passCostFloor === "number") ? t.passCostFloor : 8,
+      // 领袖加分估算：true=旧版(Math.max(0, totalScore, 4))；false=模拟真实增量(修复)。
+      // 经 100 场 head-to-head 验证，修复版胜率 46% < 旧版 54%，按项目规则保留旧版为生产默认。
+      leaderGainBuggy: (typeof t.leaderGainBuggy === "boolean") ? t.leaderGainBuggy : true,
+    };
+  }
+
 const ADVANCED_AI = {
   knownStateSearchDepth: 6,
   maxActionsPerNode: 20,
+  // 搜索队列长度上限：限制 BFS 中同时存活的克隆状态数，从而约束内存峰值。
+  // 正常对局 visited 剪枝有效，队列峰值远低于此值、逻辑不受影响；
+  // 仅在 Decoy 等导致 visited 失效、状态指数膨胀时限制队列，避免 OOM 崩溃。
+  maxSearchQueue: 24000,
   scoreGainWeight: 1.35,
   finalScoreGainWeight: 2.2,
   futureResourceWeight: 0.62,
@@ -332,6 +354,32 @@ function isDecoy(card) {
 
 function isMardroeme(card) {
   return hasAbility(card, "Mardroeme") || card.baseName === "破釜沉舟";
+}
+
+// ---- 破釜沉舟「死牌开局即打」策略（默认行为）----
+// 破釜沉舟只转化场上的奋起人物；若双方场上与己方手牌均无奋起，则破釜沉舟为彻底无用的死牌。
+// 轮到自己且对手尚未放弃时，立即把该死牌打出清掉废牌、让对手多打一张，随后按对手出牌做正常决策：
+//  - 无出使（手牌/牌库/弃牌均无 Spy，抽不到奋起）-> 开局直接打。
+//  - 有出使：出使还在手或牌库中时本回合不打，等出使打出后若仍未抽到奋起立即打
+//    （按需求「不需要看济世」，不考虑济世复归弃牌堆奋起）。
+//  - 对手已放弃本回合时返回 null，由常规逻辑去收割该局，避免误打废牌送掉本该拿下的局。
+function mardroemeProactiveDumpDecision(state, playerIndex) {
+  const p = state.players[playerIndex];
+  const card = p.hand.find(item => isMardroeme(item));
+  if (!card) return null;
+  // 己方与对手场上均无奋起、己方手牌也无奋起：破釜沉舟彻底无用
+  // （若对手场上有奋起，打出破釜反而会帮对手把奋起转化成强力单位，故不打）。
+  if (ROWS.some(row => countBerserkers(state, playerIndex, row) > 0)) return null;
+  if (ROWS.some(row => countBerserkers(state, otherIndex(playerIndex), row) > 0)) return null;
+  if (p.hand.some(c => hasAbility(c, "Berserker"))) return null;
+  if (state.players[otherIndex(playerIndex)].passed) return null;
+  const scoutInHand = p.hand.some(c => hasAbility(c, "Spy"));
+  const scoutInDeck = (p.deck || []).some(c => hasAbility(c, "Spy"));
+  const scoutInDiscard = (p.discard || []).some(c => hasAbility(c, "Spy"));
+  // 出使还在手或牌库：本回合不打，等出使打出后再判断
+  if (scoutInHand || scoutInDeck) return null;
+  // 无出使（抽不到奋起）-> 开局立即打出；有出使且已打出(在弃牌堆)且未抽到奋起 -> 立即打出
+  return { action: "play", card, row: bestOwnRow(state, playerIndex) || "melee" };
 }
 
 function cardLabel(card) {
@@ -1930,7 +1978,7 @@ function evaluateAdvancedPass(state, playerIndex) {
   return value;
 }
 
-function evaluateAdvancedPassOptimized(state, playerIndex) {
+function evaluateAdvancedPassOptimized(state, playerIndex, tuning) {
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
   const diff = totalScore(player) - totalScore(opponent);
@@ -1939,11 +1987,12 @@ function evaluateAdvancedPassOptimized(state, playerIndex) {
   if (mustContest && !roundSecuredByDiff(state, playerIndex, diff)) return -800;
   if (state.round >= 3) return roundSecuredByDiff(state, playerIndex, diff) ? 80 : -120;
 
+  const T = tuning || resolvePassTuning();
   const handDelta = player.hand.length - opponent.hand.length;
-  const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / ADVANCED_AI.expectedCatchPerCard);
+  const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / T.expectedCatchPerCard);
   let value = -28 + Math.max(-3, Math.min(3, handDelta)) * 3;
-  if (!mustContest && diff >= 8 && opponentCardsToCatch >= 2) value += 28;
-  if (!mustContest && diff >= ADVANCED_AI.expectedCatchPerCard * 2 && opponent.hand.length > 0) value += 18;
+  if (!mustContest && diff >= T.passLeadMin && opponentCardsToCatch >= T.minCardsToCatch) value += 28;
+  if (!mustContest && diff >= T.unconditionalPassLead && opponent.hand.length > 0) value += 18;
   if (!mustContest && diff < -16 && handDelta <= 0) value += 26;
   if (!mustContest && player.hand.length <= opponent.hand.length && diff < -20) value += 18;
   return value;
@@ -2103,11 +2152,37 @@ function factionActionAdjustment(state, playerIndex, action) {
   return value;
 }
 
-function optimisticReachableDiff(state, playerIndex) {
+// 估算主将技能在本小局能带来的真实净加分（含自我增强与削弱对手），用于乐观可达分差。
+// 通过克隆状态真实模拟主将使用并测量场面分摆动，避免旧逻辑直接用 totalScore(player) 造成的虚高。
+function estimateLeaderGain(state, playerIndex) {
+  if (!canUseLeaderAction(state, playerIndex)) return 0;
+  const clone = cloneAiState(state);
+  clone.current = playerIndex;
+  recalcScores(clone);
+  const beforeMe = totalScore(clone.players[playerIndex]);
+  const beforeOpp = totalScore(clone.players[otherIndex(playerIndex)]);
+  const ok = useLeader(clone, playerIndex, {});
+  if (!ok) return 0;
+  recalcScores(clone);
+  if (clone.over || clone.roundTransition) return 0;
+  const afterMe = totalScore(clone.players[playerIndex]);
+  const afterOpp = totalScore(clone.players[otherIndex(playerIndex)]);
+  const swing = (afterMe - beforeMe) + (beforeOpp - afterOpp);
+  // 单次主将使用的净加分上限，防止异常高估
+  return Math.max(0, Math.min(swing, 20));
+}
+
+function optimisticReachableDiff(state, playerIndex, tuning) {
   const player = state.players[playerIndex];
   const diff = totalScore(player) - totalScore(state.players[otherIndex(playerIndex)]);
   const gains = player.hand.map(card => Math.max(0, estimatePlayGain(state, playerIndex, card)));
-  const leaderGain = canUseLeaderAction(state, playerIndex) ? Math.max(0, totalScore(player), 4) : 0;
+  const T = tuning || resolvePassTuning();
+  let leaderGain;
+  if (T.leaderGainBuggy) {
+    leaderGain = canUseLeaderAction(state, playerIndex) ? Math.max(0, totalScore(player), 4) : 0;
+  } else {
+    leaderGain = estimateLeaderGain(state, playerIndex);
+  }
   return diff + gains.reduce((sum, gain) => sum + gain, 0) + leaderGain;
 }
 
@@ -2182,6 +2257,8 @@ function searchBestWinningSequenceDocumentV2(state, cfg, playerIndex) {
       const key = documentSearchStateKey(next);
       if (visited.has(key) && visited.get(key) <= nextCost) return;
       visited.set(key, nextCost);
+      // 限制同时存活的搜索状态数，避免 Decoy 等导致 visited 剪枝失效时状态指数膨胀撑爆内存
+      if (queue.length + 1 > ADVANCED_AI.maxSearchQueue) return;
       queue.push({ state: next, actions: planActions, resourceCost: nextCost });
     });
   }
@@ -2223,6 +2300,26 @@ function analyzeDocumentTurnV2Legacy(state, cfg, playerIndex = 1) {
   recalcScores(state);
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
+
+  // 破釜沉舟死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的破釜沉舟，
+  // 立即打出清掉废牌（无出使则开局直接打；有出使则等出使打出后再判断）。对手已放弃时
+  // 不打，避免放弃本应拿下的这一局。
+  const proactiveMardroeme = mardroemeProactiveDumpDecision(state, playerIndex);
+  if (proactiveMardroeme) {
+    const diff = totalScore(player) - totalScore(opponent);
+    return {
+      decision: proactiveMardroeme,
+      forcedRuleApplied: "MARDROEME_DEAD_DUMP_OPENING",
+      visibleStateScoreBefore: diff,
+      visibleStateScoreAfter: diff,
+      immediateNetSwing: 0,
+      preservedResourceValue: 0,
+      visibleCounterRisk: 0,
+      overcommitPenalty: 0,
+      alternativeActionsTop3: []
+    };
+  }
+
   const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false })
     .map(action => scoreDocumentActionV2(state, cfg, playerIndex, action))
     .filter(action => action.stats?.ok)
@@ -2245,7 +2342,7 @@ function analyzeDocumentTurnV2Legacy(state, cfg, playerIndex = 1) {
       decision = { action: "pass" };
       forcedRuleApplied = "OPPONENT_PASSED_CONCEDE_ROUND";
     }
-  } else if (!mustContest && optimisticReachableDiff(state, playerIndex) < 1) {
+  } else if (!mustContest && optimisticReachableDiff(state, playerIndex, resolvePassTuning(cfg)) < 1) {
     decision = { action: "pass" };
     forcedRuleApplied = "MATHEMATICALLY_UNREACHABLE";
   } else if (mustContest) {
@@ -2289,6 +2386,26 @@ function analyzeDocumentTurnV2Optimized(state, cfg, playerIndex = 1) {
   recalcScores(state);
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
+
+  // 破釜沉舟死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的破釜沉舟，
+  // 立即打出清掉废牌（无出使则开局直接打；有出使则等出使打出后再判断）。对手已放弃时
+  // 不打，避免放弃本应拿下的这一局。
+  const proactiveMardroeme = mardroemeProactiveDumpDecision(state, playerIndex);
+  if (proactiveMardroeme) {
+    const diff = totalScore(player) - totalScore(opponent);
+    return {
+      decision: proactiveMardroeme,
+      forcedRuleApplied: "MARDROEME_DEAD_DUMP_OPENING",
+      visibleStateScoreBefore: diff,
+      visibleStateScoreAfter: diff,
+      immediateNetSwing: 0,
+      preservedResourceValue: 0,
+      visibleCounterRisk: 0,
+      overcommitPenalty: 0,
+      alternativeActionsTop3: []
+    };
+  }
+
   const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false })
     .map(action => scoreDocumentActionV2(state, cfg, playerIndex, action))
     .filter(action => action.stats?.ok)
@@ -2311,7 +2428,7 @@ function analyzeDocumentTurnV2Optimized(state, cfg, playerIndex = 1) {
       decision = { action: "pass" };
       forcedRuleApplied = "OPPONENT_PASSED_CONCEDE_ROUND";
     }
-  } else if (!mustContest && optimisticReachableDiff(state, playerIndex) < 1) {
+  } else if (!mustContest && optimisticReachableDiff(state, playerIndex, resolvePassTuning(cfg)) < 1) {
     decision = { action: "pass" };
     forcedRuleApplied = "MATHEMATICALLY_UNREACHABLE";
   } else if (mustContest) {
@@ -2319,9 +2436,10 @@ function analyzeDocumentTurnV2Optimized(state, cfg, playerIndex = 1) {
     forcedRuleApplied = "MUST_AVOID_MATCH_LOSS";
   } else {
     const northernPenalty = opponent.faction === "Northern Realms" ? 6 : 0;
-    const passValue = evaluateAdvancedPassOptimized(state, playerIndex) - northernPenalty;
-    const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / ADVANCED_AI.expectedCatchPerCard);
-    if (state.round < 3 && diff >= ADVANCED_AI.expectedCatchPerCard && opponentCardsToCatch >= 2 && opponent.hand.length > 0 && (!best || best.cost > 8 || diff >= ADVANCED_AI.expectedCatchPerCard * 2)) {
+    const T = resolvePassTuning(cfg);
+    const passValue = evaluateAdvancedPassOptimized(state, playerIndex, T) - northernPenalty;
+    const opponentCardsToCatch = Math.ceil(Math.max(0, scoreToSecureRound(state, otherIndex(playerIndex), -diff)) / T.expectedCatchPerCard);
+    if (state.round < 3 && diff >= T.passLeadMin && opponentCardsToCatch >= T.minCardsToCatch && opponent.hand.length > 0 && (!best || best.cost > T.passCostFloor || diff >= T.unconditionalPassLead)) {
       decision = { action: "pass" };
       forcedRuleApplied = "LEAD_REQUIRES_TWO_CARDS_TO_CATCH";
     } else if (best && passValue >= best.score + 20 && cfg.concede) {

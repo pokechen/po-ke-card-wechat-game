@@ -1,0 +1,12 @@
+{
+  "envId": "po-ke-card-d0gg2ewaac3e700c4",
+  "functionRoot": "cloudfunctions",
+  "functions": [
+    {
+      "name": "pvpRoom",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "installDependency": true
+    }
+  ]
+}

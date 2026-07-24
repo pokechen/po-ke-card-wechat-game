@@ -157,11 +157,9 @@ function draw(ctx, view, actions, ui = {}, rank = {}) {
     fillRoundRect(ctx, trackX, thumbY, 3, thumbH, 1.5, "rgba(47,111,87,0.76)");
   }
 
-  const back = { id: "rankBoardBack", x: 18, y: state.bottom, w: (view.width - 46) / 2, h: 40 };
-  const refresh = { id: "rankBoardRefresh", x: back.x + back.w + 10, y: state.bottom, w: back.w, h: 40 };
-  actions.push(back, refresh);
+  const back = { id: "rankBoardBack", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
+  actions.push(back);
   button(ctx, { ...back, label: "返回", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
-  button(ctx, { ...refresh, label: "刷新", fill: "#2f6f57", stroke: "#1d4f3c", size: 13 });
 
   if (rank.publicProfileOpen) drawProfileModal(ctx, view, actions, rank.publicProfile, rank.publicProfileLoading, rank.publicProfileError);
 }
