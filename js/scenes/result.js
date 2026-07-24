@@ -99,7 +99,11 @@ function draw(ctx, view, actions, state) {
   text(ctx, online ? `我方 ${me.factionName} 对 敌方 ${opponent.factionName}` : `${p0.factionName} 对 ${p1.factionName}`, view.width / 2, top + 184, 12, "#775c34", "center");
   const detail = roundResultText(state);
   if (detail) text(ctx, detail, view.width / 2, top + 204, 10, "#775c34", "center");
-  text(ctx, online ? "联网对局已结束，战绩已存入数据库" : "战绩已保存，并会同步到数据库", view.width / 2, top + 222, 11, "#775c34", "center");
+  const rankDelta = state.rankDelta || null;
+  const rankLine = state.ranked
+    ? (state.rankSubmitting ? "排位结算中…" : (state.rankSubmitError || (rankDelta ? `${rankDelta.rankDeltaText || "排位已结算"} · ${rankDelta.after?.display || ""}` : "排位等待结算")))
+    : (online ? "联网对局已结束，战绩已存入数据库" : "战绩已保存，并会同步到数据库");
+  text(ctx, rankLine, view.width / 2, top + 222, 11, state.rankSubmitError ? "#9f3b24" : "#775c34", "center");
   const cards = { id: "viewBattleCards", x: 46, y: top + 256, w: view.width - 92, h: 48 };
   const restart = { id: "restart", x: 46, y: top + 316, w: view.width - 92, h: 48 };
   const home = { id: "home", x: 46, y: top + 376, w: view.width - 92, h: 48 };

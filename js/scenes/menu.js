@@ -267,16 +267,21 @@ function draw(ctx, view, actions, ui = {}) {
 
   drawSummaryCard(ctx, view, actions, layout.summaryY, layout.summaryH, save, settings, latest, ui);
 
-  const labels = [
-    ["start", "单机对战", "#2f6f57"],
-    ["pvp", "联网对战", "#8f3c1f"],
-    ["settings", "我的牌组", "#8d6840"],
-    ["rules", "使用说明", "#7a5a95"]
+  const rows = [
+    [["start", "单机对战", "#2f6f57", view.width - 92]],
+    [["pvp", "联网对战", "#8f3c1f", view.width - 92]],
+    [["rank", "排位赛", "#315e59", view.width - 154], ["rankLeaderboard", "榜", "#b47a2c", 52]],
+    [["settings", "我的牌组", "#8d6840", view.width - 92]],
+    [["rules", "使用说明", "#7a5a95", view.width - 92]]
   ];
-  labels.forEach((item, index) => {
-    const rect = { id: item[0], x: 46, y: layout.buttonY0 + index * layout.gap, w: view.width - 92, h: layout.buttonH };
-    actions.push(rect);
-    button(ctx, { ...rect, label: item[1], fill: item[2], stroke: "#4b3d2d", size: 15 });
+  rows.forEach((row, index) => {
+    let x = 46;
+    row.forEach(item => {
+      const rect = { id: item[0], x, y: layout.buttonY0 + index * layout.gap, w: item[3], h: layout.buttonH };
+      actions.push(rect);
+      button(ctx, { ...rect, label: item[1], fill: item[2], stroke: "#4b3d2d", size: item[0] === "rankLeaderboard" ? 14 : 15 });
+      x += item[3] + 10;
+    });
   });
 }
 

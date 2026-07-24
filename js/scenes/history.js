@@ -19,10 +19,12 @@ function formatTime(ts) {
 const RESULT_STYLES = {
   win: { label: "胜利", color: "#2f6f57", fill: "#f0faf3", tagFill: "#2f6f57", streak: "连胜" },
   loss: { label: "失败", color: "#9f3b24", fill: "#fff0ea", tagFill: "#9f3b24", streak: "连败" },
-  draw: { label: "平局", color: "#6b6b5f", fill: "#f6f2ea", tagFill: "#6b6b5f" }
+  draw: { label: "平局", color: "#6b6b5f", fill: "#f6f2ea", tagFill: "#6b6b5f" },
+  anomaly: { label: "异常", color: "#8d6840", fill: "#fff7e8", tagFill: "#8d6840" }
 };
 
 function resultType(item) {
+  if (item.rankedAnomaly) return "anomaly";
   if (item.winner === 0) return "win";
   if (item.winner == null) return "draw";
   return "loss";
@@ -253,7 +255,8 @@ function draw(ctx, view, actions, ui = {}) {
     const oppSuffix = isOnline ? "好友对战" : (DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通");
     const oppName = isOnline ? "好友" : "对手";
     wrapText(ctx, `${oppName}·${deckModeLabel(item.aiDeckMode)} ${item.aiFaction || "系统"} · ${short(item.aiLeader || "系统主将", 8)} · ${oppSuffix}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
-    wrapText(ctx, roundDetail(item), textX, y + 80, textW, 13, 1, 10, "#6f5a3a");
+    const detailText = item.ranked ? `${item.rankDeltaText || "排位"} · ${roundDetail(item)}` : roundDetail(item);
+    wrapText(ctx, detailText, textX, y + 80, textW, 13, 1, 10, item.rankedAnomaly ? "#8d6840" : "#6f5a3a");
     const morale = Array.isArray(item.morale) ? item.morale : moraleAfterRoundResults(item.roundResults);
     const moraleX = view.width - 58;
     text(ctx, "军心", moraleX + 8, y + 34, 10, "#8a6132", "center");

@@ -26,6 +26,8 @@ const settingsScene = require("./js/scenes/settings");
 const deckBuilderScene = require("./js/scenes/deckBuilder");
 const historyScene = require("./js/scenes/history");
 const adminStatsScene = require("./js/scenes/adminStats");
+const rankSetupScene = require("./js/scenes/rankSetup");
+const rankLeaderboardScene = require("./js/scenes/rankLeaderboard");
 const battleScene = require("./js/scenes/battleScene");
 const { sortedHandCards } = battleScene;
 const resultScene = require("./js/scenes/result");
@@ -33,6 +35,7 @@ const battleCardsScene = require("./js/scenes/battleCards");
 const pvpRoomScene = require("./js/scenes/pvpRoom");
 const pvpSetupScene = require("./js/scenes/pvpSetup");
 const pvpClient = require("./js/core/pvpClient");
+const rankCore = require("./js/core/rank");
 const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, localMatchRecords, removeLocalMatchRecord, setRecordMatchCloudHook, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
 const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue, allCards } = require("./js/core/cards");
 const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
@@ -48,6 +51,23 @@ const app = {
   recentPlayTimerSeq: 0,
   roundTransitionTimer: null,
   roundTransitionTimerSeq: 0,
+  rank: {
+    profile: null,
+    rules: null,
+    nextTier: null,
+    currentMatch: null,
+    resultDelta: null,
+    leaderboard: [],
+    publicProfile: null,
+    publicProfileOpen: false,
+    publicProfileLoading: false,
+    publicProfileError: "",
+    loading: false,
+    starting: false,
+    submitting: false,
+    leaderboardLoading: false,
+    error: ""
+  },
   pvp: {
     roomId: "",
     pendingRoomId: "",
@@ -118,6 +138,7 @@ const app = {
     adminStatsLoading: false,
     adminStatsError: "",
     adminStatsScroll: 0,
+    rankLeaderboardScroll: 0,
     pageTransition: null,
     detailSwipe: null
   }
@@ -956,6 +977,7 @@ function setScene(scene) {
       if (app.scene === "menu") promptProfileIfNeeded(profileNeedsNickname());
     });
   }
+  if (scene === "result") setTimeout(submitRankResultIfNeeded, 0);
   if (scene === "menu" || scene === "history") refreshCloudMatchHistory(scene === "history");
   render();
 }
@@ -983,6 +1005,13 @@ function startMatch(optionsPatch = {}) {
   clearRecentPlayTimer();
   const settings = { ...loadSettings(), ...optionsPatch };
   app.match = createMatch(settings);
+  if (optionsPatch.ranked) {
+    app.match.ranked = true;
+    app.match.rankMatchId = optionsPatch.rankMatchId || "";
+    app.match.rankStartedAt = Date.now();
+    app.match.rankRules = app.rank.rules || null;
+    app.match.rankProfileBefore = app.rank.profile || null;
+  }
   app.ui.showCardGuide = !loadSave().finishedTutorial;
   openMulliganGuideDetail();
   setScene("battle");
@@ -994,6 +1023,8 @@ function render() {
   if (app.scene === "menu" && app.ui.profileSheetOpen) drawProfileSheet(ctx, view, app.actions);
   if (app.scene === "pvpSetup") pvpSetupScene.draw(ctx, view, app.actions, app.ui, app.pvp);
   if (app.scene === "pvpRoom") pvpRoomScene.draw(ctx, view, app.actions, app.pvp, app.ui);
+  if (app.scene === "rankSetup") rankSetupScene.draw(ctx, view, app.actions, app.ui, app.rank);
+  if (app.scene === "rankLeaderboard") rankLeaderboardScene.draw(ctx, view, app.actions, app.ui, app.rank);
   if (app.scene === "matchSetup") matchSetupScene.draw(ctx, view, app.actions, app.ui);
   if (app.scene === "rules") rulesScene.draw(ctx, view, app.actions);
   if (app.scene === "settings") settingsScene.draw(ctx, view, app.actions, app.ui);
@@ -3051,6 +3082,8 @@ function handleMenu(action) {
     return;
   }
   if (action.id === "pvp") return enterPvpSetup();
+  if (action.id === "rank") return openRankSetup();
+  if (action.id === "rankLeaderboard") return openRankLeaderboard();
   if (action.id === "rules") setScene("rules");
 }
 
@@ -3414,6 +3447,193 @@ function handleHistory(action) {
   render();
 }
 
+function currentRankPlayerSetup() {
+  const settings = loadSettings();
+  const rules = app.rank.rules || {};
+  if (rules.forcePlayerRandom) return { faction: "random", leaderId: "random", deckMode: "auto", customDeckIds: [] };
+  const faction = settings.humanLineupMode === "random" ? "random" : settings.humanFaction;
+  if (faction === "random") return { faction: "random", leaderId: "random", deckMode: "auto", customDeckIds: [] };
+  const ids = getActiveCustomDeckIds(settings, faction);
+  const status = deckStatus(ids, faction);
+  const deckMode = settings.customDeckEnabled && status.valid ? "custom" : "auto";
+  const leader = leadersFor(faction).find(card => card.id === settings.humanLeaderIds?.[faction]) || leadersFor(faction)[0] || null;
+  return { faction, leaderId: leader?.id || "", deckMode, customDeckIds: deckMode === "custom" ? status.ids : [] };
+}
+
+function resetRankTransient() {
+  app.rank.currentMatch = null;
+  app.rank.resultDelta = null;
+  app.rank.submitting = false;
+}
+
+function loadRankProfile(force = false) {
+  if (app.rank.loading && !force) return;
+  app.rank.loading = true;
+  app.rank.error = "";
+  render();
+  pvpClient.getRankProfile().then(result => {
+    app.rank.profile = result.profile || null;
+    app.rank.rules = result.rules || null;
+    app.rank.nextTier = result.nextTier || null;
+    app.rank.loading = false;
+    render();
+  }).catch(err => {
+    app.rank.loading = false;
+    app.rank.error = err.message || "排位资料加载失败";
+    render();
+  });
+}
+
+function openRankSetup() {
+  resetRankTransient();
+  setScene("rankSetup");
+  loadRankProfile(true);
+}
+
+function loadRankLeaderboard(force = false) {
+  if (app.rank.leaderboardLoading && !force) return;
+  app.rank.leaderboardLoading = true;
+  app.rank.loading = true;
+  app.rank.error = "";
+  render();
+  pvpClient.getRankLeaderboard(50).then(result => {
+    app.rank.leaderboard = Array.isArray(result.leaderboard) ? result.leaderboard : [];
+    app.rank.leaderboardLoading = false;
+    app.rank.loading = false;
+    app.ui.rankLeaderboardScroll = 0;
+    render();
+  }).catch(err => {
+    app.rank.leaderboardLoading = false;
+    app.rank.loading = false;
+    const message = err.message || "排行榜加载失败";
+    if (err.code === "UNKNOWN_ACTION" || err.code === "UNKNOWN_REQUEST" || message.includes("未知请求")) {
+      app.rank.leaderboard = [];
+      app.rank.error = "";
+    } else {
+      app.rank.error = message;
+    }
+    render();
+  });
+}
+
+function openRankLeaderboard() {
+  setScene("rankLeaderboard");
+  loadRankLeaderboard(true);
+}
+
+function startRankMatch() {
+  if (app.rank.starting) return;
+  app.rank.starting = true;
+  app.rank.error = "";
+  render();
+  pvpClient.startRankMatch(currentRankPlayerSetup()).then(result => {
+    app.rank.starting = false;
+    app.rank.currentMatch = result;
+    app.rank.profile = result.profile || app.rank.profile;
+    app.rank.rules = result.rules || app.rank.rules;
+    const options = {
+      ...(result.matchOptions || {}),
+      ranked: true,
+      rankMatchId: result.rankMatchId,
+      suppressRecording: true
+    };
+    startMatch(options);
+    if (app.match) app.match.suppressRecording = true;
+  }).catch(err => {
+    app.rank.starting = false;
+    app.rank.error = err.message || "创建排位失败";
+    toast(app.rank.error);
+    render();
+  });
+}
+
+function rankFinalSummary(match) {
+  const p0 = match.players?.[0] || {};
+  const p1 = match.players?.[1] || {};
+  return {
+    winner: match.winner,
+    result: rankCore.resultFromWinner(match.winner),
+    roundsWon: p0.roundsWon || 0,
+    roundsLost: p1.roundsWon || 0,
+    rounds: [p0.roundsWon || 0, p1.roundsWon || 0],
+    scores: match.finalScores || [0, 0],
+    morale: Array.isArray(match.morale) ? match.morale : [],
+    roundResults: Array.isArray(match.roundResults) ? match.roundResults.slice() : [],
+    humanFaction: p0.factionName || "",
+    aiFaction: p1.factionName || "",
+    humanLeader: p0.leader ? displayName(p0.leader) : "",
+    aiLeader: p1.leader ? displayName(p1.leader) : "",
+    humanLeaderId: p0.leader?.id || "",
+    aiLeaderId: p1.leader?.id || "",
+    humanDeckMode: p0.deckMode || "auto",
+    aiDeckMode: p1.deckMode || "auto",
+    endReason: match.endReason || "normal"
+  };
+}
+
+function submitRankResultIfNeeded() {
+  const match = app.match;
+  if (!match || !match.ranked || !match.rankMatchId || !match.over || match.rankSubmitted || match.rankSubmitting) return;
+  match.rankSubmitting = true;
+  app.rank.submitting = true;
+  render();
+  const durationMs = Math.max(0, Date.now() - (match.rankStartedAt || Date.now()));
+  pvpClient.finishRankMatch(match.rankMatchId, rankFinalSummary(match), "wechat-game", durationMs).then(result => {
+    match.rankSubmitted = true;
+    match.rankSubmitting = false;
+    match.rankDelta = result.delta || null;
+    match.rankSubmitError = "";
+    app.rank.submitting = false;
+    app.rank.profile = result.profile || app.rank.profile;
+    app.rank.resultDelta = result.delta || null;
+    refreshCloudMatchHistory(false);
+    render();
+  }).catch(err => {
+    match.rankSubmitting = false;
+    match.rankSubmitError = err.message || "排位结算失败";
+    app.rank.submitting = false;
+    render();
+  });
+}
+
+function openRankPublicProfile(userId) {
+  if (!userId) return;
+  app.rank.publicProfileOpen = true;
+  app.rank.publicProfileLoading = true;
+  app.rank.publicProfileError = "";
+  app.rank.publicProfile = null;
+  render();
+  pvpClient.getRankPublicProfile(userId).then(result => {
+    app.rank.publicProfileLoading = false;
+    app.rank.publicProfile = result.profile || null;
+    render();
+  }).catch(err => {
+    app.rank.publicProfileLoading = false;
+    app.rank.publicProfileError = err.message || "资料加载失败";
+    render();
+  });
+}
+
+function handleRankSetup(action) {
+  if (action.id === "rankBack") return setScene("menu");
+  if (action.id === "rankLeaderboard") return openRankLeaderboard();
+  if (action.id === "rankRefreshProfile") return loadRankProfile(true);
+  if (action.id === "rankEditSetup") return setScene("matchSetup");
+  if (action.id === "rankStart") return startRankMatch();
+}
+
+function handleRankLeaderboard(action) {
+  if (action.id === "rankPublicProfilePanel") return render();
+  if (action.id === "rankClosePublicProfile") {
+    app.rank.publicProfileOpen = false;
+    return render();
+  }
+  if (app.rank.publicProfileOpen) return render();
+  if (action.id === "rankBoardBack") return setScene("menu");
+  if (action.id === "rankBoardRefresh") return loadRankLeaderboard(true);
+  if (action.id === "rankPublicProfile") return openRankPublicProfile(action.userId);
+}
+
 function updatePvpRoomRules(patch) {
   if (!app.pvp.roomId || app.pvp.submitting) return;
   const rules = normalizePvpRules({ ...(app.pvp.room?.rules || currentRulesFromSettings()), ...patch });
@@ -3769,6 +3989,8 @@ function handleAction(action) {
   if (app.scene === "menu") return handleMenu(action);
   if (app.scene === "pvpSetup") return handlePvpSetup(action);
   if (app.scene === "pvpRoom") return handlePvpRoom(action);
+  if (app.scene === "rankSetup") return handleRankSetup(action);
+  if (app.scene === "rankLeaderboard") return handleRankLeaderboard(action);
   if (app.scene === "matchSetup") return handleMatchSetup(action);
   if (app.scene === "rules") return action.id === "back" ? setScene("menu") : null;
   if (app.scene === "settings") return handleSettings(action);
@@ -3790,6 +4012,7 @@ function handleAction(action) {
     }
     if (action.id === "restart") {
       if (isOnlineMatch()) return returnPvpRoom();
+      if (app.match?.ranked) return startRankMatch();
       return startMatch();
     }
     if (action.id === "home") {
@@ -3895,6 +4118,26 @@ function scrollAdminStatsBy(deltaY) {
   const next = clampAdminStatsScroll(before - deltaY);
   if (Math.abs(next - before) > 0.5) {
     app.ui.adminStatsScroll = next;
+    render();
+  }
+  return true;
+}
+
+function rankLeaderboardScrollBounds() {
+  return rankLeaderboardScene.scrollBounds(view, app.rank);
+}
+
+function clampRankLeaderboardScroll(value) {
+  const { maxScroll } = rankLeaderboardScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollRankLeaderboardBy(deltaY) {
+  if (app.scene !== "rankLeaderboard" || app.rank.publicProfileOpen) return false;
+  const before = app.ui.rankLeaderboardScroll || 0;
+  const next = clampRankLeaderboardScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.5) {
+    app.ui.rankLeaderboardScroll = next;
     render();
   }
   return true;
@@ -4554,6 +4797,24 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
       }
     }
 
+    if (app.scene === "rankLeaderboard") {
+      const bounds = rankLeaderboardScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.rankLeaderboardScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.rankLeaderboardScrolling = true;
+      }
+      if (touchStartState.rankLeaderboardScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        scrollRankLeaderboardBy(point.y - last.y);
+        touchStartState.rankLeaderboardScrolled = true;
+        touchStartState.lastPoint = point;
+        return;
+      }
+    }
+
     if (app.scene === "battle" && app.match && app.ui.battleLogHistoryOpen && !app.ui.battleCardDetailId && !app.ui.battleCardDetailUid) {
       const bounds = battleLogHistoryScrollBounds();
       const start = touchStartState.point;
@@ -4736,6 +4997,7 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       startBattleCardsPageScrollInertia((state.battleCardsPageScrollVelocity || 0) * releaseFactor);
       return;
     }
+    if (state && state.rankLeaderboardScrolled) return;
     if (state && state.historyScrolled) {
       const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
       const releaseFactor = Math.max(0, 1 - idleMs / 120);

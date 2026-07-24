@@ -38,10 +38,18 @@ function recentMatchesPanelHeight(items) {
   return 46 + items.reduce((sum, item) => sum + recentMatchRowHeight(item), 0) + 12;
 }
 
+function rankAnomalyPanelHeight(stats) {
+  const data = stats?.rankAnomalyStats;
+  if (!data || !data.total) return 0;
+  const recent = Array.isArray(data.recent) ? data.recent : [];
+  return 54 + Math.max(1, recent.length) * 44 + 16;
+}
+
 function contentHeight(stats) {
   const topPlayersH = listPanelHeight(playerItems(stats).length, 52, 52);
   const recentMatchesH = recentMatchesPanelHeight(recentItems(stats));
-  return 1018 + 14 + topPlayersH + 14 + recentMatchesH + 24;
+  const rankAnomalyH = rankAnomalyPanelHeight(stats);
+  return 1018 + 14 + topPlayersH + 14 + recentMatchesH + (rankAnomalyH ? 14 + rankAnomalyH : 0) + 24;
 }
 
 function scrollBounds(view, stats) {
@@ -337,6 +345,39 @@ function drawRecentMatches(ctx, x, y, w, stats) {
   return height;
 }
 
+function drawRankAnomalies(ctx, x, y, w, stats) {
+  const data = stats?.rankAnomalyStats;
+  const height = rankAnomalyPanelHeight(stats);
+  if (!height) return 0;
+  panel(ctx, x, y, w, height, "排位异常数据");
+  text(ctx, `异常 ${data.total || 0} · 可疑 ${data.suspicious || 0} · 无效 ${data.invalid || 0}`, x + w - 14, y + 20, 10, "#9f3b24", "right");
+  const recent = Array.isArray(data.recent) ? data.recent : [];
+  if (!recent.length) {
+    text(ctx, "暂无异常明细", x + w / 2, y + 76, 12, MUTED, "center");
+    return height;
+  }
+  recent.forEach((item, index) => {
+    const rowY = y + 42 + index * 44;
+    if (index) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(119,92,52,0.14)";
+      ctx.beginPath();
+      ctx.moveTo(x + 14, rowY - 5);
+      ctx.lineTo(x + w - 14, rowY - 5);
+      ctx.stroke();
+      ctx.restore();
+    }
+    const player = item.player || { nickName: "匿名玩家", avatarUrl: "" };
+    drawPlayerAvatar(ctx, player, x + 14, rowY, 30);
+    const nameX = x + 52;
+    text(ctx, fitText(ctx, `${player.nickName || "匿名玩家"} · ${item.tier || "排位"}`, w - 140, 12), nameX, rowY + 12, 12, INK);
+    text(ctx, formatMatchTime(item.time), x + w - 14, rowY + 12, 10, MUTED, "right");
+    const flags = Array.isArray(item.riskFlags) && item.riskFlags.length ? item.riskFlags.join("、") : item.validationStatus;
+    text(ctx, fitText(ctx, flags, w - 82, 10), nameX, rowY + 31, 10, "#9f3b24");
+  });
+  return height;
+}
+
 function drawDashboard(ctx, view, actions, ui, state) {
   const stats = ui.adminStats || {};
   const users = stats.users || {};
@@ -385,7 +426,9 @@ function drawDashboard(ctx, view, actions, ui, state) {
 
   const playerPanelY = y + 1018;
   const playerPanelH = drawActivePlayers(ctx, x, playerPanelY, w, stats);
-  drawRecentMatches(ctx, x, playerPanelY + playerPanelH + 14, w, stats);
+  const recentPanelY = playerPanelY + playerPanelH + 14;
+  const recentPanelH = drawRecentMatches(ctx, x, recentPanelY, w, stats);
+  drawRankAnomalies(ctx, x, recentPanelY + recentPanelH + 14, w, stats);
 }
 
 function draw(ctx, view, actions, ui = {}) {

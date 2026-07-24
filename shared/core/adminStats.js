@@ -204,7 +204,35 @@ function isPreferredRecentDocument(candidate, current) {
   return String(candidate.document._id || "") < String(current.document._id || "");
 }
 
-function buildAdminStats({ users = [], matches = [], activities = [], now = Date.now(), trendDays = 30 } = {}) {
+function rankAnomalyStats(rankMatches = [], usersByOpenid = new Map()) {
+  const abnormal = (Array.isArray(rankMatches) ? rankMatches : []).filter(item => ["suspicious", "invalid"].includes(String(item?.validationStatus || "")) || item?.status === "abnormal");
+  if (!abnormal.length) return null;
+  const flags = {};
+  abnormal.forEach(item => {
+    const list = Array.isArray(item.riskFlags) && item.riskFlags.length ? item.riskFlags : [item.validationStatus || "UNKNOWN"];
+    list.forEach(flag => { flags[flag] = (flags[flag] || 0) + 1; });
+  });
+  return {
+    total: abnormal.length,
+    suspicious: abnormal.filter(item => item.validationStatus === "suspicious").length,
+    invalid: abnormal.filter(item => item.validationStatus === "invalid").length,
+    flags: Object.keys(flags).sort((a, b) => flags[b] - flags[a]).map(flag => ({ flag, count: flags[flag] })),
+    recent: abnormal
+      .slice()
+      .sort((a, b) => (b.finishedAt || b.updatedAt || b.createdAt || 0) - (a.finishedAt || a.updatedAt || a.createdAt || 0))
+      .slice(0, 10)
+      .map(item => ({
+        time: item.finishedAt || item.updatedAt || item.createdAt || 0,
+        player: playerProfile(usersByOpenid.get(String(item.openid || ""))),
+        tier: safeText(item.tierBefore || item.tierAfter, 12),
+        validationStatus: safeText(item.validationStatus, 20),
+        riskFlags: Array.isArray(item.riskFlags) ? item.riskFlags.slice(0, 6).map(flag => safeText(flag, 40)) : [],
+        settled: item.validationStatus === "valid" && item.status === "finished"
+      }))
+  };
+}
+
+function buildAdminStats({ users = [], matches = [], activities = [], rankMatches = [], now = Date.now(), trendDays = 30 } = {}) {
   const userDayCounts = {};
   const usersByOpenid = new Map();
   const activePlayerOpenids = new Set();
@@ -259,6 +287,7 @@ function buildAdminStats({ users = [], matches = [], activities = [], now = Date
 
   matches.forEach((document, index) => {
     const record = matchRecord(document);
+    if (record.rankedAnomaly) return;
     const mode = record.mode === "online" ? "online" : "ai";
     const onlineTrusted = mode !== "online" || document.source === "pvpRoom";
     if (!onlineTrusted) return;
@@ -451,7 +480,8 @@ function buildAdminStats({ users = [], matches = [], activities = [], now = Date
     topPlayers,
     recent: recentRecords,
     playerBattles: { windowDays: PLAYER_WINDOW_DAYS, items: activeTop },
-    recentMatches: { limit: RECENT_MATCH_LIMIT, items: recentItems }
+    recentMatches: { limit: RECENT_MATCH_LIMIT, items: recentItems },
+    rankAnomalyStats: rankAnomalyStats(rankMatches, usersByOpenid)
   };
 }
 

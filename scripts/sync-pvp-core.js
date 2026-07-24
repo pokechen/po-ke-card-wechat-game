@@ -8,6 +8,7 @@ const SHARED_FILES = [
   ["shared/core/cards.js", "cloudfunctions/pvpRoom/shared/core/cards.js"],
   ["shared/core/storage.js", "cloudfunctions/pvpRoom/shared/core/storage.js"],
   ["shared/core/adminStats.js", "cloudfunctions/pvpRoom/shared/core/adminStats.js"],
+  ["shared/core/rank.js", "cloudfunctions/pvpRoom/shared/core/rank.js"],
   ["shared/data/zhangyu_cards.js", "cloudfunctions/pvpRoom/shared/data/zhangyu_cards.js"]
 ];
 
@@ -15,10 +16,12 @@ const WRAPPERS = [
   ["js/core/battle.js", "module.exports = require(\"../../shared/core/battle\");\n"],
   ["js/core/cards.js", "module.exports = require(\"../../shared/core/cards\");\n"],
   ["js/core/storage.js", "module.exports = require(\"../../shared/core/storage\");\n"],
+  ["js/core/rank.js", "module.exports = require(\"../../shared/core/rank\");\n"],
   ["js/data/zhangyu_cards.js", "module.exports = require(\"../../shared/data/zhangyu_cards\");\n"],
   ["cloudfunctions/pvpRoom/js/core/battle.js", "module.exports = require(\"../../shared/core/battle\");\n"],
   ["cloudfunctions/pvpRoom/js/core/cards.js", "module.exports = require(\"../../shared/core/cards\");\n"],
   ["cloudfunctions/pvpRoom/js/core/storage.js", "module.exports = require(\"../../shared/core/storage\");\n"],
+  ["cloudfunctions/pvpRoom/js/core/rank.js", "module.exports = require(\"../../shared/core/rank\");\n"],
   ["cloudfunctions/pvpRoom/js/data/zhangyu_cards.js", "module.exports = require(\"../../shared/data/zhangyu_cards\");\n"]
 ];
 

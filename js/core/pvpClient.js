@@ -260,6 +260,26 @@ function getAdminStats() {
   return callRoom("getAdminStats");
 }
 
+function getRankProfile() {
+  return callRoom("getRankProfile");
+}
+
+function startRankMatch(playerSetup) {
+  return callRoom("startRankMatch", { playerSetup });
+}
+
+function finishRankMatch(rankMatchId, finalStateSummary, clientVersion, durationMs) {
+  return callRoom("finishRankMatch", { rankMatchId, finalStateSummary, clientVersion, durationMs });
+}
+
+function getRankLeaderboard(limit = 50) {
+  return callRoom("getRankLeaderboard", { limit });
+}
+
+function getRankPublicProfile(userId) {
+  return callRoom("getRankPublicProfile", { userId });
+}
+
 function saveWechatProfile(userInfo, userInfoResult) {
   return callRoom("saveWechatProfile", { userInfo, userInfoResult });
 }
@@ -398,6 +418,11 @@ module.exports = {
   getCurrentUser,
   getAdminStatus,
   getAdminStats,
+  getRankProfile,
+  startRankMatch,
+  finishRankMatch,
+  getRankLeaderboard,
+  getRankPublicProfile,
   saveWechatProfile,
   updateProfile,
   uploadAvatarFile,

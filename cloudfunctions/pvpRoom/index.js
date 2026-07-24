@@ -4,6 +4,7 @@ const https = require("https");
 let redisModule = null;
 try { redisModule = require("redis"); } catch (err) {}
 const battle = require("./js/core/battle");
+const rankCore = require("./js/core/rank");
 const { FACTION_KEYS, deckStatus } = require("./js/core/cards");
 const { buildAdminStats, dayKey } = require("./shared/core/adminStats");
 
@@ -17,6 +18,8 @@ const USER_TOKENS = "user_tokens";
 const MATCH_HISTORY = "match_history";
 const ADMIN_OPENIDS = "admin_openids";
 const DAILY_USER_ACTIVITY = "daily_user_activity";
+const RANK_PROFILES = "rank_profiles";
+const RANK_MATCHES = "rank_matches";
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TOKEN_TTL_MS = TOKEN_TTL_SECONDS * 1000;
@@ -75,7 +78,9 @@ const REQUIRED_COLLECTIONS = [
   USER_TOKENS,
   MATCH_HISTORY,
   ADMIN_OPENIDS,
-  DAILY_USER_ACTIVITY
+  DAILY_USER_ACTIVITY,
+  RANK_PROFILES,
+  RANK_MATCHES
 ];
 let collectionsEnsured = false;
 async function ensureCollections() {
@@ -370,7 +375,14 @@ function sanitizeMatchRecord(input = {}) {
     mode: source.mode === "online" ? "online" : "ai",
     endReason: safeText(source.endReason || "normal", 24),
     roomId: normalizeRoomId(source.roomId) || "",
-    matchId: safeText(source.matchId, 80)
+    matchId: safeText(source.matchId, 80),
+    ranked: !!source.ranked,
+    rankedAnomaly: !!source.rankedAnomaly,
+    rankMatchId: safeText(source.rankMatchId, 80),
+    rankDisplay: safeText(source.rankDisplay, 40),
+    rankDeltaText: safeText(source.rankDeltaText, 80),
+    validationStatus: safeText(source.validationStatus, 20),
+    riskFlags: safeArray(source.riskFlags).slice(0, 12).map(flag => safeText(flag, 40)).filter(Boolean)
   };
   record.recordKey = matchRecordKey({ ...source, ...record });
   record.syncState = "synced";
@@ -517,6 +529,358 @@ async function listMatchHistory(event, openid) {
     .get();
   const history = safeArray(res.data).map(doc => ({ ...(doc.record || {}), cloudId: doc._id, syncState: "synced" }));
   return ok({ history });
+}
+
+function rankPublicUserId(openid) {
+  return sha1(`rank:${rankCore.SEASON_ID}:${openid}:public`);
+}
+
+async function userPublicProfile(openid) {
+  try {
+    const res = await db.collection(USERS).doc(openid).get();
+    const user = res.data || null;
+    return displayUser(user || {});
+  } catch (err) {
+    return { nickName: "匿名玩家", avatarUrl: "" };
+  }
+}
+
+function normalizeRankProfileDoc(openid, source = {}) {
+  const view = rankCore.profileView(source || {});
+  const totalMatches = Math.max(0, safeNumber(source.totalMatches, 0));
+  const wins = Math.max(0, safeNumber(source.wins, 0));
+  const losses = Math.max(0, safeNumber(source.losses, 0));
+  const draws = Math.max(0, safeNumber(source.draws, 0));
+  return {
+    openid,
+    publicUserId: source.publicUserId || rankPublicUserId(openid),
+    seasonId: rankCore.SEASON_ID,
+    totalPower: view.totalPower,
+    tierPower: view.tierPower,
+    prestige: view.prestige,
+    prestigeCap: rankCore.PRESTIGE_CAP,
+    peakPower: view.peakPower,
+    totalMatches,
+    wins,
+    losses,
+    draws,
+    winRate: totalMatches ? Number((wins * 100 / totalMatches).toFixed(1)) : 0,
+    currentTier: view.currentTier,
+    currentTierId: view.currentTierId,
+    publicProfile: source.publicProfile || { nickName: "匿名玩家", avatarUrl: "" },
+    lastMatchAt: safeNumber(source.lastMatchAt, 0),
+    createdAt: safeNumber(source.createdAt, now()),
+    updatedAt: safeNumber(source.updatedAt, now())
+  };
+}
+
+async function getRankProfileDoc(openid, createIfMissing = true) {
+  let existing = null;
+  try {
+    const res = await db.collection(RANK_PROFILES).doc(openid).get();
+    existing = res.data || null;
+  } catch (err) {}
+  const publicProfile = await userPublicProfile(openid);
+  const profile = normalizeRankProfileDoc(openid, {
+    ...(existing || {}),
+    publicUserId: existing?.publicUserId || rankPublicUserId(openid),
+    publicProfile,
+    createdAt: existing?.createdAt || now(),
+    updatedAt: now()
+  });
+  if (createIfMissing || existing) {
+    await db.collection(RANK_PROFILES).doc(openid).set({ data: profile });
+  }
+  return profile;
+}
+
+function publicRankPayload(profile) {
+  return rankCore.publicProfile(profile);
+}
+
+async function getRankProfile(event, openid) {
+  const profile = await getRankProfileDoc(openid, true);
+  const view = rankCore.profileView(profile);
+  return ok({ profile: publicRankPayload(profile), tier: view.tier, nextTier: view.nextTier, rules: rankRulesForProfile(profile) });
+}
+
+function rankRulesForProfile(profile = {}) {
+  const tier = rankCore.profileView(profile).tier;
+  return {
+    tierId: tier.id,
+    tierName: tier.name,
+    aiDifficulty: tier.aiDifficulty,
+    forcePlayerRandom: !!tier.forcePlayerRandom,
+    allowCustomDeck: !!tier.allowCustomDeck,
+    prestigeEnabled: !!tier.prestigeEnabled,
+    prestigeCap: rankCore.PRESTIGE_CAP,
+    prestigeProtectCost: rankCore.PRESTIGE_PROTECT_COST
+  };
+}
+
+function safeFaction(value, fallback = "random") {
+  const raw = String(value || "");
+  if (raw === "random") return "random";
+  return FACTION_KEYS.includes(raw) ? raw : fallback;
+}
+
+function sanitizeRankPlayerSetup(input = {}, rules = {}) {
+  if (rules.forcePlayerRandom) {
+    return { faction: "random", leaderId: "random", deckMode: "auto", customDeckIds: [] };
+  }
+  const faction = safeFaction(input.faction || input.humanFaction, "random");
+  const customDeckIds = safeArray(input.customDeckIds || input.humanCustomDeckIds).map(id => safeText(id, 80)).filter(Boolean).slice(0, 40);
+  const customValid = faction !== "random" && customDeckIds.length && deckStatus(customDeckIds, faction).valid;
+  const deckMode = input.deckMode === "custom" && rules.allowCustomDeck && customValid ? "custom" : "auto";
+  return {
+    faction,
+    leaderId: faction === "random" ? "random" : safeText(input.leaderId || input.humanLeaderId || "", 80),
+    deckMode,
+    customDeckIds: deckMode === "custom" ? customDeckIds : []
+  };
+}
+
+function rankMatchOptions(setup, rules) {
+  return {
+    mode: "ai",
+    humanFaction: setup.faction,
+    humanLeaderId: setup.leaderId,
+    customDeckEnabled: setup.deckMode === "custom",
+    humanCustomDeckIds: setup.deckMode === "custom" ? setup.customDeckIds : [],
+    aiFaction: "random",
+    aiLeaderId: "random",
+    difficulty: rules.aiDifficulty
+  };
+}
+
+async function startRankMatch(event, openid) {
+  const profile = await getRankProfileDoc(openid, true);
+  const rules = rankRulesForProfile(profile);
+  const setup = sanitizeRankPlayerSetup(event.playerSetup || {}, rules);
+  const time = now();
+  const rankMatchId = `rank-${time}-${crypto.randomBytes(4).toString("hex")}`;
+  const match = {
+    rankMatchId,
+    openid,
+    seasonId: rankCore.SEASON_ID,
+    status: "created",
+    validationStatus: "pending",
+    riskFlags: [],
+    tierBefore: profile.currentTier,
+    totalPowerBefore: profile.totalPower,
+    tierPowerBefore: profile.tierPower,
+    prestigeBefore: profile.prestige,
+    playerSetup: setup,
+    aiSetup: { faction: "random", leaderId: "random", difficulty: rules.aiDifficulty, deckMode: "auto" },
+    ruleSnapshot: rules,
+    createdAt: time,
+    expireAt: time + ROOM_TTL_MS,
+    updatedAt: time
+  };
+  await db.collection(RANK_MATCHES).doc(rankMatchId).set({ data: match });
+  return ok({ rankMatchId, profile: publicRankPayload(profile), rules, playerSetup: setup, aiSetup: match.aiSetup, matchOptions: rankMatchOptions(setup, rules) });
+}
+
+function normalizeRankRound(item, index) {
+  return {
+    round: Math.max(1, safeNumber(item?.round, index + 1)),
+    scores: safeArray(item?.scores).slice(0, 2).map(value => safeNumber(value, 0)),
+    winner: item?.winner == null ? null : (safeNumber(item.winner, 0) === 0 ? 0 : 1)
+  };
+}
+
+function rankResultSummary(finalState = {}) {
+  const roundResults = safeArray(finalState.roundResults).slice(0, 3).map(normalizeRankRound);
+  const roundsWon = Math.max(0, safeNumber(finalState.roundsWon, safeArray(finalState.rounds)[0] || 0));
+  const roundsLost = Math.max(0, safeNumber(finalState.roundsLost, safeArray(finalState.rounds)[1] || 0));
+  const winner = finalState.winner == null ? null : (safeNumber(finalState.winner, 0) === 0 ? 0 : 1);
+  return {
+    result: rankCore.resultFromWinner(winner),
+    winner,
+    roundsWon,
+    roundsLost,
+    rounds: [roundsWon, roundsLost],
+    roundResults,
+    scores: safeArray(finalState.scores || finalState.finalScores).slice(0, 2).map(value => safeNumber(value, 0)),
+    morale: safeArray(finalState.morale).slice(0, 2).map(value => safeNumber(value, 0)),
+    humanFaction: safeText(finalState.humanFaction, 40),
+    aiFaction: safeText(finalState.aiFaction, 40),
+    humanLeader: safeText(finalState.humanLeader, 60),
+    aiLeader: safeText(finalState.aiLeader, 60),
+    humanLeaderId: safeText(finalState.humanLeaderId, 80),
+    aiLeaderId: safeText(finalState.aiLeaderId, 80),
+    humanDeckMode: safeText(finalState.humanDeckMode, 20),
+    aiDeckMode: safeText(finalState.aiDeckMode, 20),
+    endReason: safeText(finalState.endReason || "normal", 24)
+  };
+}
+
+function validateRankFinish(match, summary, event) {
+  const flags = [];
+  const hardInvalid = [];
+  if (!summary.roundResults.length) hardInvalid.push("MISSING_ROUND_RESULTS");
+  const roundWins = summary.roundResults.filter(item => item.winner === 0).length;
+  const roundLosses = summary.roundResults.filter(item => item.winner === 1).length;
+  if (roundWins !== summary.roundsWon || roundLosses !== summary.roundsLost) hardInvalid.push("RESULT_ROUND_MISMATCH");
+  if (match.ruleSnapshot?.forcePlayerRandom && summary.humanDeckMode === "custom") hardInvalid.push("TOP_TIER_CUSTOM_DECK");
+  if (safeText(event.clientVersion, 40) === "") flags.push("MISSING_CLIENT_VERSION");
+  const durationMs = safeNumber(event.durationMs, 0);
+  if (durationMs > 0 && durationMs < 30000) flags.push("DURATION_TOO_SHORT");
+  if (safeNumber(match.expireAt, 0) && now() > safeNumber(match.expireAt, 0)) hardInvalid.push("MATCH_TIMEOUT");
+  return hardInvalid.length
+    ? { validationStatus: "invalid", riskFlags: hardInvalid.concat(flags) }
+    : (flags.length ? { validationStatus: "suspicious", riskFlags: flags } : { validationStatus: "valid", riskFlags: [] });
+}
+
+function rankResultText(result) {
+  if (result === "win") return "排位胜利";
+  if (result === "loss") return "排位失败";
+  return "排位平局";
+}
+
+function rankDeltaText(delta) {
+  if (!delta || delta.validationStatus !== "valid") return "数据异常";
+  const power = delta.powerDelta > 0 ? `权势 +${delta.powerDelta}` : (delta.powerDelta < 0 ? `权势 ${delta.powerDelta}` : "权势不变");
+  const prestige = delta.prestigeDelta > 0 ? `威望 +${delta.prestigeDelta}` : (delta.prestigeDelta < 0 ? `威望 ${delta.prestigeDelta}` : "威望不变");
+  return `${power}，${prestige}`;
+}
+
+function buildRankHistoryRecord(match, summary, delta, validationStatus, riskFlags) {
+  const abnormal = validationStatus !== "valid";
+  const rankMatchId = match.rankMatchId || match._id || "";
+  return {
+    time: now(),
+    recordKey: `rank:${rankMatchId}`,
+    resultText: abnormal ? "数据异常" : rankResultText(delta.result),
+    winner: abnormal ? null : summary.winner,
+    rounds: summary.rounds,
+    morale: summary.morale,
+    scores: summary.scores,
+    roundResults: summary.roundResults,
+    humanFaction: summary.humanFaction,
+    aiFaction: summary.aiFaction,
+    humanLeader: summary.humanLeader,
+    aiLeader: summary.aiLeader,
+    humanLeaderId: summary.humanLeaderId,
+    aiLeaderId: summary.aiLeaderId,
+    humanDeckMode: summary.humanDeckMode || match.playerSetup?.deckMode || "auto",
+    aiDeckMode: "auto",
+    difficulty: match.aiSetup?.difficulty || match.ruleSnapshot?.aiDifficulty || "normal",
+    mode: "ai",
+    endReason: summary.endReason || "normal",
+    matchId: rankMatchId,
+    ranked: true,
+    rankedAnomaly: abnormal,
+    rankMatchId,
+    rankDisplay: abnormal ? "数据异常" : delta.after.display,
+    rankDeltaText: rankDeltaText({ ...delta, validationStatus }),
+    validationStatus,
+    riskFlags
+  };
+}
+
+async function finishRankMatch(event, openid) {
+  const rankMatchId = safeText(event.rankMatchId, 100);
+  if (!rankMatchId) return fail("缺少排位对局", "MISSING_RANK_MATCH");
+  let match = null;
+  try {
+    const res = await db.collection(RANK_MATCHES).doc(rankMatchId).get();
+    match = res.data || null;
+  } catch (err) {}
+  if (!match) return fail("排位对局不存在", "RANK_MATCH_NOT_FOUND");
+  if (match.openid !== openid) return fail("无权结算该排位对局", "FORBIDDEN");
+  if (match.status !== "created") return fail("该排位对局已结算", "RANK_ALREADY_FINISHED");
+
+  const profile = await getRankProfileDoc(openid, true);
+  const summary = rankResultSummary(event.finalStateSummary || {});
+  const validation = validateRankFinish(match, summary, event);
+  const valid = validation.validationStatus === "valid";
+  const delta = valid
+    ? rankCore.settleRankProfile(profile, summary)
+    : { before: rankCore.profileView(profile), after: rankCore.profileView(profile), result: summary.result, powerDelta: 0, prestigeDelta: 0, protectionUsed: false };
+  const time = now();
+
+  if (valid) {
+    const after = delta.after;
+    const wins = profile.wins + (summary.result === "win" ? 1 : 0);
+    const losses = profile.losses + (summary.result === "loss" ? 1 : 0);
+    const draws = profile.draws + (summary.result === "draw" ? 1 : 0);
+    const totalMatches = profile.totalMatches + 1;
+    const nextProfile = normalizeRankProfileDoc(openid, {
+      ...profile,
+      totalPower: after.totalPower,
+      tierPower: after.tierPower,
+      prestige: after.prestige,
+      peakPower: Math.max(profile.peakPower, after.totalPower),
+      wins,
+      losses,
+      draws,
+      totalMatches,
+      lastMatchAt: time,
+      updatedAt: time,
+      publicProfile: await userPublicProfile(openid)
+    });
+    await db.collection(RANK_PROFILES).doc(openid).set({ data: nextProfile });
+  }
+
+  const historyRecord = buildRankHistoryRecord(match, summary, delta, validation.validationStatus, validation.riskFlags);
+  await upsertMatchHistoryForOpenid(openid, historyRecord, "pvpRoom");
+  const status = valid ? "finished" : "abnormal";
+  await db.collection(RANK_MATCHES).doc(rankMatchId).update({
+    data: {
+      status,
+      validationStatus: validation.validationStatus,
+      riskFlags: validation.riskFlags,
+      result: summary.result,
+      roundsWon: summary.roundsWon,
+      roundsLost: summary.roundsLost,
+      roundResults: summary.roundResults,
+      totalPowerAfter: delta.after.totalPower,
+      tierPowerAfter: delta.after.tierPower,
+      tierAfter: delta.after.currentTier,
+      powerDelta: delta.powerDelta,
+      prestigeAfter: delta.after.prestige,
+      prestigeDelta: delta.prestigeDelta,
+      protectionUsed: !!delta.protectionUsed,
+      finalStateSummary: summary,
+      clientVersion: safeText(event.clientVersion, 40),
+      durationMs: safeNumber(event.durationMs, 0),
+      finishedAt: time,
+      updatedAt: time
+    }
+  });
+  const latestProfile = await getRankProfileDoc(openid, true);
+  return ok({
+    profile: publicRankPayload(latestProfile),
+    delta: { ...delta, validationStatus: validation.validationStatus, riskFlags: validation.riskFlags, rankDeltaText: historyRecord.rankDeltaText },
+    validationStatus: validation.validationStatus,
+    riskFlags: validation.riskFlags,
+    historyRecord
+  });
+}
+
+async function getRankLeaderboard(event, openid = "") {
+  const limit = Math.max(1, Math.min(100, safeNumber(event.limit, 50)));
+  const res = await db.collection(RANK_PROFILES).orderBy("totalPower", "desc").limit(Math.max(limit, 50)).get();
+  const list = safeArray(res.data)
+    .map(publicRankPayload)
+    .sort((a, b) => b.totalPower - a.totalPower || b.prestige - a.prestige || b.winRate - a.winRate || b.totalMatches - a.totalMatches || a.updatedAt - b.updatedAt)
+    .slice(0, limit)
+    .map((item, index) => ({ ...item, rank: index + 1 }));
+  if (!openid) return ok({ leaderboard: list, selfRank: null });
+  const selfProfile = await getRankProfileDoc(openid, true);
+  const selfPublic = publicRankPayload(selfProfile);
+  const selfRank = list.find(item => item.userId === selfPublic.userId)?.rank || null;
+  return ok({ leaderboard: list, selfRank: selfRank ? { ...selfPublic, rank: selfRank } : selfPublic });
+}
+
+async function getRankPublicProfile(event, openid) {
+  const userId = safeText(event.userId, 80);
+  if (!userId) return fail("缺少玩家", "MISSING_USER");
+  const res = await db.collection(RANK_PROFILES).where({ publicUserId: userId }).limit(1).get();
+  const profile = safeArray(res.data)[0];
+  if (!profile) return fail("未找到玩家排位资料", "RANK_PROFILE_NOT_FOUND");
+  return ok({ profile: publicRankPayload(profile) });
 }
 
 function buildMatch(players) {
@@ -757,12 +1121,13 @@ async function fetchAllCollection(name) {
 
 async function getAdminStats(openid) {
   if (!(await isAdministrator(openid))) return fail("无权查看数据统计", "FORBIDDEN");
-  const [users, matches, activities] = await Promise.all([
+  const [users, matches, activities, rankMatches] = await Promise.all([
     fetchAllCollection(USERS),
     fetchAllCollection(MATCH_HISTORY),
-    fetchAllCollection(DAILY_USER_ACTIVITY)
+    fetchAllCollection(DAILY_USER_ACTIVITY),
+    fetchAllCollection(RANK_MATCHES)
   ]);
-  return ok({ stats: buildAdminStats({ users, matches, activities, now: now() }) });
+  return ok({ stats: buildAdminStats({ users, matches, activities, rankMatches, now: now() }) });
 }
 
 async function saveUser(openid, event, wxContext) {
@@ -1349,11 +1714,20 @@ async function handleRpc(event = {}, wxContext = {}) {
     if (!openid) return fail("无法获取用户身份", "NO_OPENID");
     return getAdminStats(openid);
   }
+  if (action === "getRankLeaderboard") {
+    let openid = "";
+    try { openid = await authOpenid(event, wxContext); } catch (err) { openid = ""; }
+    return getRankLeaderboard(event, openid);
+  }
 
   const openid = await authOpenid(event, wxContext);
   if (!openid) return fail("无法获取用户身份", "NO_OPENID");
   if (action === "currentUser") return currentUser(openid);
   if (action === "getAdminStatus") return ok({ isAdmin: await isAdministrator(openid) });
+  if (action === "getRankProfile") return getRankProfile(event, openid);
+  if (action === "startRankMatch") return startRankMatch(event, openid);
+  if (action === "finishRankMatch") return finishRankMatch(event, openid);
+  if (action === "getRankPublicProfile") return getRankPublicProfile(event, openid);
   if (action === "uploadAvatar") return uploadAvatar(event, openid);
   if (action === "saveWechatProfile") return saveWechatProfile(event, openid);
   if (action === "updateProfile") return updateProfile(event, openid);
