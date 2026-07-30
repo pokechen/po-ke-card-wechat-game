@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, drawCardImage, short } = require("../ui/canvas");
+const { clear, text, fillRoundRect, wrapText, drawCardImage, short, drawTopLeftBack } = require("../ui/canvas");
 const { DIFFICULTY_LABELS, allCards, cardById, displayName } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
@@ -217,7 +217,10 @@ function draw(ctx, view, actions, ui = {}) {
     detail = cardById(ui.historyLeaderDetailId);
     if (!detail) ui.historyLeaderDetailId = "";
   }
-  const summary = historySummary(allHistory);
+  const summary = (ui.cloudHistoryTotal != null)
+    ? { total: ui.cloudHistoryTotal, wins: ui.cloudHistoryWins || 0, losses: ui.cloudHistoryLosses || 0, draws: ui.cloudHistoryDraws || 0, winRate: ui.cloudHistoryWinRate || 0 }
+    : historySummary(allHistory);
+  drawTopLeftBack(ctx, view, actions, "back");
   text(ctx, "战绩记录", view.width / 2, state.top, 22, "#2f2417", "center");
   text(ctx, `总 ${summary.total} · 胜 ${summary.wins} · 负 ${summary.losses} · 平 ${summary.draws} · 胜率 ${summary.winRate}%`, view.width / 2, state.top + 28, 12, "#775c34", "center");
   const badges = streakBadges(allHistory);
@@ -281,9 +284,9 @@ function draw(ctx, view, actions, ui = {}) {
     fillRoundRect(ctx, trackX, trackY, 3, trackH, 1.5, "rgba(119,92,52,0.16)");
     fillRoundRect(ctx, trackX, thumbY, 3, thumbH, 1.5, "rgba(143,60,31,0.72)");
   }
-  const back = { id: "back", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
-  actions.push(back);
-  button(ctx, { ...back, label: "返回首页", size: 13, fill: "#8d6840" });
+  if (ui.cloudHistoryHasMore && state.list.length) {
+    text(ctx, ui.cloudHistoryLoadingMore ? "加载更多战绩…" : "上滑加载更多", view.width / 2, state.listBottom + 14, 11, "#b09a72", "center");
+  }
   if (detail) {
     const leaders = detailLeaderCards(view, ui);
     const currentIdx = leaders.findIndex(card => card.id === detail.id);

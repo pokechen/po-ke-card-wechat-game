@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, drawRemoteImage } = require("../ui/canvas");
+const { clear, text, fillRoundRect, wrapText, drawRemoteImage, drawTopLeftBack } = require("../ui/canvas");
 
 const INK = "#2f2417";
 const MUTED = "#775c34";
@@ -7,7 +7,7 @@ const LINE = "#dcc48d";
 
 function layout(view) {
   const top = view.safeTop + 28;
-  const bottom = view.height - view.safeBottom - 52;
+  const bottom = view.height - view.safeBottom - 12;
   const listTop = top + 52;
   const viewportH = Math.max(220, bottom - listTop - 8);
   return { top, bottom, listTop, listBottom: listTop + viewportH, viewportH };
@@ -49,7 +49,7 @@ function contentHeight(stats) {
   const topPlayersH = listPanelHeight(playerItems(stats).length, 52, 52);
   const recentMatchesH = recentMatchesPanelHeight(recentItems(stats));
   const rankAnomalyH = rankAnomalyPanelHeight(stats);
-  return 1018 + 14 + topPlayersH + 14 + recentMatchesH + (rankAnomalyH ? 14 + rankAnomalyH : 0) + 24;
+  return 572 + 14 + topPlayersH + 14 + recentMatchesH + (rankAnomalyH ? 14 + rankAnomalyH : 0) + 24;
 }
 
 function scrollBounds(view, stats) {
@@ -392,39 +392,28 @@ function drawDashboard(ctx, view, actions, ui, state) {
   kpi(ctx, x, y, smallW, "总用户", users.total || 0, "#2f6f57");
   kpi(ctx, x + smallW + gap, y, smallW, "今日活跃", users.activeToday || 0, "#4f6d8a");
   kpi(ctx, x, y + 72, smallW, "近 7 天新增", users.new7 || 0, "#8f3c1f");
-  kpi(ctx, x + smallW + gap, y + 72, smallW, "近 30 天活跃", users.active30 || 0, "#7a5a95");
+  kpi(ctx, x + smallW + gap, y + 72, smallW, "近 7 天活跃", users.active7 || 0, "#7a5a95");
 
-  panel(ctx, x, y + 154, w, 190, "用户使用趋势（近 30 天）");
-  const labels = trend.map(item => item.date);
-  const active = trend.map(item => item.activeUsers || 0);
-  const newUsers = trend.map(item => item.newUsers || 0);
-  lineChart(ctx, x + 18, y + 194, w - 36, 94, labels, active, "#2f6f57", "rgba(47,111,87,0.14)");
-  text(ctx, "日活（登录后开始统计）", x + 18, y + 318, 10, "#2f6f57");
-  text(ctx, `近 30 天新增 ${users.new30 || 0}`, x + w - 18, y + 318, 10, MUTED, "right");
-
-  panel(ctx, x, y + 356, w, 190, "每日新增用户");
-  barChart(ctx, x + 18, y + 396, w - 36, 94, labels, newUsers, "#4f6d8a");
-  text(ctx, `累计登录 ${users.totalLogins || 0} 次`, x + 18, y + 520, 10, MUTED);
-
-  panel(ctx, x, y + 558, w, 198, "对局与 AI 表现");
+  panel(ctx, x, y + 154, w, 198, "对局与 AI 表现");
   const mode = matches.byMode || {};
-  donut(ctx, x + 82, y + 655, 43, [mode.ai || 0, mode.online || 0], ["#4f6d8a", "#8f3c1f"]);
-  legend(ctx, x + 150, y + 626, [
+  donut(ctx, x + 82, y + 251, 43, [mode.ai || 0, mode.online || 0], ["#4f6d8a", "#8f3c1f"]);
+  legend(ctx, x + 150, y + 222, [
     { label: "AI 对局", value: mode.ai || 0, color: "#4f6d8a" },
     { label: "联机对局", value: mode.online || 0, color: "#8f3c1f" },
     { label: "平均小局", value: matches.avgRounds == null ? "-" : matches.avgRounds, color: "#8d6840" }
   ]);
-  text(ctx, `AI 胜率 ${matches.aiWinRateOverall == null ? "-" : `${matches.aiWinRateOverall}%`}`, x + 18, y + 730, 12, "#8f3c1f");
-  text(ctx, `AI胜 ${matches.aiWins || 0} · 玩家胜 ${matches.playerWins || 0} · 平 ${matches.aiDraws || 0}`, x + w - 18, y + 730, 10, MUTED, "right");
+  text(ctx, `AI 胜率 ${matches.aiWinRateOverall == null ? "-" : `${matches.aiWinRateOverall}%`}`, x + 18, y + 326, 12, "#8f3c1f");
+  text(ctx, `AI胜 ${matches.aiWins || 0} · 玩家胜 ${matches.playerWins || 0} · 平 ${matches.aiDraws || 0}`, x + w - 18, y + 326, 10, MUTED, "right");
 
-  panel(ctx, x, y + 768, w, 196, "每日对局与 AI 胜率（近 30 天）");
+  panel(ctx, x, y + 364, w, 196, "每日对局与 AI 胜率（近 7 天）");
+  const labels = trend.map(item => item.date);
   const matchTotals = trend.map(item => item.total || 0);
-  barChart(ctx, x + 18, y + 808, w - 36, 88, labels, matchTotals, "#8f3c1f");
+  barChart(ctx, x + 18, y + 404, w - 36, 88, labels, matchTotals, "#8f3c1f");
   const rate = trend.map(item => item.aiWinRate == null ? 0 : item.aiWinRate);
-  lineChart(ctx, x + 18, y + 926, w - 36, 24, labels, rate, "#7a5a95", "rgba(122,90,149,0.12)");
-  text(ctx, "柱：对局数 · 线：AI 胜率（当日有已决 AI 对局时）", x + 18, y + 978, 10, MUTED);
+  lineChart(ctx, x + 18, y + 522, w - 36, 24, labels, rate, "#7a5a95", "rgba(122,90,149,0.12)");
+  text(ctx, "柱：对局数 · 线：AI 胜率（当日有已决 AI 对局时）", x + 18, y + 574, 10, MUTED);
 
-  const playerPanelY = y + 1018;
+  const playerPanelY = y + 572;
   const playerPanelH = drawActivePlayers(ctx, x, playerPanelY, w, stats);
   const recentPanelY = playerPanelY + playerPanelH + 14;
   const recentPanelH = drawRecentMatches(ctx, x, recentPanelY, w, stats);
@@ -437,6 +426,7 @@ function draw(ctx, view, actions, ui = {}) {
   state.scroll = clamp(ui.adminStatsScroll || 0, 0, state.maxScroll);
   ui.adminStatsScroll = state.scroll;
 
+  drawTopLeftBack(ctx, view, actions, "backAdminStats");
   text(ctx, "数据统计", view.width / 2, state.top, 22, INK, "center");
   const updated = ui.adminStats ? `更新于 ${formatUpdatedAt(ui.adminStats.updatedAt)}` : "";
   text(ctx, ui.adminStatsLoading ? "正在汇总云端数据…" : (ui.adminStatsError || updated), view.width / 2, state.top + 26, 11, ui.adminStatsError ? "#9f3b24" : MUTED, "center");
@@ -473,9 +463,6 @@ function draw(ctx, view, actions, ui = {}) {
     wrapText(ctx, ui.adminStatsError || "正在读取数据统计…", 42, state.listTop + 72, view.width - 84, 20, 2, 13, ui.adminStatsError ? "#9f3b24" : MUTED);
   }
 
-  const back = { id: "backAdminStats", x: 18, y: state.bottom, w: view.width - 36, h: 40 };
-  actions.push(back);
-  button(ctx, { ...back, label: "返回首页", size: 12, fill: "#8d6840" });
 }
 
 module.exports = { draw, scrollBounds };

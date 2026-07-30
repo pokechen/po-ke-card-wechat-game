@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const {
   eligibleCards,
@@ -37,10 +37,9 @@ function pageLayout(view) {
   const top = view.safeTop + 26;
   const toolY = top + 64;
   const listTop = top + 106;
-  const backY = view.height - view.safeBottom - 50;
-  const listBottom = backY - 22;
+  const listBottom = view.height - view.safeBottom - 12;
   const pageSize = Math.max(4, Math.min(7, Math.floor((listBottom - listTop) / 68)));
-  return { top, toolY, listTop, backY, listBottom, pageSize };
+  return { top, toolY, listTop, listBottom, pageSize };
 }
 
 function clampPage(view, ui, targetPage) {
@@ -65,7 +64,7 @@ function draw(ctx, view, actions, ui) {
   const selectedIds = getActiveCustomDeckIds(settings, faction);
   const status = deckStatus(selectedIds, faction);
   const page = ui.deckPage || 0;
-  const { top, toolY, listTop, backY, listBottom, pageSize } = pageLayout(view);
+  const { top, toolY, listTop, listBottom, pageSize } = pageLayout(view);
   const groups = groupCards(eligibleCards(faction)).sort((a, b) => cardValue(b.card) - cardValue(a.card));
   const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
@@ -127,9 +126,6 @@ function draw(ctx, view, actions, ui) {
     ctx.restore();
   }
 
-  const back = { id: "backSettings", x: 46, y: backY, w: view.width - 92, h: 40 };
-  actions.push(back);
-  button(ctx, { ...back, label: ui.deckReturnScene === "matchSetup" || ui.deckReturnScene === "pvpSetup" ? "返回准备" : "返回设置", size: 13, fill: "#8d6840" });
   if (detail) {
     const currentIdx = groups.findIndex(g => g.card.id === detail.id);
     const leftCard = currentIdx > 0 ? groups[currentIdx - 1].card : null;

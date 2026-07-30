@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, drawRemoteImage, short } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, drawRemoteImage, short, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName } = require("../core/cards");
 const rankCore = require("../core/rank");
@@ -130,6 +130,7 @@ function draw(ctx, view, actions, ui = {}, rank = {}) {
   const settings = loadSettings();
   const locked = !!rules.forcePlayerRandom;
 
+  drawTopLeftBack(ctx, view, actions, "rankBack");
   text(ctx, "排位赛", view.width / 2, top, 24, "#2f2417", "center");
   text(ctx, "挑战随机系统对手，赢取权势冲击帝王", view.width / 2, top + 26, 12, "#775c34", "center");
 
@@ -228,11 +229,9 @@ function draw(ctx, view, actions, ui = {}, rank = {}) {
       text(ctx, `自定义牌组未完成（${status.total}/40），本局使用自动牌组。`, x + 18, boxY + 118, 11, "#775c34");
     }
   }
-  const start = { id: "rankStart", x: 46, y: bottom - 90, w: view.width - 92, h: 42 };
-  const back = { id: "rankBack", x: 46, y: bottom - 42, w: view.width - 92, h: 38 };
-  actions.push(start, back);
+  const start = { id: "rankStart", x: 46, y: bottom - 50, w: view.width - 92, h: 42 };
+  actions.push(start);
   button(ctx, { ...start, label: rank.starting ? "正在创建排位…" : (locked ? "随机阵容开始排位" : "开始排位"), fill: "#2f6f57", stroke: "#1d4f3c", size: 15 });
-  button(ctx, { ...back, label: "返回首页", fill: "#7a5a95", stroke: "#4e3568", size: 13 });
 
   drawSetupDropdown(ctx, view, actions, settings, ui.rankSetupDropdown || "", anchors, "closeRankSetupDropdown");
 

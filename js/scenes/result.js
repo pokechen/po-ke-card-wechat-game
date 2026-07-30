@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, drawTopLeftBack } = require("../ui/canvas");
 
 function localPlayerIndex(state) {
   return state?.mode === "online" && Number.isInteger(state.localPlayerIndex) ? state.localPlayerIndex : 0;
@@ -62,22 +62,21 @@ function roundResultText(state) {
     const scoreText = state.mode === "online"
       ? `${scores[local] || 0}:${scores[enemy] || 0}`
       : `${scores[0] || 0}:${scores[1] || 0}`;
-    const morale = Array.isArray(item.morale) ? item.morale : null;
-    const moraleText = morale ? ` 军心${morale[local] || 0}:${morale[enemy] || 0}` : "";
-    return `第${item.round}局 ${scoreText}${state.mode === "online" ? ` ${label}` : ""}${moraleText}`;
+    return `第${item.round}局 ${scoreText}${state.mode === "online" ? ` ${label}` : ""}`;
   });
   return entries.join("  ");
 }
 
 function draw(ctx, view, actions, state) {
   clear(ctx, view.width, view.height);
+  const online = state.mode === "online";
+  drawTopLeftBack(ctx, view, actions, online ? "restart" : "home");
   const top = view.safeTop + 78;
   const result = resultTitle(state);
   text(ctx, result, view.width / 2, top, 30, "#2f2417", "center");
   fillRoundRect(ctx, 30, top + 56, view.width - 60, 178, 18, "#fffaf0", "#dcc48d");
   const p0 = state.players[0];
   const p1 = state.players[1];
-  const online = state.mode === "online";
   const local = localPlayerIndex(state);
   const enemy = local === 0 ? 1 : 0;
   const me = state.players[local];
@@ -102,15 +101,16 @@ function draw(ctx, view, actions, state) {
   const rankDelta = state.rankDelta || null;
   const rankLine = state.ranked
     ? (state.rankSubmitting ? "排位结算中…" : (state.rankSubmitError || (rankDelta ? `${rankDelta.rankDeltaText || "排位已结算"} · ${rankDelta.after?.display || ""}` : "排位等待结算")))
-    : (online ? "联网对局已结束，战绩已存入数据库" : "战绩已保存，并会同步到数据库");
+    : "";
   text(ctx, rankLine, view.width / 2, top + 222, 11, state.rankSubmitError ? "#9f3b24" : "#775c34", "center");
-  const cards = { id: "viewBattleCards", x: 46, y: top + 256, w: view.width - 92, h: 48 };
-  const restart = { id: "restart", x: 46, y: top + 316, w: view.width - 92, h: 48 };
-  const home = { id: "home", x: 46, y: top + 376, w: view.width - 92, h: 48 };
-  actions.push(cards, restart, home);
+  const restart = { id: "restart", x: 46, y: top + 256, w: view.width - 92, h: 48 };
+  const cards = { id: "viewBattleCards", x: 46, y: online ? top + 256 : top + 316, w: view.width - 92, h: 48 };
+  if (!online) {
+    actions.push(restart);
+    button(ctx, { ...restart, label: "再来一局", size: 14 });
+  }
+  actions.push(cards);
   button(ctx, { ...cards, label: "查看双方卡牌", fill: "#8f3c1f", stroke: "#6d2d18", size: 14 });
-  button(ctx, { ...restart, label: online ? "返回房间" : "再来一局", size: 14 });
-  button(ctx, { ...home, label: online && localPlayerIndex(state) === 0 ? "解散房间" : "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 14 });
 }
 
 module.exports = { draw };

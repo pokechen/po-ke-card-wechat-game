@@ -42,10 +42,10 @@ const ABILITY_LABELS = {
   Scorch: "奇策",
   "Commander's Horn": "鼓舞",
   "Summon Shield Maidens": "召唤岳家军",
-  "Summon Avenger": "召唤陆抗",
-  "Summon Sky Hound": "召唤啸天犬",
-  Berserker: "奋起",
-  Mardroeme: "破釜"
+    "Summon Avenger": "召唤无当飞军",
+    "Summon Sky Hound": "召唤东吴水师",
+    Berserker: "蛰伏",
+    Mardroeme: "雪耻"
 };
 
 const ABILITY_DESCRIPTIONS = {
@@ -59,10 +59,10 @@ const ABILITY_DESCRIPTIONS = {
   Scorch: "摧毁目标范围内有效战力最高的非传世人物。",
   "Commander's Horn": "使己方指定或所在阵线的非传世人物战力翻倍。",
   "Summon Shield Maidens": "打出后从己方手牌和牌库中把所有「岳家军」一并部署到「疆场」阵线。",
-  "Summon Avenger": "陆逊每次离开战场时，召唤一张 11 点传世「陆抗」顶替；若因小局清场离场，则在下一局开始入场。",
-  "Summon Sky Hound": "杨戬每次离开战场后，都会在下一回合开始时于己方「疆场」阵线召唤一张啸天犬（战力 8），可多张并存。",
-  Berserker: "被破釜触发后转化：疆场 4 点奋起变为 14 点振势，朝堂 2 点奋起变为 8 点同盟。",
-  Mardroeme: "选择一条阵线，触发该线所有奋起人物转化。"
+  "Summon Avenger": "诸葛亮每次离开战场时，召唤一张 11 点传世「无当飞军」顶替；若因小局清场离场，则在下一局开始入场。",
+  "Summon Sky Hound": "周瑜每次离开战场时，召唤一张 8 点「东吴水师」顶替；若因小局清场离场，则在下一局开始入场。",
+  Berserker: "被雪耻触发后转化：疆场 4 点蛰伏变为 14 点振势，朝堂 2 点蛰伏变为 8 点同盟。",
+  Mardroeme: "选择一条阵线，触发该线所有蛰伏人物转化。"
 };
 
 function factionInfo(faction) {
@@ -307,35 +307,36 @@ function isClearWeatherCard(card) {
   return card.category === "weather" && /拨云见日|晴空|Clear Weather/i.test(card.baseName || card.name || "");
 }
 
-// 判断一组卡牌（牌组/已选卡）中是否存在「奋起」单位。
-// 破釜沉舟（Mardroeme）只会转化场上的奋起人物，牌组中若没有奋起单位则毫无价值，
-// 因此它的记分与是否入组都依赖牌组是否含有奋起。
+// 判断一组卡牌（牌组/已选卡）中是否存在「蛰伏」单位。
+// 卧薪尝胆（Mardroeme）只会转化场上的蛰伏人物，牌组中若没有蛰伏单位则毫无价值，
+// 因此它的记分与是否入组都依赖牌组是否含有蛰伏。
 function deckHasBerserker(list) {
   return Array.isArray(list) && list.some(card => hasAbility(card, "Berserker"));
 }
 
 function isMardroemeCard(card) {
-  return hasAbility(card, "Mardroeme") || (card.baseName || card.name) === "破釜沉舟";
+  const name = card.baseName || card.name;
+  return hasAbility(card, "Mardroeme") || name === "卧薪尝胆" || name === "破釜沉舟";
 }
 
 // 特殊/时局牌的能力加分配置。
 // 人物牌有基础战力 + 能力加分，而特殊/时局牌基础战力为 0、只有能力加分，
 // 因此这里把特殊牌的能力加分提到与强力人物相当的水平，使牌组总战力与自动组牌排序更合理。
 const SPECIAL_BONUS = {
-  commanderHorn: 15,   // 战鼓齐鸣·鼓舞：翻倍一条阵线，价值接近强力人物
-  scorchUnitTianDan: 9, // 田单·奇策（人物牌，保留原值）
-  scorchSpecial: 15,   // 釜底抽薪·奇策：摧毁最高战力非传世人物
-  scorchUnitOther: 5,  // 其他带奇策的人物牌
-  mardroeme: 11,       // 破釜沉舟·破釜：触发奋起转化
-  decoy: 13,           // 请辞归隐·请辞：回收单位再打出（基础分，medic 联动另计）
-  weatherClear: 9,     // 拨云见日：清除时局
-  weatherOther: 12     // 其余时局：压制对方一条阵线
+  commanderHorn: 15,    // 战鼓齐鸣·鼓舞：翻倍一条阵线，价值接近强力人物
+  scorchUnitHuangGai: 9, // 黄盖·奇策（人物牌，保留原值）
+  scorchSpecial: 15,    // 釜底抽薪·奇策：摧毁最高战力非传世人物
+  scorchUnitOther: 5,   // 其他带奇策的人物牌
+  mardroeme: 11,        // 卧薪尝胆·雪耻：触发蛰伏转化
+  decoy: 13,            // 请辞归隐·请辞：回收单位再打出（基础分，medic 联动另计）
+  weatherClear: 9,      // 拨云见日：清除时局
+  weatherOther: 12      // 其余时局：压制对方一条阵线
 };
 
 // 旧版加分（用于胜率对比基线，勿删）
 const SPECIAL_BONUS_BASELINE = {
   commanderHorn: 9,
-  scorchUnitTianDan: 9,
+  scorchUnitHuangGai: 9,
   scorchSpecial: 8,
   scorchUnitOther: 5,
   mardroeme: 6,
@@ -361,7 +362,7 @@ function cardValueBase(card, context, bonus) {
   const name = cleanCardName(card.baseName || card.name);
   if (hasAbility(card, "Commander's Horn") || name === "战鼓齐鸣") value += b.commanderHorn;
   if (hasAbility(card, "Scorch") || name === "釜底抽薪") {
-    value += name === "田单" ? b.scorchUnitTianDan : (card.category === "special" || name === "釜底抽薪" ? b.scorchSpecial : b.scorchUnitOther);
+    value += name === "黄盖" ? b.scorchUnitHuangGai : (card.category === "special" || name === "釜底抽薪" ? b.scorchSpecial : b.scorchUnitOther);
   }
   if (isDecoyCard(card)) value += b.decoy;
   if (card.category === "weather") value += isClearWeatherCard(card) ? b.weatherClear : b.weatherOther;
@@ -377,7 +378,7 @@ const cardValue = makeCardValue(SPECIAL_BONUS_BASELINE);
 
 // 牌组「总战力」展示使用重平衡后的加分，使特殊/时局牌的分数更贴近其实际效果价值
 // （特殊牌基础战力为 0、只有能力加分，原加分偏低，展示上无法体现其真实价值）。
-// 破釜沉舟依赖牌组中的奋起单位，牌组无奋起时其展示分归零。
+// 卧薪尝胆依赖牌组中的蛰伏单位，牌组无蛰伏时其展示分归零。
 const displayCardValueBase = makeCardValue(SPECIAL_BONUS);
 function displayCardValue(card, context = {}) {
   const value = displayCardValueBase(card, context);
@@ -608,7 +609,7 @@ function selectAutoDeckCards(options = {}) {
     const rankedSpecials = rankedSpecialGroups();
     const group = pickFromGroups(rankedSpecials, usedSpecials, config.topRatio, config.randomPick, strengthBias, card => autoDeckCardValue(card, picked, pool, valueFn));
     if (!group) break;
-    // 破釜沉舟只转化场上的奋起单位，牌组中若没有奋起单位则毫无价值，直接排除不入组。
+    // 卧薪尝胆只转化场上的蛰伏单位，牌组中若没有蛰伏单位则毫无价值，直接排除不入组。
     if (isMardroemeCard(group.card) && !deckHasBerserker(picked)) {
       usedSpecials[group.key] = true;
       continue;

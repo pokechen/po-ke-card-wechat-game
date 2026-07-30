@@ -49,21 +49,16 @@ exports.main = async (event, context) => {
   }
 
   try {
-    // 静态管理后台会传入管理员 OpenID；该值必须与云函数环境变量 ADMIN_OPENID 一致。
-    const configuredAdminOpenid = String(process.env.ADMIN_OPENID || '').trim();
-    const suppliedAdminOpenid = String(event && event.adminOpenid || '').trim();
-    const wxContext = cloud.getWXContext() || {};
-    const callerOpenid = String(wxContext.OPENID || '').trim();
-    let isDatabaseAdmin = false;
-    if (callerOpenid) {
-      try {
-        const admin = await db.collection('admin_openids').doc(callerOpenid).get();
-        isDatabaseAdmin = !!admin.data;
-      } catch (err) {}
-    }
-    const isConfiguredAdmin = !!configuredAdminOpenid && suppliedAdminOpenid === configuredAdminOpenid;
-    if (!isConfiguredAdmin && !isDatabaseAdmin) {
-      const message = configuredAdminOpenid
+    // 管理员 OpenID 在云函数环境变量（后台服务配置）中配置，支持逗号分隔多个；
+    // 不再依赖数据库 admin_openids 集合。静态管理后台传入的 adminOpenid 必须命中配置列表。
+    const configuredAdminOpenids = String(process.env.ADMIN_OPENID || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const suppliedAdminOpenid = String((event && event.adminOpenid) || '').trim();
+    const isConfiguredAdmin = !!suppliedAdminOpenid && configuredAdminOpenids.includes(suppliedAdminOpenid);
+    if (!isConfiguredAdmin) {
+      const message = configuredAdminOpenids.length
         ? '管理员身份校验未通过'
         : '未配置管理员 OpenID，请设置云函数环境变量 ADMIN_OPENID';
       const denied = { ok: false, code: 'FORBIDDEN', message };
@@ -90,19 +85,22 @@ exports.main = async (event, context) => {
 
     // ---------- 用户指标 ----------
     const userDayCount = {};
-    let active7 = 0, active30 = 0, new7 = 0, new30 = 0, totalLogins = 0;
+    let active7 = 0, new7 = 0, totalLogins = 0;
     for (const u of users) {
       const d = toDay(u.createdAt);
       if (d) userDayCount[d] = (userDayCount[d] || 0) + 1;
       if (active(u.lastLoginAt, 7)) active7++;
-      if (active(u.lastLoginAt, 30)) active30++;
       if (active(u.createdAt, 7)) new7++;
-      if (active(u.createdAt, 30)) new30++;
       totalLogins += (u.loginCount || 0);
     }
     const userDays = Object.keys(userDayCount).sort();
+    const sevenStart = now - 7 * DAY;
+    const recentUserDays = userDays.filter(d => {
+      const t = Date.parse(d + 'T00:00:00Z');
+      return t != null && !isNaN(t) && t >= sevenStart;
+    });
     let cum = 0;
-    const growth = userDays.map(d => {
+    const growth = recentUserDays.map(d => {
       cum += userDayCount[d];
       return { date: d, new: userDayCount[d], cumulative: cum };
     });
@@ -164,12 +162,11 @@ exports.main = async (event, context) => {
       recentRaw.push(match);
     }
 
-    // 每日序列（补齐日期空缺，曲线连续）
-    const matchDays = Object.keys(matchDay).sort();
+    // 每日序列（近 7 天，补齐日期空缺，曲线连续）
     let trend = [];
-    if (matchDays.length) {
-      const start = new Date(matchDays[0] + 'T00:00:00Z');
-      const end = new Date(matchDays[matchDays.length - 1] + 'T00:00:00Z');
+    {
+      const end = new Date(now);
+      const start = new Date(now - 6 * DAY);
       for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
         const key = d.toISOString().slice(0, 10);
         const o = matchDay[key];
@@ -219,7 +216,7 @@ exports.main = async (event, context) => {
       updatedAt: Date.now(),
       users: {
         total: users.length,
-        new7, new30, active7, active30, totalLogins,
+        new7, active7, totalLogins,
         growth
       },
       matches: {

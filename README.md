@@ -31,11 +31,10 @@ node scripts/sync-pvp-core.js
 - 云函数：
   - `pvpRoom`：事件型云函数，运行时 `Nodejs18.15`，入口 `index.main`
   - `adminStats`：事件型云函数，运行时 `Nodejs18.15`，入口 `index.main`，超时 `20s`
-- 数据库集合：`game_rooms`、`users`、`user_tokens`、`match_history`、`admin_openids`、`daily_user_activity`
-  - `admin_openids` 以文档 `_id` 作为管理员 OpenID，文档只记录创建时间；文档存在即拥有统计权限。
-  - 已授权管理员：`opI3kxTbW3QAu7aKGXDVmx5ih5Vo`。
+- 数据库集合：`game_rooms`、`users`、`user_tokens`、`match_history`、`daily_user_activity`
+- 管理员 OpenID：不写入数据库，仅在云函数环境变量（后台服务配置）中配置，变量名为 `ADMIN_OPENID`，支持用逗号分隔配置多个管理员 OpenID。两个云函数均只读取该环境变量校验管理员身份。
 - 云函数接口：
-  - `pvpRoom`：小游戏使用 `getAdminStatus` 与 `getAdminStats`；二者均需有效游戏令牌，统计接口还需通过 `admin_openids` 白名单。统计内容包含用户/AI 趋势、近 7 天活跃玩家对战榜和全服最近已完成对局；对局数据仅供管理员查看，展示用户头像与昵称，但不返回 OpenID、房间号或对局 ID。
+  - `pvpRoom`：小游戏使用 `getAdminStatus` 与 `getAdminStats`；二者均需有效游戏令牌，统计接口还需 `ADMIN_OPENID` 命中配置的管理员列表。统计内容包含用户/AI 趋势、近 7 天活跃玩家对战榜和全服最近已完成对局；对局数据仅供管理员查看，展示用户头像与昵称，但不返回 OpenID、房间号或对局 ID。
   - `adminStats`：保留为事件函数，但同样强制校验微信 OpenID 白名单；未授权请求返回 `FORBIDDEN`。
 - 最近部署：`2026-07-23`，已同步 PVP 共享核心并更新 `pvpRoom` 与 `adminStats`：小游戏统计新增近 7 天活跃玩家对战榜、全服最近已完成对局，以及在线战绩可信来源保护。
 

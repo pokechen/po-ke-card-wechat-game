@@ -232,14 +232,12 @@ function rankAnomalyStats(rankMatches = [], usersByOpenid = new Map()) {
   };
 }
 
-function buildAdminStats({ users = [], matches = [], activities = [], rankMatches = [], now = Date.now(), trendDays = 30 } = {}) {
+function buildAdminStats({ users = [], matches = [], activities = [], rankMatches = [], now = Date.now(), trendDays = 7 } = {}) {
   const userDayCounts = {};
   const usersByOpenid = new Map();
   const activePlayerOpenids = new Set();
   let active7 = 0;
-  let active30 = 0;
   let new7 = 0;
-  let new30 = 0;
   let totalLogins = 0;
 
   users.forEach(user => {
@@ -251,9 +249,7 @@ function buildAdminStats({ users = [], matches = [], activities = [], rankMatche
       active7 += 1;
       if (openid) activePlayerOpenids.add(openid);
     }
-    if (recent(user && user.lastLoginAt, 30, now)) active30 += 1;
     if (recent(user && user.createdAt, 7, now)) new7 += 1;
-    if (recent(user && user.createdAt, 30, now)) new30 += 1;
     totalLogins += Math.max(0, Number(user && user.loginCount) || 0);
   });
 
@@ -391,7 +387,7 @@ function buildAdminStats({ users = [], matches = [], activities = [], rankMatche
     };
   });
 
-  const allDates = fullDateRange(Object.keys(userDayCounts).concat(Object.keys(matchDay)).sort()[0], now);
+  const allDates = dateRange(trendDays, now);
   let allCumulativeUsers = 0;
   const growth = allDates.map(date => {
     const added = userDayCounts[date] || 0;
@@ -437,6 +433,7 @@ function buildAdminStats({ users = [], matches = [], activities = [], rankMatche
       const openid = String(document._openid || document.openid || "");
       return recentMatchItem(document, record, usersByOpenid.get(openid));
     })
+    .filter(item => !(item.score === "0:0" && item.outcome.includes("认输")))
     .sort((left, right) => right.time - left.time)
     .slice(0, RECENT_MATCH_LIMIT);
 
@@ -454,10 +451,8 @@ function buildAdminStats({ users = [], matches = [], activities = [], rankMatche
     users: {
       total: users.length,
       new7,
-      new30,
       activeToday: activityDayCounts[dayKey(now)] || 0,
       active7,
-      active30,
       totalLogins,
       growth
     },

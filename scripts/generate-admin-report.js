@@ -84,19 +84,22 @@ function computeStats(users, matches) {
 
   // 用户指标
   const userDayCount = {};
-  let active7 = 0, active30 = 0, new7 = 0, new30 = 0, totalLogins = 0;
+  let active7 = 0, new7 = 0, totalLogins = 0;
   for (const u of users) {
     const d = toDay(u.createdAt);
     if (d) userDayCount[d] = (userDayCount[d] || 0) + 1;
     if (active(u.lastLoginAt, 7)) active7++;
-    if (active(u.lastLoginAt, 30)) active30++;
     if (active(u.createdAt, 7)) new7++;
-    if (active(u.createdAt, 30)) new30++;
     totalLogins += (u.loginCount || 0);
   }
   const userDays = Object.keys(userDayCount).sort();
+  const sevenStart = now - 7 * DAY;
+  const recentUserDays = userDays.filter(d => {
+    const t = Date.parse(d + 'T00:00:00Z');
+    return t != null && !isNaN(t) && t >= sevenStart;
+  });
   let cum = 0;
-  const growth = userDays.map(d => {
+  const growth = recentUserDays.map(d => {
     cum += userDayCount[d];
     return { date: d, new: userDayCount[d], cumulative: cum };
   });
@@ -155,12 +158,11 @@ function computeStats(users, matches) {
     recentRaw.push(m);
   }
 
-  // 每日趋势
-  const matchDays = Object.keys(matchDay).sort();
+  // 每日趋势（近 7 天）
   let trend = [];
-  if (matchDays.length) {
-    const start = new Date(matchDays[0] + 'T00:00:00Z');
-    const end = new Date(matchDays[matchDays.length - 1] + 'T00:00:00Z');
+  {
+    const end = new Date(now);
+    const start = new Date(now - 6 * DAY);
     for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       const key = d.toISOString().slice(0, 10);
       const o = matchDay[key];
@@ -202,7 +204,7 @@ function computeStats(users, matches) {
   return {
     ok: true,
     updatedAt: Date.now(),
-    users: { total: users.length, new7, new30, active7, active30, totalLogins, growth },
+    users: { total: users.length, new7, active7, totalLogins, growth },
     matches: {
       total: matches.length, byMode, aiTotal, onlineTotal, drawTotal,
       aiWinRateOverall,
@@ -274,7 +276,7 @@ function valScale(){return{ticks:{color:'#8b98a9'},grid:{color:'#2a3441'},beginA
 function renderKpis(d){
   const u=d.users,m=d.matches;
   const cards=[
-    {v:u.total,l:'总用户数'},{v:u.new7,l:'近7天新增'},{v:u.active30,l:'近30天活跃'},
+    {v:u.total,l:'总用户数'},{v:u.new7,l:'近7天新增'},{v:u.active7,l:'近7天活跃'},
     {v:m.total,l:'总对局数'},{v:m.aiTotal,l:'AI模式对局'},{v:pct(m.aiWinRateOverall),l:'AI总胜率'},
     {v:m.avgRounds==null?'-':m.avgRounds,l:'平均回合数'},{v:u.totalLogins,l:'累计登录次数'}
   ];

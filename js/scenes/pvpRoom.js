@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, short, drawAssetImage } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, short, drawAssetImage, drawRemoteImage, drawTopLeftBack } = require("../ui/canvas");
 const { FACTION_KEYS, FACTION_LABELS, displayName, cardSummary, leadersFor, factionPerkSummary } = require("../core/cards");
 
 const ERROR_PREVIEW_LINES = 5;
@@ -32,13 +32,15 @@ function statusText(pvp) {
   if (pvp.loading) return "正在连接云端房间...";
   if (pvp.error) return pvp.error;
   if (!pvp.roomId) return "请选择创建房间，或输入好友给你的房间号加入。";
-  if (pvp.room?.status === "selecting") return "已开始选择出战配置，双方确认后自动进入对战。";
+  if (pvp.room?.status === "selecting") return "双方已准备，正在选择出战配置。";
   if (pvp.room?.status === "playing") return "对战进行中";
-  if (pvp.room?.status === "finished") return "本局已结束，可返回房间再开一局。";
+  if (pvp.room?.status === "finished") return "本局已结束，可重新准备再开一局。";
   if (pvp.room?.status === "dissolved") return "房主已解散房间。";
   const players = pvp.room?.players || [];
   if (players.length < 2) return "等待好友加入。可分享二维码或通过右上角转发邀请。";
-  return readyOf(pvp.room, 1) ? "好友已准备，房主可开始选择卡牌。" : "好友查看规则后点击准备，房主随后开始。";
+  const bothReady = readyOf(pvp.room, 0) && readyOf(pvp.room, 1);
+  if (bothReady) return "双方已准备，正在进入游戏。";
+  return "双方都点击准备后自动进入游戏。";
 }
 
 function playerSetup(player, room) {
@@ -75,6 +77,69 @@ function factionSkillText(room) {
   return rules.factionMode === "fixed"
     ? `阵营技能：${factionPerkSummary(rules.faction)}`
     : "阵营技能：双方按各自选择的阵营生效";
+}
+
+function playerName(player, fallback) {
+  return short(String(player?.name || player?.nickName || fallback || "玩家"), 8);
+}
+
+function avatarUrlOf(player) {
+  return String(player?.avatarUrl || player?.profile?.avatarUrl || player?.user?.avatarUrl || "");
+}
+
+function drawAvatar(ctx, player, x, y, size, fallbackChar, muted = false) {
+  const radius = size / 2;
+  fillRoundRect(ctx, x, y, size, size, radius, muted ? "#eee3d1" : "#fff7df", muted ? "#d7c4a2" : "#d6b36a");
+  const url = avatarUrlOf(player);
+  const loaded = url ? drawRemoteImage(ctx, url, x, y, size, size, { radius }) : false;
+  if (!loaded) {
+    const label = String(playerName(player, fallbackChar || "友")).slice(0, 1) || fallbackChar || "友";
+    text(ctx, label, x + size / 2, y + size / 2 + 1, Math.max(16, size * 0.38), muted ? "#b7a483" : "#8f3c1f", "center");
+  }
+}
+
+function drawReadyBadge(ctx, x, y, ready, animate = false, labelOverride = "") {
+  const w = ready ? 58 : 50;
+  const h = 22;
+  const fill = ready ? "#2f6f57" : "#efe4cf";
+  const stroke = ready ? "rgba(255,247,216,0.92)" : "#d7c4a2";
+  if (ready && animate) {
+    const phase = (Date.now() % 720) / 720;
+    ctx.save();
+    ctx.globalAlpha = 0.3 * (1 - phase);
+    fillRoundRect(ctx, x - 5 - phase * 8, y - 4 - phase * 5, w + 10 + phase * 16, h + 8 + phase * 10, 16, "rgba(47,111,87,0.22)", "rgba(47,111,87,0.5)");
+    ctx.restore();
+  }
+  fillRoundRect(ctx, x, y, w, h, 11, fill, stroke);
+  text(ctx, labelOverride || (ready ? "已准备" : "未准备"), x + w / 2, y + h / 2 + 0.5, 10, ready ? "#fff7d8" : "#8d6840", "center");
+  return { w, h };
+}
+
+function drawFriendSeat(ctx, view, player, ready, ui, compact = false) {
+  const seatW = compact ? 104 : 118;
+  const seatH = compact ? 74 : 90;
+  const x = (view.width - seatW) / 2;
+  const y = view.safeTop + (compact ? 38 : 66);
+  fillRoundRect(ctx, x, y, seatW, seatH, compact ? 15 : 18, "rgba(255,250,240,0.82)", "rgba(216,189,131,0.92)");
+  const avatarSize = compact ? 40 : 48;
+  const ax = x + (seatW - avatarSize) / 2;
+  const ay = y + 8;
+  drawAvatar(ctx, player, ax, ay, avatarSize, "友", !player);
+  fillRoundRect(ctx, ax + avatarSize - 16, ay - 5, 38, 18, 9, "#8f3c1f", "rgba(255,247,216,0.9)");
+  text(ctx, "好友", ax + avatarSize + 3, ay + 4, 9, "#fff7d8", "center");
+  text(ctx, player ? playerName(player, "好友") : "等待好友", x + seatW / 2, y + seatH - 16, compact ? 11 : 12, player ? "#2f2417" : "#9a8562", "center");
+  if (player && !compact) drawReadyBadge(ctx, x + seatW - 62, y + seatH - 28, ready, ui.pvpReadyAnimUntil > Date.now());
+}
+
+function drawPlayerStatusRow(ctx, room, player, index, label, rect, ui) {
+  const ready = readyOf(room, index);
+  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 13, ready ? "rgba(47,111,87,0.08)" : "rgba(255,255,255,0.38)", ready ? "rgba(47,111,87,0.32)" : "rgba(216,189,131,0.42)");
+  drawAvatar(ctx, player, rect.x + 10, rect.y + 9, 34, label.slice(0, 1), !player);
+  text(ctx, `${label}：${player ? playerName(player, label) : "等待加入"}`, rect.x + 52, rect.y + 18, 11, label === "我方" ? "#2f6f57" : "#8f3c1f", "left");
+  if (player) {
+    wrapText(ctx, playerSetupText(player, label, room?.status, room, "", index), rect.x + 52, rect.y + 36, rect.w - 116, 12, 1, 9, "#775c34");
+  }
+  drawReadyBadge(ctx, rect.x + rect.w - 66, rect.y + 18, ready, ui.pvpReadyAnimUntil > Date.now());
 }
 
 function errorMetrics(err, panelW) {
@@ -214,98 +279,116 @@ function drawShareGuideOverlay(ctx, view, actions, roomId, ui) {
 
 function draw(ctx, view, actions, pvp = {}, ui = {}) {
   clear(ctx, view.width, view.height);
-  const top = view.safeTop + 38;
-  text(ctx, "联网房间", view.width / 2, top, 26, "#2f2417", "center");
-  text(ctx, "房主定规则，好友准备后开始选择卡牌", view.width / 2, top + 30, 12, "#775c34", "center");
+  drawTopLeftBack(ctx, view, actions, "pvpBack");
+  const compact = view.height < 560;
+  const top = view.safeTop + (compact ? 20 : 34);
+  text(ctx, "联网房间", view.width / 2, top, compact ? 22 : 24, "#2f2417", "center");
+  text(ctx, "邀请好友入座，双方准备后自动开局", view.width / 2, top + (compact ? 24 : 27), 12, "#775c34", "center");
 
   const roomId = String(pvp.roomId || "").replace(/\D/g, "").slice(0, 4);
   const hasError = !!pvp.error;
   const hasRoom = !!(pvp.room && typeof pvp.room === "object");
-  const panelH = hasError ? 250 : (roomId && hasRoom ? 324 : 278);
-  const panel = { x: 20, y: top + 58, w: view.width - 40, h: panelH };
+  const players = pvp.room?.players || [];
+  const selfIndex = Number.isInteger(pvp.playerIndex) ? pvp.playerIndex : 0;
+  const friendIndex = selfIndex === 0 ? 1 : 0;
+  const friend = players[friendIndex] || null;
+  const status = pvp.room?.status || "waiting";
+  const isHost = selfIndex === 0;
+  const selfReady = readyOf(pvp.room, selfIndex);
+  const friendReady = readyOf(pvp.room, friendIndex);
+
+  if (roomId && hasRoom) drawFriendSeat(ctx, view, friend, friendReady, ui, compact);
+
+  const panelTop = roomId && hasRoom ? view.safeTop + (compact ? 112 : 168) : top + 58;
+  const panelH = hasError ? 250 : (roomId && hasRoom ? (compact ? 310 : 376) : 236);
+  const panel = { x: 20, y: panelTop, w: view.width - 40, h: panelH };
   fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18, "#fffaf0", "#dcc48d");
-  text(ctx, roomId ? "房间号" : "联网对战", view.width / 2, panel.y + 24, 12, "#775c34", "center");
-  text(ctx, roomId || "准备开始", view.width / 2, panel.y + 58, roomId ? 30 : 24, "#8f3c1f", "center");
+
+  text(ctx, roomId ? "房间号" : "联网对战", view.width / 2, panel.y + 25, 13, "#775c34", "center");
+  text(ctx, roomId || "准备开始", view.width / 2, panel.y + 64, roomId ? 34 : 24, "#8f3c1f", "center");
+  if (roomId) actions.push({ id: "pvpCopy", x: panel.x + panel.w / 2 - 78, y: panel.y + 38, w: 156, h: 44 });
 
   let factionRuleAnchor = null;
   let factionRuleDropdownRules = null;
   if (hasError) {
     drawErrorPanel(ctx, view, actions, panel, pvp);
   } else {
-    wrapText(ctx, statusText(pvp), panel.x + 18, panel.y + 92, panel.w - 36, 18, 2, 12, "#2f6f57");
+    wrapText(ctx, statusText(pvp), panel.x + 18, panel.y + 96, panel.w - 36, 18, 2, 12, "#2f6f57");
     if (roomId && hasRoom) {
-      wrapText(ctx, ruleText(pvp.room), panel.x + 18, panel.y + 130, panel.w - 36, 15, 2, 11, "#8f3c1f");
-      wrapText(ctx, factionSkillText(pvp.room), panel.x + 18, panel.y + 164, panel.w - 36, 14, 2, 10, "#775c34");
-    }
-    const players = pvp.room?.players || [];
-    if (roomId && hasRoom && players.length) {
-      const sideLabel = index => index === pvp.playerIndex ? "我方" : "敌方";
-      text(ctx, playerSetupText(players[0], "玩家一", pvp.room?.status, pvp.room, sideLabel(0), 0), panel.x + 18, panel.y + 204, 10, pvp.playerIndex === 0 ? "#2f6f57" : "#8f3c1f");
-      wrapText(ctx, playerLeaderSkillText(players[0], pvp.room), panel.x + 28, panel.y + 220, panel.w - 56, 13, 1, 9, "#7a5a95");
-      text(ctx, playerSetupText(players[1], "玩家二", pvp.room?.status, pvp.room, sideLabel(1), 1), panel.x + 18, panel.y + 246, 10, pvp.playerIndex === 1 ? "#2f6f57" : "#8f3c1f");
-      wrapText(ctx, playerLeaderSkillText(players[1], pvp.room), panel.x + 28, panel.y + 262, panel.w - 56, 13, 1, 9, "#7a5a95");
+      const ruleY = panel.y + (compact ? 126 : 136);
+      wrapText(ctx, ruleText(pvp.room), panel.x + 18, ruleY, panel.w - 36, compact ? 14 : 16, 2, 11, "#8f3c1f");
+      wrapText(ctx, factionSkillText(pvp.room), panel.x + 18, panel.y + (compact ? 154 : 172), panel.w - 36, 14, compact ? 1 : 2, 10, "#775c34");
+      const rowW = panel.w - 32;
+      const rowH = compact ? 42 : 54;
+      drawPlayerStatusRow(ctx, pvp.room, players[selfIndex], selfIndex, "我方", { x: panel.x + 16, y: panel.y + (compact ? 178 : 212), w: rowW, h: rowH }, ui);
+      drawPlayerStatusRow(ctx, pvp.room, friend, friendIndex, "好友", { x: panel.x + 16, y: panel.y + (compact ? 224 : 272), w: rowW, h: rowH }, ui);
     }
 
-    if (roomId && hasRoom && pvp.playerIndex === 0 && (pvp.room.status === "waiting" || pvp.room.status === "finished")) {
+    if (roomId && hasRoom && isHost && (status === "waiting" || status === "finished")) {
       const rules = rulesOf(pvp.room);
-      const editable = pvp.room?.status !== "selecting" && pvp.room?.status !== "playing";
-      const y = panel.y + 288;
+      const editable = status !== "selecting" && status !== "playing";
+      const y = panel.y + panel.h - 38;
       factionRuleAnchor = { id: "pvpRoomRuleFaction", x: panel.x + 16, y, w: (panel.w - 42) / 2, h: 28 };
       factionRuleDropdownRules = rules;
-      const factionLabel = rules.factionMode === "random" ? "阵营：随机阵容" : (rules.factionMode === "fixed" ? `阵营：${short(FACTION_LABELS[rules.faction] || rules.faction, 6)}` : "阵营：不限");
+      const factionLabel = rules.factionMode === "random" ? "阵营：随机" : (rules.factionMode === "fixed" ? `阵营：${short(FACTION_LABELS[rules.faction] || rules.faction, 6)}` : "阵营：不限");
       drawRuleRow(ctx, actions, factionRuleAnchor, `${factionLabel}${editable ? (ui.matchSetupDropdown === "pvpRoomRuleFaction" ? " ▴" : " ▾") : ""}`, editable);
       const deckRuleEditable = editable && rules.factionMode !== "random";
       drawRuleRow(ctx, actions, { id: "pvpRuleDeckMode", x: panel.x + 26 + (panel.w - 42) / 2, y, w: (panel.w - 42) / 2, h: 28 }, `卡牌：${rules.factionMode === "random" ? "随机" : (rules.deckMode === "autoOnly" ? "仅自动" : "不限")}`, deckRuleEditable);
     }
   }
 
-  const y0 = panel.y + panel.h + 24;
+  const y0 = panel.y + panel.h + (compact ? 10 : 18);
   if (!roomId) {
     const create = { id: "pvpCreate", x: 46, y: y0, w: view.width - 92, h: 46 };
     const join = { id: "pvpJoin", x: 46, y: y0 + 56, w: view.width - 92, h: 42 };
-    const back = { id: "pvpBack", x: 46, y: y0 + 108, w: view.width - 92, h: 42 };
-    actions.push(create, join, back);
+    actions.push(create, join);
     button(ctx, { ...create, label: "开房间邀请好友", fill: "#2f6f57", stroke: "#1d4f3c", size: 14 });
     button(ctx, { ...join, label: "输入房间号加入", fill: "#4f6d8a", stroke: "#36516a", size: 13 });
-    button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
     return;
   }
 
   if (!hasRoom) {
     const retry = { id: "pvpRetryJoin", x: 46, y: y0, w: view.width - 92, h: 42 };
     const copy = { id: "pvpCopy", x: 46, y: y0 + 52, w: view.width - 92, h: 38 };
-    const back = { id: "pvpBack", x: 46, y: y0 + 98, w: view.width - 92, h: 38 };
-    actions.push(copy, back);
+    actions.push(copy);
     if (hasError) actions.push(retry);
     button(ctx, { ...retry, label: hasError ? "重新加入房间" : "正在加入房间...", fill: hasError ? "#2f6f57" : "#b6a98e", stroke: hasError ? "#1d4f3c" : "#a89a80", size: 13 });
     button(ctx, { ...copy, label: "复制房间号", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
-    button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 12 });
     return;
   }
 
-  const players = pvp.room?.players || [];
-  const isHost = pvp.playerIndex === 0;
-  const status = pvp.room?.status || "waiting";
-  let primary;
-  if (status === "selecting") primary = { id: "pvpGoSetup", label: players[pvp.playerIndex]?.setupReady ? "已确认，查看配置" : "选择出战配置", fill: "#2f6f57" };
-  else if (status === "finished") primary = { id: "pvpReturnRoom", label: "返回房间", fill: "#2f6f57" };
-  else if (isHost) {
-    const opponentReady = players.length >= 2 && readyOf(pvp.room, 1);
-    primary = { id: "pvpStartSelection", label: opponentReady ? "开始选择卡牌" : "等待好友准备", fill: opponentReady ? "#2f6f57" : "#b6a98e" };
-  } else {
-    const selfReady = readyOf(pvp.room, pvp.playerIndex);
-    primary = { id: "pvpReady", label: selfReady ? "取消准备" : "我已看完规则，准备", fill: selfReady ? "#b5892f" : "#2f6f57" };
+  const gap = 16;
+  const btnW = (view.width - 76 - gap) / 2;
+  const invite = { id: "pvpShare", x: 38, y: y0, w: btnW, h: 44 };
+  let ready = { id: "pvpReady", x: 38 + btnW + gap, y: y0, w: btnW, h: 44 };
+  let readyLabel = selfReady ? "取消准备" : "准备";
+  let readyFill = selfReady ? "#b5892f" : "#2f6f57";
+  let readyStroke = selfReady ? "#8f6b20" : "#1d4f3c";
+  if (pvp.submitting) {
+    readyLabel = "同步中...";
+    readyFill = "#b6a98e";
+    readyStroke = "#a89a80";
+  } else if (status === "selecting") {
+    ready = { ...ready, id: "pvpGoSetup" };
+    readyLabel = players[selfIndex]?.setupReady ? "查看配置" : "选牌配置";
+    readyFill = "#2f6f57";
+    readyStroke = "#1d4f3c";
+  } else if (status === "finished") {
+    ready = { ...ready, id: "pvpReturnRoom" };
+    readyLabel = "重新准备";
+    readyFill = "#2f6f57";
+    readyStroke = "#1d4f3c";
   }
 
-  const primaryRect = { id: primary.id, x: 46, y: y0, w: view.width - 92, h: 40 };
-  const share = { id: "pvpShare", x: 46, y: y0 + 48, w: view.width - 92, h: 36 };
-  const copy = { id: "pvpCopy", x: 46, y: y0 + 90, w: view.width - 92, h: 34 };
-  const back = { id: "pvpBack", x: 46, y: y0 + 132, w: view.width - 92, h: 34 };
-  actions.push(primaryRect, share, copy, back);
-  button(ctx, { ...primaryRect, label: primary.label, fill: primary.fill, stroke: primary.fill === "#b6a98e" ? "#a89a80" : "#1d4f3c", size: 13 });
-  button(ctx, { ...share, label: "分享房间", fill: "#4f6d8a", stroke: "#36516a", size: 12 });
-  button(ctx, { ...copy, label: "复制房间号发送", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
-  button(ctx, { ...back, label: isHost ? "解散房间" : "离开房间", fill: "#8d6840", stroke: "#6f4d29", size: 12 });
+  const canInvite = isHost && status === "waiting" && players.length < 2 && !pvp.submitting;
+  if (canInvite) actions.push(invite);
+  if (!pvp.submitting && ["waiting", "selecting", "finished"].includes(status)) actions.push(ready);
+  button(ctx, { ...invite, label: "邀请好友", fill: canInvite ? "#4aa35f" : "#b6a98e", stroke: canInvite ? "#2e7d46" : "#a89a80", size: 14 });
+  button(ctx, { ...ready, label: readyLabel, fill: readyFill, stroke: readyStroke, size: 14 });
+  if (y0 + 62 < view.height - view.safeBottom - 4) {
+    text(ctx, players.length >= 2 ? "双方准备完成后自动进入游戏" : "点击邀请好友，或复制房间号发给好友", view.width / 2, y0 + 62, 11, "#775c34", "center");
+  }
+
   if (ui.matchSetupDropdown === "pvpRoomRuleFaction") drawFactionRuleDropdown(ctx, view, actions, factionRuleAnchor, factionRuleDropdownRules || rulesOf(pvp.room));
   if (ui.pvpShareGuideOpen) drawShareGuideOverlay(ctx, view, actions, roomId, ui);
 }

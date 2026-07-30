@@ -16,7 +16,6 @@ const ROOMS = "game_rooms";
 const USERS = "users";
 const USER_TOKENS = "user_tokens";
 const MATCH_HISTORY = "match_history";
-const ADMIN_OPENIDS = "admin_openids";
 const DAILY_USER_ACTIVITY = "daily_user_activity";
 const RANK_PROFILES = "rank_profiles";
 const RANK_MATCHES = "rank_matches";
@@ -24,7 +23,7 @@ const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TOKEN_TTL_MS = TOKEN_TTL_SECONDS * 1000;
 const PLAYER_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
-const MATCH_HISTORY_LIMIT = 100;
+const MATCH_HISTORY_LIMIT = 20;
 const PVP_READY_DEBUG_VERSION = "20260720-ready-debug-v1";
 
 let redisClientPromise = null;
@@ -77,7 +76,6 @@ const REQUIRED_COLLECTIONS = [
   USERS,
   USER_TOKENS,
   MATCH_HISTORY,
-  ADMIN_OPENIDS,
   DAILY_USER_ACTIVITY,
   RANK_PROFILES,
   RANK_MATCHES
@@ -232,6 +230,7 @@ function safeSetup(input = {}, rules = null) {
   const status = activeRules.deckMode === "autoOnly" || randomLineup ? { valid: false, ids: [] } : deckStatus(rawIds, faction);
   return {
     name: String(setup.name || "").trim().slice(0, 12),
+    avatarUrl: String(setup.avatarUrl || "").trim().slice(0, 1024),
     faction,
     leaderId: randomLineup ? "random" : String(setup.leaderId || ""),
     customDeckIds: status.valid ? status.ids : []
@@ -245,6 +244,7 @@ function makePlayer(openid, index, setup, rules) {
     openid,
     index,
     name: safe.name || `玩家${index + 1}`,
+    avatarUrl: safe.avatarUrl,
     faction: safe.faction,
     leaderId: safe.leaderId,
     customDeckIds: safe.customDeckIds,
@@ -522,13 +522,42 @@ async function recordMatchHistory(event, openid) {
 
 async function listMatchHistory(event, openid) {
   const limit = Math.max(1, Math.min(MATCH_HISTORY_LIMIT, safeNumber(event.limit, MATCH_HISTORY_LIMIT)));
+  const skip = Math.max(0, safeNumber(event.skip, 0));
   const res = await db.collection(MATCH_HISTORY)
     .where({ openid })
     .orderBy("time", "desc")
+    .skip(skip)
     .limit(limit)
     .get();
   const history = safeArray(res.data).map(doc => ({ ...(doc.record || {}), cloudId: doc._id, syncState: "synced" }));
-  return ok({ history });
+  const countRes = await db.collection(MATCH_HISTORY).where({ openid }).count();
+  const total = countRes.total || 0;
+  const hasMore = skip + history.length < total;
+  const result = { history, total, hasMore };
+  if (skip === 0) {
+    try {
+      const $ = db.command.aggregate;
+      const aggRes = await db.collection(MATCH_HISTORY).aggregate()
+        .match({ openid })
+        .group({
+          _id: null,
+          wins: $.sum($.cond([$.eq(['$record.winner', 0]), 1, 0])),
+          draws: $.sum($.cond([$.eq(['$record.winner', null]), 1, 0]))
+        })
+        .end();
+      const aggRow = safeArray(aggRes.data)[0] || {};
+      const wins = aggRow.wins || 0;
+      const draws = aggRow.draws || 0;
+      const losses = Math.max(0, total - wins - draws);
+      result.wins = wins;
+      result.losses = losses;
+      result.draws = draws;
+      result.winRate = total ? Math.round(wins * 100 / total) : 0;
+    } catch (aggErr) {
+      console.warn("[listMatchHistory] aggregate stats failed", aggErr?.message || aggErr);
+    }
+  }
+  return ok(result);
 }
 
 function rankPublicUserId(openid) {
@@ -1082,14 +1111,16 @@ async function resolveLoginContext(event = {}, wxContext = {}) {
   return code2Session(event.code);
 }
 
+// 管理员 OpenID 在云函数环境变量（后台服务配置）中配置，支持用逗号分隔多个。
+// 不再依赖数据库 admin_openids 集合。
+const ADMIN_OPENIDS_CONFIG = String(process.env.ADMIN_OPENID || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
 async function isAdministrator(openid) {
   if (!openid) return false;
-  try {
-    const result = await db.collection(ADMIN_OPENIDS).doc(openid).get();
-    return !!result.data;
-  } catch (err) {
-    return false;
-  }
+  return ADMIN_OPENIDS_CONFIG.includes(openid);
 }
 
 async function authAdminStatsOpenid(event, wxContext) {
@@ -1512,7 +1543,6 @@ async function setReady(event, openid) {
       }
       return fail("加入信息同步中，请再点一次准备", "PLAYER_SYNCING");
     }
-    if (playerIndex === 0) return fail("房主无需准备，等待好友准备后开始", "HOST_READY_IGNORED");
 
     const players = (room.players || []).map((player, index) => index === playerIndex ? { ...player, ready: desiredReady } : player);
     const readyPlayers = readyPlayersOf(players);
@@ -1567,7 +1597,7 @@ async function startSelection(event, openid) {
   if (room.status !== "waiting") return fail("当前不能开始", "ROOM_BUSY");
   const players = room.players || [];
   if (players.length < 2) return fail("等待好友加入", "WAITING_PLAYER");
-  if (!roomPlayerReady(room, 1)) return fail("好友准备后才能开始", "WAITING_READY");
+  if (!roomPlayerReady(room, 0) || !roomPlayerReady(room, 1)) return fail("双方准备后才能开始", "WAITING_READY");
   const nextPlayers = resetPlayerFlags(players);
   const readyPlayers = readyPlayersOf(nextPlayers);
   const nextRoom = { ...room, status: "selecting", players: nextPlayers, readyPlayers, readySeq: (room.readySeq || 0) + 1, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
@@ -1690,6 +1720,22 @@ async function leaveRoom(event, openid) {
         players: room.players,
         match: null,
         dissolvedAt: room.dissolvedAt,
+        turnSeq: room.turnSeq,
+        updatedAt: room.updatedAt
+      }
+    });
+    return ok({ roomId, playerIndex, room: publicRoom(room, playerIndex) });
+  }
+
+  // 好友(玩家1)在等待阶段离开房间：将其移出房间，房间回到仅房主状态，便于房主感知好友离开
+  if (room.status === "waiting") {
+    room.players = safeArray(room.players).filter((_, index) => index !== playerIndex);
+    room.readyPlayers = readyPlayersOf(room.players);
+    await db.collection(ROOMS).doc(roomId).update({
+      data: {
+        status: room.status,
+        players: room.players,
+        readyPlayers: room.readyPlayers,
         turnSeq: room.turnSeq,
         updatedAt: room.updatedAt
       }

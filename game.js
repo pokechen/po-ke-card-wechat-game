@@ -79,6 +79,7 @@ const app = {
     recordedResultKey: "",
     lastSeenRuleVersion: 0,
     readyRuleVersion: 0,
+    autoStartReadySeq: 0,
     rulePromptOpen: false,
     pendingRulePrompt: null,
     dissolvedNoticeRoomId: ""
@@ -113,7 +114,15 @@ const app = {
     cloudHistoryRecords: [],
     cloudHistoryLoaded: false,
     cloudHistoryLoading: false,
+    cloudHistoryLoadingMore: false,
     cloudHistoryError: "",
+    cloudHistoryTotal: null,
+    cloudHistoryWins: 0,
+    cloudHistoryLosses: 0,
+    cloudHistoryDraws: 0,
+    cloudHistoryWinRate: 0,
+    cloudHistorySkip: 0,
+    cloudHistoryHasMore: false,
     battleCardsSide: "mine",
     battleCardsScrolls: [0, 0],
     battleCardsDetailId: "",
@@ -121,7 +130,7 @@ const app = {
     dismissedRecentPlaySeq: 0,
     dismissedLeaderRevealKey: "",
     discardPileOwner: null,
-    discardPilePage: 0,
+    discardPileScroll: 0,
     battleLogHistoryOpen: false,
     battleLogHistoryScroll: 0,
     battleRowScrolls: {},
@@ -131,6 +140,7 @@ const app = {
     pvpShareCodeError: "",
     pvpShareCodeRoomId: "",
     pvpShareCodeEnvVersion: "",
+    pvpReadyAnimUntil: 0,
     authToken: "",
     authUser: null,
     authExpiresAt: 0,
@@ -173,6 +183,16 @@ const MULLIGAN_SWAP_IN_MS = 300;
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
   return setTimeout(callback, 16);
+}
+
+function playPvpReadyAnim(duration = 900) {
+  app.ui.pvpReadyAnimUntil = Date.now() + duration;
+  const tick = () => {
+    if (Date.now() >= app.ui.pvpReadyAnimUntil) return;
+    if (app.scene === "pvpRoom") render();
+    requestFrame(tick);
+  };
+  requestFrame(tick);
 }
 
 function activeSingleMatch() {
@@ -1086,12 +1106,14 @@ function startMatch(optionsPatch = {}) {
   app.ui.mulliganReplacedUid = "";
   app.ui.pendingPvpMulliganSwap = null;
   app.ui.discardPileOwner = null;
-  app.ui.discardPilePage = 0;
+  app.ui.discardPileScroll = 0;
   app.ui.battleLogHistoryOpen = false;
   app.ui.battleLogHistoryScroll = 0;
   app.ui.battleRowScrolls = {};
   app.ui.dismissedRecentPlaySeq = 0;
   app.ui.dismissedLeaderRevealKey = "";
+  app.ui.firstPlayerAnnounced = false;
+  app.ui.firstPlayerIndex = null;
   clearRecentPlayTimer();
   const settings = { ...loadSettings(), ...optionsPatch };
   app.match = createMatch(settings);
@@ -1140,7 +1162,11 @@ function scheduleAi() {
   clearAiTimer();
   app.aiTimer = setTimeout(() => {
     app.aiTimer = null;
-    aiStep(app.match);
+    const acted = aiStep(app.match);
+    if (!acted && !app.match.over && !app.match.pending && !app.match.roundTransition && app.match.current === 1) {
+      console.error("[battle] 系统行动执行失败，自动放弃当前回合以避免对局卡死。", app.match.strategy || "");
+      pass(app.match);
+    }
     persistActiveSingleMatch();
     if (app.match.over) {
       setScene("result");
@@ -1411,7 +1437,7 @@ function normalizeHistoryRecords(records = []) {
     if (key) seen.add(key);
     list.push({ ...item, syncState: "synced" });
   });
-  return list.sort((a, b) => (b.time || 0) - (a.time || 0)).slice(0, 100);
+  return list.sort((a, b) => (b.time || 0) - (a.time || 0));
 }
 
 function applyCloudHistoryRecords(records) {
@@ -1436,7 +1462,7 @@ async function uploadMatchRecord(record) {
     console.log("[history] upload success:", JSON.stringify(result));
     removeLocalMatchRecord(record.recordKey);
     if (result?.record) applyCloudHistoryRecords([result.record].concat(app.ui.cloudHistoryRecords || []));
-    if (app.scene === "menu" || app.scene === "history") render();
+    if (app.scene === "menu" || app.scene === "history") refreshCloudMatchHistory(true);
     return true;
   } catch (err) {
     console.error("[history] upload FAILED:", err?.message || err, err);
@@ -1457,6 +1483,8 @@ async function syncPendingMatchHistory() {
   }
 }
 
+const HISTORY_PAGE_SIZE = 20;
+
 let cloudHistoryLoading = false;
 let cloudHistoryLoadedAt = 0;
 async function refreshCloudMatchHistory(force = false) {
@@ -1469,11 +1497,20 @@ async function refreshCloudMatchHistory(force = false) {
   try {
     if (!(await ensureCloudAuth())) throw new Error("云端登录失败");
     await syncPendingMatchHistory();
-    const result = await pvpClient.listMatchHistory(100);
-    applyCloudHistoryRecords(result.history || []);
+    const result = await pvpClient.listMatchHistory(HISTORY_PAGE_SIZE, 0);
+    const history = normalizeHistoryRecords(result.history || []);
+    app.ui.cloudHistoryRecords = history;
+    app.ui.cloudHistorySkip = history.length;
+    app.ui.cloudHistoryHasMore = !!result.hasMore;
+    if (result.total != null) app.ui.cloudHistoryTotal = result.total;
+    if (result.wins != null) app.ui.cloudHistoryWins = result.wins;
+    if (result.losses != null) app.ui.cloudHistoryLosses = result.losses;
+    if (result.draws != null) app.ui.cloudHistoryDraws = result.draws;
+    if (result.winRate != null) app.ui.cloudHistoryWinRate = result.winRate;
     app.ui.cloudHistoryLoaded = true;
     cloudHistoryLoadedAt = Date.now();
     if (app.scene === "menu" || app.scene === "history") render();
+    maybeLoadMoreHistory();
     return true;
   } catch (err) {
     app.ui.cloudHistoryError = err?.message || "云端战绩加载失败";
@@ -1485,6 +1522,40 @@ async function refreshCloudMatchHistory(force = false) {
     app.ui.cloudHistoryLoading = false;
     if (app.scene === "history") render();
   }
+}
+
+async function loadMoreCloudMatchHistory() {
+  if (!app.ui.cloudHistoryLoaded || !app.ui.cloudHistoryHasMore || app.ui.cloudHistoryLoadingMore) return false;
+  app.ui.cloudHistoryLoadingMore = true;
+  try {
+    const result = await pvpClient.listMatchHistory(HISTORY_PAGE_SIZE, app.ui.cloudHistorySkip || app.ui.cloudHistoryRecords.length);
+    const more = normalizeHistoryRecords(result.history || []);
+    if (more.length) {
+      app.ui.cloudHistoryRecords = app.ui.cloudHistoryRecords.concat(more);
+      app.ui.cloudHistorySkip = app.ui.cloudHistoryRecords.length;
+    }
+    app.ui.cloudHistoryHasMore = !!result.hasMore;
+    if (app.scene === "history") render();
+    return true;
+  } catch (err) {
+    console.warn("[history] load more failed", err?.message || err);
+    return false;
+  } finally {
+    app.ui.cloudHistoryLoadingMore = false;
+    if (app.scene === "history") render();
+  }
+}
+
+function maybeLoadMoreHistory() {
+  if (!app.ui.cloudHistoryHasMore || app.ui.cloudHistoryLoadingMore) return;
+  const bounds = historyScrollBounds();
+  const maxScroll = bounds.maxScroll || 0;
+  const scroll = app.ui.historyScroll || 0;
+  if (maxScroll <= 0) {
+    loadMoreCloudMatchHistory();
+    return;
+  }
+  if (scroll >= maxScroll - 240) loadMoreCloudMatchHistory();
 }
 
 setRecordMatchCloudHook(record => uploadMatchRecord(record));
@@ -1760,17 +1831,27 @@ function posterSortedCards(cards, seed) {
     .sort((a, b) => posterCardHash(a, seed) - posterCardHash(b, seed));
 }
 
+function posterCardUniqueKey(card) {
+  const imageFile = posterNormalizeWebpFileName(posterFileNameFromImageUrl(card?.imageUrl));
+  if (imageFile) return `image:${imageFile}`;
+  const name = String(card?.baseName || card?.name || "").trim();
+  return name ? `name:${name}` : `id:${card?.id || ""}`;
+}
+
 function posterPickCards(roomId, faction) {
   const seed = posterSeed(roomId);
   const sourceFaction = FACTION_KEYS.includes(faction) ? faction : FACTION_KEYS[seed % FACTION_KEYS.length];
   const primary = posterSortedCards(eligibleCards(sourceFaction), seed);
   const fallback = posterSortedCards(FACTION_KEYS.flatMap(key => eligibleCards(key)), seed + 97);
   const picked = [];
+  const seen = Object.create(null);
   primary.concat(fallback).forEach(card => {
     if (picked.length >= 5) return;
-    if (!picked.some(item => item.id === card.id)) picked.push(card);
+    const uniqueKey = posterCardUniqueKey(card);
+    if (seen[uniqueKey]) return;
+    seen[uniqueKey] = true;
+    picked.push(card);
   });
-  while (picked.length < 5 && picked.length > 0) picked.push(picked[picked.length % picked.length]);
   return picked;
 }
 
@@ -2103,9 +2184,9 @@ function savePvpShareCode(filePathOverride = "") {
   });
 }
 
-function guideShare() {
+function guideShare(reason = "点击房间分享按钮") {
   const roomId = normalizePvpRoomId(app.pvp.roomId);
-  console.log("[share-debug] 点击转发邀请按钮:", debugJson({
+  console.log(`[share-debug] ${reason}:`, debugJson({
     scene: app.scene,
     rawRoomId: app.pvp.roomId,
     pendingRoomId: app.pvp.pendingRoomId,
@@ -2114,8 +2195,8 @@ function guideShare() {
   }));
   if (!roomId) return toast("房间创建后才能分享邀请");
   const api = typeof wx !== "undefined" ? wx : null;
-  registerShareHandler(api, `点击房间分享按钮-${roomId}`);
-  showGameShareMenu(api, `点击房间分享按钮-${roomId}`);
+  registerShareHandler(api, `${reason}-${roomId}`);
+  showGameShareMenu(api, `${reason}-${roomId}`);
   const preview = getSharePayload();
   console.warn("[share-debug] 分享前即时 payload 预览:", debugJson(preview));
   if (app.ui.pvpShareCodeRoomId !== roomId) app.ui.pvpShareCodePath = "";
@@ -2250,6 +2331,7 @@ function currentPlayerSetup(ruleOverride = null) {
   const useCustomDeck = !randomLineup && rules.deckMode !== "autoOnly" && settings.pvpDeckMode === "custom" && status.valid;
   return {
     name: String(app.ui.authUser?.nickName || "").slice(0, 12),
+    avatarUrl: String(app.ui.authUser?.avatarUrl || ""),
     faction,
     leaderId: resolvePvpLeaderId(settings, faction),
     customDeckIds: useCustomDeck ? status.ids : []
@@ -2416,7 +2498,7 @@ function applyRoomUpdate(room, playerIndex) {
   if (Number.isInteger(playerIndex)) app.pvp.playerIndex = playerIndex;
   if (room.match) {
     app.match = decorateOnlineMatch(room.match);
-    if (["revive", "leaderDiscard"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
+    if (["revive", "leaderDiscard", "decoy"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
   } else if (room.status !== "finished") app.match = null;
   app.pvp.loading = false;
   app.pvp.submitting = false;
@@ -2426,6 +2508,32 @@ function applyRoomUpdate(room, playerIndex) {
     app.pvp.readyRuleVersion = 0;
     console.log("[pvp] 玩家2检测到规则变更，加入提示队列:", seenVersion, "->", nextVersion);
     queuePvpRuleChanged(previousRoom?.rules || {}, room.rules, roomId);
+  }
+  const prevSelfReady = previousRoom ? pvpPlayerReady(previousRoom, nextPlayerIndex) : false;
+  const nextSelfReady = pvpPlayerReady(room, nextPlayerIndex);
+  const friendIndex = nextPlayerIndex === 0 ? 1 : 0;
+  const prevFriendReady = previousRoom ? pvpPlayerReady(previousRoom, friendIndex) : false;
+  const nextFriendReady = pvpPlayerReady(room, friendIndex);
+  if (previousRoom && (!prevSelfReady && nextSelfReady || !prevFriendReady && nextFriendReady)) playPvpReadyAnim();
+  if (nextPlayerIndex === 0 && previousRoom && !prevFriendReady && nextFriendReady) {
+    toast("好友已准备");
+  }
+  const bothReady = room.status === "waiting" && (room.players?.length || 0) >= 2 && pvpPlayerReady(room, 0) && pvpPlayerReady(room, 1);
+  const readySeq = Number(room.readySeq || 0) || 0;
+  if (nextPlayerIndex === 0 && bothReady && app.pvp.autoStartReadySeq !== readySeq) {
+    app.pvp.autoStartReadySeq = readySeq;
+    setTimeout(() => {
+      if (app.pvp.roomId === roomId && app.pvp.room?.status === "waiting" && pvpPlayerReady(app.pvp.room, 0) && pvpPlayerReady(app.pvp.room, 1)) startPvpSelection();
+    }, 520);
+  }
+  const prevCount = previousRoom ? (previousRoom.players?.length || 0) : 0;
+  const nextCount = room.players?.length || 0;
+  if (nextPlayerIndex === 0 && previousRoom) {
+    if (prevCount < 2 && nextCount >= 2) {
+      toast("好友已进入房间");
+    } else if (prevCount >= 2 && nextCount < 2) {
+      toast("好友已离开房间");
+    }
   }
   if (room.status === "playing" && app.match) {
     if (app.scene !== "battle") app.ui.mulliganGuideShown = false;
@@ -2489,9 +2597,10 @@ function resetPvpState() {
   app.ui.pvpShareCodeError = "";
   app.ui.pvpShareCodeRoomId = "";
   app.ui.pvpShareCodeEnvVersion = "";
+  app.ui.pvpReadyAnimUntil = 0;
   clearPendingPvpMulliganSwap();
   clearRoundTransitionTimer();
-  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0, readyRuleVersion: 0, rulePromptOpen: false, pendingRulePrompt: null, dissolvedNoticeRoomId: "" };
+  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0, readyRuleVersion: 0, autoStartReadySeq: 0, rulePromptOpen: false, pendingRulePrompt: null, dissolvedNoticeRoomId: "" };
 }
 
 function showPvpRoomDissolvedNotice(roomId) {
@@ -2529,11 +2638,25 @@ function dissolvePvpRoom() {
   });
 }
 
-function confirmDissolvePvpRoom() {
-  if (app.pvp.playerIndex !== 0 || !app.pvp.roomId) {
+function leavePvpRoom() {
+  const roomId = app.pvp.roomId;
+  if (!roomId || app.pvp.submitting) return;
+  app.pvp.submitting = true;
+  render();
+  pvpClient.leaveRoom(roomId).then(() => {
     resetPvpState();
     app.match = null;
-    return setScene("menu");
+    setScene("menu");
+  }).catch(err => {
+    app.pvp.submitting = false;
+    toast(err.message || "离开房间失败");
+    render();
+  });
+}
+
+function confirmDissolvePvpRoom() {
+  if (app.pvp.playerIndex !== 0 || !app.pvp.roomId) {
+    return leavePvpRoom();
   }
   const api = typeof wx !== "undefined" ? wx : null;
   if (api && api.showModal) {
@@ -2583,7 +2706,7 @@ function createPvpRoom() {
       scene: app.scene
     }));
     watchPvpRoom(result.roomId);
-    toast("可先确认规则，再转发好友");
+    guideShare("创建房间后自动展示邀请页");
   }).catch(err => {
     console.warn("[pvp] create failed", err);
     app.pvp.loading = false;
@@ -3078,6 +3201,30 @@ function resolveLeaderDiscardChoice(cardUid) {
   return afterHumanAction();
 }
 
+function resolveDecoyChoice(cardUid) {
+  if (!app.match?.pending || app.match.pending.type !== "decoy" || !cardUid) return render();
+  closeBattleCardDetail();
+  if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
+  resolvePending(app.match, { uid: cardUid });
+  return afterHumanAction();
+}
+
+function resolveLeaderWeatherChoice(cardUid) {
+  if (!app.match?.pending || app.match.pending.type !== "leaderWeather" || !cardUid) return render();
+  closeBattleCardDetail();
+  if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
+  resolvePending(app.match, { uid: cardUid });
+  return afterHumanAction();
+}
+
+function cancelBattlePendingChoice() {
+  if (!app.match?.pending) return render();
+  closeBattleCardDetail();
+  if (isOnlineMatch()) return submitPvpAction({ type: "cancelPending" });
+  cancelPending(app.match);
+  return afterHumanAction();
+}
+
 function confirmLeaderDiscardChoice(cardUid) {
   const pending = app.match?.pending;
   if (!pending || pending.type !== "leaderDiscard" || !cardUid) return render();
@@ -3208,6 +3355,7 @@ function handleMenu(action) {
     app.ui.settingDropdown = "";
     app.ui.settingDeckPage = 0;
     app.ui.settingDeckScroll = 0;
+    app.ui.deckReturnScene = "";
     return setScene("settings");
   }
   if (action.id === "history") {
@@ -3286,10 +3434,14 @@ function handleMatchSetup(action) {
     return render();
   }
   if (action.id === "editCustomDeck") {
-    app.ui.deckPage = 0;
-    app.ui.deckSlotDropdown = "";
+    // 跳转到「我的牌组」界面编辑卡牌，复用现有界面而不是单独再开一个编辑器。
+    const faction = settings.humanLineupMode === "random" ? "random" : settings.humanFaction;
+    if (faction !== "random") saveSettings({ humanFaction: faction }); // 锚定到当前准备界面所选阵营
     app.ui.deckReturnScene = "matchSetup";
-    return setScene("deckBuilder");
+    app.ui.settingDeckPage = 0;
+    app.ui.settingDeckScroll = 0;
+    app.ui.settingCardTab = "all";
+    return setScene("settings");
   }
   if (action.id === "startPrepared") {
     const startOptions = useCustomDeck
@@ -3410,6 +3562,7 @@ function applySettingOption(action) {
   app.ui.settingDropdown = "";
   if (field === "humanLeader") {
     saveSettings({ humanLeaderIds: { ...(settings.humanLeaderIds || {}), [settings.humanFaction]: value } });
+    settingsScene.invalidateDeckViewCache();
   }
   render();
 }
@@ -3470,12 +3623,14 @@ function handleSettings(action) {
     app.ui.settingDeckPage = 0;
     app.ui.settingDeckScroll = 0;
     saveSettings({ humanFaction: action.faction });
+    settingsScene.invalidateDeckViewCache();
     return render();
   }
   if (action.id === "settingCardTab") {
     app.ui.settingCardTab = action.value || "all";
     app.ui.settingDeckPage = 0;
     app.ui.settingDeckScroll = 0;
+    settingsScene.invalidateDeckViewCache();
     return render();
   }
   if (action.id === "addSettingCard") {
@@ -3509,7 +3664,9 @@ function handleSettings(action) {
   }
   if (action.id === "back") {
     app.ui.settingDropdown = "";
-    return setScene("menu");
+    const backScene = app.ui.deckReturnScene || "menu";
+    app.ui.deckReturnScene = "";
+    return setScene(backScene);
   }
   render();
 }
@@ -3528,6 +3685,7 @@ function saveCustomDeckSlot(faction, slotIndex, ids, enabled, name, activate = t
   }
   if (enabled != null) patch.customDeckEnabled = enabled;
   saveSettings(patch);
+  settingsScene.invalidateDeckViewCache();
 }
 
 function toggleCardInGroup(currentIds, groupIds, faction) {
@@ -3992,7 +4150,9 @@ function handlePvpRoom(action) {
   if (action.id === "pvpGoSetup") return setScene("pvpSetup");
   if (action.id === "pvpReturnRoom") return returnPvpRoom();
   if (action.id === "pvpBack") {
-    if (app.pvp.roomId && app.pvp.room && app.pvp.playerIndex === 0) return confirmDissolvePvpRoom();
+    if (app.pvp.roomId && app.pvp.room) {
+      return app.pvp.playerIndex === 0 ? confirmDissolvePvpRoom() : leavePvpRoom();
+    }
     resetPvpState();
     app.match = null;
     return setScene("menu");
@@ -4030,6 +4190,10 @@ function handleBattle(action) {
     if (app.match.roundTransition) return continueBattleRoundTransition();
     return render();
   }
+  if (action.id === "dismissFirstPlayer") {
+    app.ui.firstPlayerAnnounced = true;
+    return render();
+  }
   if (app.match.roundTransition) return render();
   if (action.id === "battleCardDetail") return render();
   if (action.id === "detailPanel") {
@@ -4052,11 +4216,8 @@ function handleBattle(action) {
     if (app.match.pending?.type === "revive" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return confirmSkipRevivePending();
     }
-    if (app.match.pending?.type === "leaderDiscard" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
-      closeBattleCardDetail();
-      if (isOnlineMatch()) return submitPvpAction({ type: "cancelPending" });
-      cancelPending(app.match);
-      return afterHumanAction();
+    if (["leaderDiscard", "decoy", "leaderWeather"].includes(app.match.pending?.type) && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
+      return cancelBattlePendingChoice();
     }
     app.ui.battleCardDetailId = "";
     app.ui.battleCardDetailUid = "";
@@ -4066,6 +4227,8 @@ function handleBattle(action) {
   }
   if (action.id === "mulliganDetailSwap") return handleMulliganSwap(action.cardUid, true);
   if (action.id === "targetChoice" && app.match.pending?.type === "leaderDiscard") return confirmLeaderDiscardChoice(action.cardUid);
+  if (action.id === "targetChoice" && app.match.pending?.type === "decoy") return resolveDecoyChoice(action.cardUid);
+  if (action.id === "targetChoice" && app.match.pending?.type === "leaderWeather") return resolveLeaderWeatherChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "revive") {
     closeBattleCardDetail();
     if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: action.cardUid } });
@@ -4076,21 +4239,17 @@ function handleBattle(action) {
   if (app.ui.battleLogHistoryOpen) return render();
   if (action.id === "viewDiscardPile") {
     app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
-    app.ui.discardPilePage = 0;
+    app.ui.discardPileScroll = 0;
     return render();
   }
   if (action.id === "closeDiscardPile") {
     app.ui.discardPileOwner = null;
-    app.ui.discardPilePage = 0;
+    app.ui.discardPileScroll = 0;
     return render();
   }
   if (action.id === "switchDiscardPile") {
     app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
-    app.ui.discardPilePage = 0;
-    return render();
-  }
-  if (action.id === "discardPilePage") {
-    app.ui.discardPilePage = Math.max(0, (app.ui.discardPilePage || 0) + (action.delta || 0));
+    app.ui.discardPileScroll = 0;
     return render();
   }
   if (action.id === "discardPilePanel") return render();
@@ -4397,6 +4556,47 @@ function handleBattleLogHistorySwipe(start, end) {
   return true;
 }
 
+function discardPileScrollMax() {
+  const m = battleScene.discardPileMetrics(view, app.match, app.ui);
+  return m.scrollMax;
+}
+function clampDiscardPileScroll(value) {
+  return Math.max(0, Math.min(value, discardPileScrollMax()));
+}
+function scrollDiscardPileBy(deltaY) {
+  if (app.ui.discardPileOwner == null) return;
+  app.ui.discardPileScroll = clampDiscardPileScroll((app.ui.discardPileScroll || 0) + deltaY);
+  render();
+}
+let discardPileInertiaRAF = null;
+function cancelDiscardPileInertia() {
+  if (discardPileInertiaRAF) {
+    cancelAnimationFrame(discardPileInertiaRAF);
+    discardPileInertiaRAF = null;
+  }
+}
+function startDiscardPileInertia(velocity) {
+  cancelDiscardPileInertia();
+  if (Math.abs(velocity) < 0.02) return;
+  let v = velocity;
+  let last = performance.now();
+  function step(now) {
+    if (app.ui.discardPileOwner == null) { discardPileInertiaRAF = null; return; }
+    const dt = Math.min(32, now - last);
+    last = now;
+    app.ui.discardPileScroll = clampDiscardPileScroll((app.ui.discardPileScroll || 0) + v * dt);
+    render();
+    v *= Math.pow(0.95, dt / 16);
+    const max = discardPileScrollMax();
+    if (Math.abs(v) > 0.02 && app.ui.discardPileScroll > 0 && app.ui.discardPileScroll < max) {
+      discardPileInertiaRAF = requestAnimationFrame(step);
+    } else {
+      discardPileInertiaRAF = null;
+    }
+  }
+  discardPileInertiaRAF = requestAnimationFrame(step);
+}
+
 function handleDiscardPileSwipe(start, end) {
   if (!start || !end || app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner == null) return false;
   const dx = end.x - start.x;
@@ -4404,17 +4604,8 @@ function handleDiscardPileSwipe(start, end) {
   const absX = Math.abs(dx);
   const absY = Math.abs(dy);
   const panelY = view.safeTop + 74;
-  const panelH = Math.max(300, Math.min(390, view.height - view.safeTop - view.safeBottom - 178));
+  const panelH = Math.max(300, Math.min(430, view.height - view.safeTop - view.safeBottom - 178));
   if (start.y < panelY || start.y > panelY + panelH || absY < 42 || absY < absX * 1.2) return false;
-  const owner = app.match.players[app.ui.discardPileOwner] ? app.ui.discardPileOwner : 0;
-  const pile = app.match.players[owner]?.discard || [];
-  const pageSize = Math.max(3, Math.floor((panelH - 124) / 48));
-  const totalPages = Math.max(1, Math.ceil(pile.length / pageSize));
-  const nextPage = Math.max(0, Math.min((app.ui.discardPilePage || 0) + (dy < 0 ? 1 : -1), totalPages - 1));
-  if (nextPage !== app.ui.discardPilePage) {
-    app.ui.discardPilePage = nextPage;
-    render();
-  }
   return true;
 }
 
@@ -4492,33 +4683,33 @@ function handleDeckBuilderSwipe(start, end) {
 }
 
 function settingDeckScrollBounds() {
-  const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const cardTab = app.ui.settingCardTab || "all";
-  const active = cardTab || "all";
-  const cards = eligibleCards(faction).filter(card => {
-    if (active === "all") return true;
-    if (active === "special") return card.category === "special" || card.category === "weather";
-    if (active === "hero") return !!card.hero;
-    if (!(card.category === "unit" || card.category === "hero")) return false;
-    return (card.row || []).includes(active);
+  return settingsScene.scrollMetrics(view, app.ui);
+}
+
+function clampSettingDeckScroll(value, maxScroll = null) {
+  const limit = maxScroll == null ? settingDeckScrollBounds().maxScroll : maxScroll;
+  return Math.max(0, Math.min(value || 0, limit));
+}
+
+let settingDeckRenderPending = false;
+
+function requestSettingDeckRender() {
+  if (settingDeckRenderPending) return;
+  settingDeckRenderPending = true;
+  requestFrame(() => {
+    settingDeckRenderPending = false;
+    if (app.scene === "settings") render();
   });
-  const groups = groupCards(cards);
-  return settingsScene.scrollBounds(view, groups.length);
 }
 
-function clampSettingDeckScroll(value) {
-  const { maxScroll } = settingDeckScrollBounds();
-  return Math.max(0, Math.min(value || 0, maxScroll));
-}
-
-function scrollSettingDeckBy(deltaY) {
+function scrollSettingDeckBy(deltaY, maxScroll = null, deferRender = false) {
   if (app.scene !== "settings" || app.ui.settingCardDetailId || app.ui.settingDropdown) return false;
   const before = app.ui.settingDeckScroll || 0;
-  const next = clampSettingDeckScroll(before - deltaY);
+  const next = clampSettingDeckScroll(before - deltaY, maxScroll);
   if (Math.abs(next - before) > 0.1) {
     app.ui.settingDeckScroll = next;
-    render();
+    if (deferRender) requestSettingDeckRender();
+    else render();
   }
   return true;
 }
@@ -4526,8 +4717,10 @@ function scrollSettingDeckBy(deltaY) {
 let settingDeckScrollMotionId = 0;
 
 function cancelSettingDeckScrollInertia() {
+  const wasScrolling = !!app.ui.settingDeckScrolling;
   settingDeckScrollMotionId += 1;
   app.ui.settingDeckScrolling = false;
+  if (wasScrolling && app.scene === "settings") requestSettingDeckRender();
 }
 
 function canScrollSettingDeck() {
@@ -4536,36 +4729,86 @@ function canScrollSettingDeck() {
 
 function startSettingDeckScrollInertia(initialVelocity) {
   let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
-  if (!canScrollSettingDeck() || Math.abs(velocity) < 0.04) return false;
+  if (!canScrollSettingDeck()) {
+    const wasScrolling = !!app.ui.settingDeckScrolling;
+    app.ui.settingDeckScrolling = false;
+    if (wasScrolling && app.scene === "settings") requestSettingDeckRender();
+    return false;
+  }
+  if (Math.abs(velocity) < 0.04) {
+    app.ui.settingDeckScrolling = false;
+    requestSettingDeckRender();
+    return false;
+  }
   const motionId = ++settingDeckScrollMotionId;
+  const maxScroll = settingDeckScrollBounds().maxScroll;
   app.ui.settingDeckScrolling = true;
   let lastTime = Date.now();
 
   function finish() {
     if (motionId !== settingDeckScrollMotionId) return;
     app.ui.settingDeckScrolling = false;
-    render();
+    requestSettingDeckRender();
   }
 
   function step() {
-    if (motionId !== settingDeckScrollMotionId || !canScrollSettingDeck()) return;
+    if (motionId !== settingDeckScrollMotionId) return;
+    if (!canScrollSettingDeck()) {
+      app.ui.settingDeckScrolling = false;
+      if (app.scene === "settings") requestSettingDeckRender();
+      return;
+    }
     const now = Date.now();
     const elapsed = Math.min(32, Math.max(1, now - lastTime));
     lastTime = now;
     const before = app.ui.settingDeckScroll || 0;
-    const next = clampSettingDeckScroll(before + velocity * elapsed);
+    const next = clampSettingDeckScroll(before + velocity * elapsed, maxScroll);
     app.ui.settingDeckScroll = next;
     if (Math.abs(next - before) < 0.05) {
       finish();
       return;
     }
-    render();
+    requestSettingDeckRender();
     velocity *= Math.exp(-0.0048 * elapsed);
     if (Math.abs(velocity) >= 0.025) requestFrame(step);
     else finish();
   }
 
   requestFrame(step);
+  return true;
+}
+
+function finishSettingDeckTouch(state, start, end) {
+  if (!state || !start || !end || !canScrollSettingDeck()) return false;
+  const bounds = state.settingsDeckBounds || settingDeckScrollBounds();
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const qualifies = state.settingsDeckScrolled || (
+    bounds.maxScroll > 0
+    && start.y >= bounds.listTop
+    && start.y <= bounds.listBottom
+    && Math.abs(dy) > 3
+    && Math.abs(dy) > Math.abs(dx) * 0.7
+  );
+  if (!qualifies) return false;
+
+  const last = state.settingsDeckScrolled ? (state.lastPoint || start) : start;
+  const deltaY = end.y - last.y;
+  if (Math.abs(deltaY) > 0.1) {
+    const now = Date.now();
+    const lastTime = state.lastTime || state.startTime || now - 16;
+    const elapsed = Math.max(1, now - lastTime);
+    scrollSettingDeckBy(deltaY, bounds.maxScroll, true);
+    const instantVelocity = -deltaY / elapsed;
+    const previousVelocity = state.settingsDeckScrollVelocity;
+    state.settingsDeckScrollVelocity = previousVelocity == null
+      ? instantVelocity
+      : previousVelocity * 0.65 + instantVelocity * 0.35;
+    state.lastPoint = end;
+    state.lastTime = now;
+  }
+  state.settingsDeckScrolled = true;
+  app.ui.settingDeckScrolling = true;
   return true;
 }
 
@@ -4594,6 +4837,7 @@ function scrollHistoryBy(deltaY) {
     app.ui.historyScroll = next;
     render();
   }
+  maybeLoadMoreHistory();
   return true;
 }
 
@@ -4619,6 +4863,7 @@ function startHistoryScrollInertia(initialVelocity) {
     app.ui.historyScroll = next;
     if (Math.abs(next - before) < 0.05) return;
     render();
+    maybeLoadMoreHistory();
     velocity *= Math.exp(-0.0048 * elapsed);
     if (Math.abs(velocity) >= 0.025) requestFrame(step);
   }
@@ -5031,6 +5276,7 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
     cancelBattleCardsPageScrollInertia();
     cancelSettingDeckScrollInertia();
     cancelAdminStatsScrollInertia();
+    cancelDiscardPileInertia();
     touchStartState = { point, startTime: Date.now() };
     startLongPress(point);
   });
@@ -5099,6 +5345,27 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         touchStartState.rankLeaderboardScrolled = true;
         touchStartState.lastPoint = point;
         return;
+      }
+    }
+
+    if (app.scene === "battle" && app.match && app.ui.discardPileOwner != null && !app.ui.battleCardDetailId && !app.ui.battleCardDetailUid) {
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx) * 0.8) {
+        if (touchStartState.discardPileScrolled || Math.abs(dy) > 6) {
+          touchStartState.discardPileScrolled = true;
+          clearLongPress();
+          scrollDiscardPileBy(start.y - point.y);
+          const now = Date.now();
+          if (touchStartState.discardPileLastT) {
+            const elapsed = Math.max(1, now - touchStartState.discardPileLastT);
+            touchStartState.discardPileVelocity = -(point.y - touchStartState.discardPileLastY) / elapsed;
+          }
+          touchStartState.discardPileLastY = point.y;
+          touchStartState.discardPileLastT = now;
+          return;
+        }
       }
     }
 
@@ -5213,7 +5480,8 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
     }
 
     if (canScrollSettingDeck()) {
-      const bounds = settingDeckScrollBounds();
+      const bounds = touchStartState.settingsDeckBounds || settingDeckScrollBounds();
+      touchStartState.settingsDeckBounds = bounds;
       const start = touchStartState.point;
       const dx = point.x - start.x;
       const dy = point.y - start.y;
@@ -5228,7 +5496,7 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
         const deltaY = point.y - last.y;
         const elapsed = Math.max(1, now - lastTime);
-        scrollSettingDeckBy(deltaY);
+        scrollSettingDeckBy(deltaY, bounds.maxScroll, true);
         const instantVelocity = -deltaY / elapsed;
         const previousVelocity = touchStartState.settingsDeckScrollVelocity;
         touchStartState.settingsDeckScrollVelocity = previousVelocity == null
@@ -5272,6 +5540,8 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       render();
     }
 
+    finishSettingDeckTouch(state, start, point);
+
     if (state && state.battleCardsScrolled) {
       const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
       const releaseFactor = Math.max(0, 1 - idleMs / 120);
@@ -5304,6 +5574,12 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       return;
     }
     if (state && state.battleLogHistoryScrolled) return;
+    if (state && state.discardPileScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.discardPileLastT || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startDiscardPileInertia((state.discardPileVelocity || 0) * releaseFactor);
+      return;
+    }
     if (handleBattleLogHistorySwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
     if (handleSettingsSwipe(start, point)) return;

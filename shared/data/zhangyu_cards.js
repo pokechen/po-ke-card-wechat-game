@@ -112,8 +112,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0194",
-      "name": "妇好",
-      "baseName": "妇好",
+      "name": "花木兰",
+      "baseName": "花木兰",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "hero",
@@ -133,7 +133,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/妇好.webp"
+      "imageUrl": "assets/card-icons/秦良玉.webp"
     },
     {
       "id": "zhangyu-0146",
@@ -164,8 +164,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0190",
-      "name": "屈原",
-      "baseName": "屈原",
+      "name": "西施",
+      "baseName": "西施",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -185,7 +185,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/屈原.webp"
+      "imageUrl": "assets/card-icons/高渐离.webp"
     },
     {
       "id": "zhangyu-0193",
@@ -210,8 +210,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0191",
-      "name": "张骞",
-      "baseName": "张骞",
+      "name": "徐霞客",
+      "baseName": "徐霞客",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -227,12 +227,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/张骞.webp"
+      "imageUrl": "assets/card-icons/徐霞客.webp"
     },
     {
       "id": "zhangyu-0200",
-      "name": "姜子牙",
-      "baseName": "姜子牙",
+      "name": "王昭君",
+      "baseName": "王昭君",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "hero",
@@ -254,12 +254,12 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/姜子牙.webp"
+      "imageUrl": "assets/card-icons/王昭君.webp"
     },
     {
       "id": "zhangyu-0198",
-      "name": "鉴真",
-      "baseName": "鉴真",
+      "name": "杨玉环",
+      "baseName": "杨玉环",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -279,8 +279,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0201",
-      "name": "田单",
-      "baseName": "田单",
+      "name": "貂蝉",
+      "baseName": "貂蝉",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -300,12 +300,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/田单.webp"
+      "imageUrl": "assets/card-icons/黄盖.webp"
     },
     {
       "id": "zhangyu-0150",
-      "name": "杨戬",
-      "baseName": "杨戬",
+      "name": "周瑜",
+      "baseName": "周瑜",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -318,14 +318,14 @@ const DATA = {
         "Summon Sky Hound"
       ],
       "abilityDisplayNames": [
-        "召唤啸天犬"
+        "召唤东吴水师"
       ],
-      "abilityText": "召唤啸天犬：杨戬每次离开战场后，都会在下一回合开始时于己方「疆场」阵线召唤一张啸天犬（战力 8），可多张并存。",
+      "abilityText": "召唤东吴水师：周瑜每次离开战场时，召唤一张 8 点「东吴水师」顶替；若因小局清场离场，则在下一局开始入场。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/杨戬.webp"
+      "imageUrl": "assets/card-icons/周瑜.webp"
     },
     {
       "id": "zhangyu-0202",
@@ -1363,8 +1363,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0223",
-      "name": "郦食其",
-      "baseName": "郦食其",
+      "name": "蔺相如",
+      "baseName": "蔺相如",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "unit",
@@ -1384,7 +1384,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/郦食其.webp"
+      "imageUrl": "assets/card-icons/蔺相如.webp"
     },
     {
       "id": "zhangyu-0224",
@@ -1413,21 +1413,23 @@ const DATA = {
       "baseName": "华佗",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
-      "category": "unit",
+      "category": "hero",
       "row": [
         "siege"
       ],
       "rowDisplayName": "文脉",
-      "strength": 5,
+      "strength": 7,
       "abilities": [
+        "Hero",
         "Medic"
       ],
       "abilityDisplayNames": [
+        "传世",
         "济世"
       ],
-      "abilityText": "济世",
+      "abilityText": "传世、济世",
       "leaderAbility": "",
-      "hero": false,
+      "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
       "imageUrl": "assets/card-icons/华佗.webp"
@@ -1455,8 +1457,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0141",
-      "name": "沈括",
-      "baseName": "沈括",
+      "name": "李时珍",
+      "baseName": "李时珍",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "unit",
@@ -1464,15 +1466,19 @@ const DATA = {
         "siege"
       ],
       "rowDisplayName": "文脉",
-      "strength": 6,
-      "abilities": [],
-      "abilityDisplayNames": [],
-      "abilityText": "无",
+      "strength": 5,
+      "abilities": [
+        "Medic"
+      ],
+      "abilityDisplayNames": [
+        "济世"
+      ],
+      "abilityText": "济世",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
-      "copyLabel": "1 of 2",
-      "imageUrl": "assets/card-icons/沈括.webp"
+      "copyLabel": "",
+      "imageUrl": "assets/card-icons/李时珍.webp"
     },
     {
       "id": "zhangyu-0226",
@@ -1491,8 +1497,8 @@ const DATA = {
       "abilityText": "无",
       "leaderAbility": "",
       "hero": false,
-      "copyIndex": 2,
-      "copyLabel": "2 of 2",
+      "copyIndex": 1,
+      "copyLabel": "",
       "imageUrl": "assets/card-icons/沈括.webp"
     },
     {
@@ -1714,8 +1720,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0233",
-      "name": "长孙皇后",
-      "baseName": "长孙皇后",
+      "name": "萧何",
+      "baseName": "萧何",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "hero",
@@ -1735,7 +1741,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/长孙皇后.webp"
+      "imageUrl": "assets/card-icons/萧何.webp"
     },
     {
       "id": "zhangyu-0234",
@@ -1760,8 +1766,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0053",
-      "name": "陈平",
-      "baseName": "陈平",
+      "name": "张骞",
+      "baseName": "张骞",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "unit",
@@ -1781,7 +1787,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/陈平.webp"
+      "imageUrl": "assets/card-icons/张骞.webp"
     },
     {
       "id": "zhangyu-0235",
@@ -2053,8 +2059,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0242",
-      "name": "李冰",
-      "baseName": "李冰",
+      "name": "毕昇",
+      "baseName": "毕昇",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2070,7 +2076,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/李冰.webp"
+      "imageUrl": "assets/card-icons/毕昇.webp"
     },
     {
       "id": "zhangyu-0243",
@@ -2211,13 +2217,13 @@ const DATA = {
       "strength": 10,
       "abilities": [
         "Hero",
-        "Medic"
+        "Morale Boost"
       ],
       "abilityDisplayNames": [
         "传世",
-        "济世"
+        "振势"
       ],
-      "abilityText": "传世、济世",
+      "abilityText": "传世、振势",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
@@ -2247,8 +2253,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0059",
-      "name": "诸葛亮",
-      "baseName": "诸葛亮",
+      "name": "陆逊",
+      "baseName": "陆逊",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
@@ -2268,7 +2274,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "cloud://po-ke-card-d0gg2ewaac3e700c4.706f-po-ke-card-d0gg2ewaac3e700c4-1302893388/po-ke-card/诸葛亮.webp"
+      "imageUrl": "assets/card-icons/陆逊.webp"
     },
     {
       "id": "zhangyu-0248",
@@ -2410,8 +2416,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0253",
-      "name": "郑国",
-      "baseName": "郑国",
+      "name": "祖冲之",
+      "baseName": "祖冲之",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2427,12 +2433,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/郑国.webp"
+      "imageUrl": "assets/card-icons/祖冲之.webp"
     },
     {
       "id": "zhangyu-0254",
-      "name": "赵高",
-      "baseName": "赵高",
+      "name": "班超",
+      "baseName": "班超",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2452,12 +2458,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/赵高.webp"
+      "imageUrl": "assets/card-icons/班超.webp"
     },
     {
       "id": "zhangyu-0255",
-      "name": "公输班",
-      "baseName": "公输班",
+      "name": "李冰",
+      "baseName": "李冰",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2473,7 +2479,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/公输班.webp"
+      "imageUrl": "assets/card-icons/李冰.webp"
     },
     {
       "id": "zhangyu-0142",
@@ -2498,12 +2504,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/李时珍.webp"
+      "imageUrl": "assets/card-icons/葛洪.webp"
     },
     {
       "id": "zhangyu-0054",
-      "name": "贾诩",
-      "baseName": "贾诩",
+      "name": "文成公主",
+      "baseName": "文成公主",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2523,7 +2529,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/贾诩.webp"
+      "imageUrl": "assets/card-icons/文成公主.webp"
     },
     {
       "id": "zhangyu-0256",
@@ -2548,8 +2554,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0055",
-      "name": "曹丕",
-      "baseName": "曹丕",
+      "name": "李靖",
+      "baseName": "李靖",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
@@ -2569,7 +2575,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "cloud://po-ke-card-d0gg2ewaac3e700c4.706f-po-ke-card-d0gg2ewaac3e700c4-1302893388/po-ke-card/曹丕.webp"
+      "imageUrl": "assets/card-icons/李靖.webp"
     },
     {
       "id": "zhangyu-0056",
@@ -2640,8 +2646,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0075",
-      "name": "蔺相如",
-      "baseName": "蔺相如",
+      "name": "公孙衍",
+      "baseName": "公孙衍",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2661,12 +2667,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 2",
-      "imageUrl": "assets/card-icons/蔺相如.webp"
+      "imageUrl": "assets/card-icons/公孙衍.webp"
     },
     {
       "id": "zhangyu-0258",
-      "name": "蔺相如",
-      "baseName": "蔺相如",
+      "name": "公孙衍",
+      "baseName": "公孙衍",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2686,12 +2692,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 2",
-      "imageUrl": "assets/card-icons/蔺相如.webp"
+      "imageUrl": "assets/card-icons/公孙衍.webp"
     },
     {
       "id": "zhangyu-0050",
-      "name": "范蠡",
-      "baseName": "范蠡",
+      "name": "尉缭",
+      "baseName": "尉缭",
       "faction": "Nilfgaardian Empire",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
@@ -2707,7 +2713,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/范蠡.webp"
+      "imageUrl": "assets/card-icons/尉缭.webp"
     },
     {
       "id": "zhangyu-0101",
@@ -2983,8 +2989,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0266",
-      "name": "阮籍",
-      "baseName": "阮籍",
+      "name": "李清照",
+      "baseName": "李清照",
       "faction": "Scoia'tael",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
@@ -3004,12 +3010,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/阮籍.webp"
+      "imageUrl": "assets/card-icons/西施.webp"
     },
     {
       "id": "zhangyu-0267",
-      "name": "阮籍",
-      "baseName": "阮籍",
+      "name": "李清照",
+      "baseName": "李清照",
       "faction": "Scoia'tael",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
@@ -3029,12 +3035,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/阮籍.webp"
+      "imageUrl": "assets/card-icons/西施.webp"
     },
     {
       "id": "zhangyu-0268",
-      "name": "阮籍",
-      "baseName": "阮籍",
+      "name": "李清照",
+      "baseName": "李清照",
       "faction": "Scoia'tael",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
@@ -3054,7 +3060,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/阮籍.webp"
+      "imageUrl": "assets/card-icons/西施.webp"
     },
     {
       "id": "zhangyu-0082",
@@ -3915,8 +3921,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0107",
-      "name": "英布",
-      "baseName": "英布",
+      "name": "吕布",
+      "baseName": "吕布",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "hero",
@@ -3936,7 +3942,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/项羽.webp"
+      "imageUrl": "assets/card-icons/花木兰.webp"
     },
     {
       "id": "zhangyu-0288",
@@ -4003,8 +4009,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0060",
-      "name": "周瑜",
-      "baseName": "周瑜",
+      "name": "鲁肃",
+      "baseName": "鲁肃",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "unit",
@@ -4020,7 +4026,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "cloud://po-ke-card-d0gg2ewaac3e700c4.706f-po-ke-card-d0gg2ewaac3e700c4-1302893388/po-ke-card/周瑜.webp"
+      "imageUrl": "assets/card-icons/鲁肃.webp"
     },
     {
       "id": "zhangyu-0108",
@@ -4297,8 +4303,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0042",
-      "name": "郑成功",
-      "baseName": "郑成功",
+      "name": "穆桂英",
+      "baseName": "穆桂英",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "hero",
@@ -4323,7 +4329,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/郑成功.webp"
+      "imageUrl": "assets/card-icons/穆桂英.webp"
     },
     {
       "id": "zhangyu-0298",
@@ -4352,8 +4358,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0299",
-      "name": "张宝",
-      "baseName": "张宝",
+      "name": "李逵",
+      "baseName": "李逵",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "unit",
@@ -4373,12 +4379,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/张宝.webp"
+      "imageUrl": "assets/card-icons/貂蝉.webp"
     },
     {
       "id": "zhangyu-0300",
-      "name": "张宝",
-      "baseName": "张宝",
+      "name": "李逵",
+      "baseName": "李逵",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "unit",
@@ -4398,12 +4404,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/张宝.webp"
+      "imageUrl": "assets/card-icons/貂蝉.webp"
     },
     {
       "id": "zhangyu-0301",
-      "name": "张宝",
-      "baseName": "张宝",
+      "name": "李逵",
+      "baseName": "李逵",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "unit",
@@ -4423,7 +4429,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/张宝.webp"
+      "imageUrl": "assets/card-icons/貂蝉.webp"
     },
     {
       "id": "zhangyu-0302",
@@ -4685,8 +4691,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0132",
-      "name": "祖逖",
-      "baseName": "祖逖",
+      "name": "勾践",
+      "baseName": "勾践",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -4699,14 +4705,14 @@ const DATA = {
         "Berserker"
       ],
       "abilityDisplayNames": [
-        "奋起"
+        "蛰伏"
       ],
-      "abilityText": "奋起：被破釜触发后转化为 14 点振势人物。",
+      "abilityText": "蛰伏：被雪耻触发后转化为 14 点振势人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/祖逖.webp"
+      "imageUrl": "assets/card-icons/勾践.webp"
     },
     {
       "id": "zhangyu-0143",
@@ -4735,8 +4741,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0306",
-      "name": "薛仁贵",
-      "baseName": "薛仁贵",
+      "name": "狄青",
+      "baseName": "狄青",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -4752,7 +4758,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/薛仁贵.webp"
+      "imageUrl": "assets/card-icons/狄青.webp"
     },
     {
       "id": "zhangyu-0114",
@@ -5021,8 +5027,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0317",
-      "name": "司马相如",
-      "baseName": "司马相如",
+      "name": "郑和",
+      "baseName": "郑和",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5038,7 +5044,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/司马相如.webp"
+      "imageUrl": "assets/card-icons/郑和.webp"
     },
     {
       "id": "zhangyu-0318",
@@ -5063,8 +5069,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0037",
-      "name": "戚继光",
-      "baseName": "戚继光",
+      "name": "李如松",
+      "baseName": "李如松",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5080,7 +5086,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/戚继光.webp"
+      "imageUrl": "assets/card-icons/李如松.webp"
     },
     {
       "id": "zhangyu-0116",
@@ -5109,8 +5115,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0319",
-      "name": "李时珍",
-      "baseName": "李时珍",
+      "name": "范蠡",
+      "baseName": "范蠡",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "hero",
@@ -5125,19 +5131,19 @@ const DATA = {
       ],
       "abilityDisplayNames": [
         "传世",
-        "破釜"
+        "雪耻"
       ],
-      "abilityText": "传世、破釜：打出后触发所在朝堂线奋起人物转化。",
+      "abilityText": "传世、雪耻：打出后触发所在朝堂线蛰伏人物转化。",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/李时珍.webp"
+      "imageUrl": "assets/card-icons/范蠡.webp"
     },
     {
       "id": "zhangyu-0320",
-      "name": "郑和",
-      "baseName": "郑和",
+      "name": "戚继光",
+      "baseName": "戚继光",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "hero",
@@ -5157,7 +5163,7 @@ const DATA = {
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/郑和.webp"
+      "imageUrl": "assets/card-icons/戚继光.webp"
     },
     {
       "id": "zhangyu-0321",
@@ -5182,8 +5188,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0322",
-      "name": "陆逊",
-      "baseName": "陆逊",
+      "name": "诸葛亮",
+      "baseName": "诸葛亮",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5196,19 +5202,19 @@ const DATA = {
         "Summon Avenger"
       ],
       "abilityDisplayNames": [
-        "召唤陆抗"
+        "召唤无当飞军"
       ],
-      "abilityText": "召唤陆抗：陆逊每次离开战场时，召唤一张 11 点传世「陆抗」顶替；若因小局清场离场，则在下一局开始入场。",
+      "abilityText": "召唤无当飞军：诸葛亮每次离开战场时，召唤一张 11 点传世「无当飞军」顶替；若因小局清场离场，则在下一局开始入场。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/陆逊.webp"
+      "imageUrl": "assets/card-icons/诸葛亮.webp"
     },
     {
       "id": "zhangyu-0148",
-      "name": "汪大渊",
-      "baseName": "汪大渊",
+      "name": "王安石",
+      "baseName": "王安石",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5228,12 +5234,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/汪大渊.webp"
+      "imageUrl": "assets/card-icons/杨玉环.webp"
     },
     {
       "id": "zhangyu-0323",
-      "name": "汪大渊",
-      "baseName": "汪大渊",
+      "name": "王安石",
+      "baseName": "王安石",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5253,12 +5259,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/汪大渊.webp"
+      "imageUrl": "assets/card-icons/杨玉环.webp"
     },
     {
       "id": "zhangyu-0324",
-      "name": "汪大渊",
-      "baseName": "汪大渊",
+      "name": "王安石",
+      "baseName": "王安石",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5278,7 +5284,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/汪大渊.webp"
+      "imageUrl": "assets/card-icons/杨玉环.webp"
     },
     {
       "id": "zhangyu-0117",
@@ -5303,8 +5309,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0188",
-      "name": "破釜沉舟",
-      "baseName": "破釜沉舟",
+      "name": "卧薪尝胆",
+      "baseName": "卧薪尝胆",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "special",
@@ -5315,19 +5321,19 @@ const DATA = {
         "Mardroeme"
       ],
       "abilityDisplayNames": [
-        "破釜"
+        "雪耻"
       ],
-      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
+      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/破釜沉舟.webp"
+      "imageUrl": "assets/card-icons/卧薪尝胆.webp"
     },
     {
       "id": "zhangyu-0189",
-      "name": "破釜沉舟",
-      "baseName": "破釜沉舟",
+      "name": "卧薪尝胆",
+      "baseName": "卧薪尝胆",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "special",
@@ -5338,19 +5344,19 @@ const DATA = {
         "Mardroeme"
       ],
       "abilityDisplayNames": [
-        "破釜"
+        "雪耻"
       ],
-      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
+      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/破釜沉舟.webp"
+      "imageUrl": "assets/card-icons/卧薪尝胆.webp"
     },
     {
       "id": "zhangyu-0325",
-      "name": "破釜沉舟",
-      "baseName": "破釜沉舟",
+      "name": "卧薪尝胆",
+      "baseName": "卧薪尝胆",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "special",
@@ -5361,14 +5367,14 @@ const DATA = {
         "Mardroeme"
       ],
       "abilityDisplayNames": [
-        "破釜"
+        "雪耻"
       ],
-      "abilityText": "破釜：选择一条阵线，触发该线所有奋起人物转化。",
+      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/破釜沉舟.webp"
+      "imageUrl": "assets/card-icons/卧薪尝胆.webp"
     },
     {
       "id": "zhangyu-0326",
@@ -5517,8 +5523,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0134",
-      "name": "岳云",
-      "baseName": "岳云",
+      "name": "文种",
+      "baseName": "文种",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5531,19 +5537,19 @@ const DATA = {
         "Berserker"
       ],
       "abilityDisplayNames": [
-        "奋起"
+        "蛰伏"
       ],
-      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
+      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "1 of 3",
-      "imageUrl": "assets/card-icons/岳云.webp"
+      "imageUrl": "assets/card-icons/文种.webp"
     },
     {
       "id": "zhangyu-0330",
-      "name": "岳云",
-      "baseName": "岳云",
+      "name": "文种",
+      "baseName": "文种",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5556,19 +5562,19 @@ const DATA = {
         "Berserker"
       ],
       "abilityDisplayNames": [
-        "奋起"
+        "蛰伏"
       ],
-      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
+      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 2,
       "copyLabel": "2 of 3",
-      "imageUrl": "assets/card-icons/岳云.webp"
+      "imageUrl": "assets/card-icons/文种.webp"
     },
     {
       "id": "zhangyu-0331",
-      "name": "岳云",
-      "baseName": "岳云",
+      "name": "文种",
+      "baseName": "文种",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -5581,14 +5587,14 @@ const DATA = {
         "Berserker"
       ],
       "abilityDisplayNames": [
-        "奋起"
+        "蛰伏"
       ],
-      "abilityText": "奋起：被破釜触发后转化为 8 点同盟人物。",
+      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 3,
       "copyLabel": "3 of 3",
-      "imageUrl": "assets/card-icons/岳云.webp"
+      "imageUrl": "assets/card-icons/文种.webp"
     },
     {
       "id": "zhangyu-0001",
@@ -5630,8 +5636,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0003",
-      "name": "嬴政",
-      "baseName": "嬴政",
+      "name": "秦穆公",
+      "baseName": "秦穆公",
       "faction": "Northern Realms",
       "factionDisplayName": "开国群雄",
       "category": "leader",
@@ -5645,7 +5651,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/嬴政.webp"
+      "imageUrl": "assets/card-icons/秦穆公.webp"
     },
     {
       "id": "zhangyu-0004",
@@ -5839,8 +5845,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0335",
-      "name": "韩非",
-      "baseName": "韩非",
+      "name": "吴起",
+      "baseName": "吴起",
       "faction": "Scoia'tael",
       "factionDisplayName": "百家争鸣",
       "category": "leader",
@@ -5854,12 +5860,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/韩非.webp"
+      "imageUrl": "assets/card-icons/吴起.webp"
     },
     {
       "id": "zhangyu-0336",
-      "name": "墨子",
-      "baseName": "墨子",
+      "name": "董仲舒",
+      "baseName": "董仲舒",
       "faction": "Scoia'tael",
       "factionDisplayName": "百家争鸣",
       "category": "leader",
@@ -5873,7 +5879,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/墨子.webp"
+      "imageUrl": "assets/card-icons/董仲舒.webp"
     },
     {
       "id": "zhangyu-0337",
@@ -5896,8 +5902,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0338",
-      "name": "刘秀",
-      "baseName": "刘秀",
+      "name": "刘裕",
+      "baseName": "刘裕",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "leader",
@@ -5911,12 +5917,12 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/刘秀.webp"
+      "imageUrl": "assets/card-icons/刘裕.webp"
     },
     {
       "id": "zhangyu-0339",
-      "name": "项羽",
-      "baseName": "项羽",
+      "name": "石勒",
+      "baseName": "石勒",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "leader",
@@ -5930,7 +5936,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/项羽.webp"
+      "imageUrl": "assets/card-icons/石勒.webp"
     },
     {
       "id": "zhangyu-0016",
@@ -5953,8 +5959,8 @@ const DATA = {
     },
     {
       "id": "zhangyu-0340",
-      "name": "陈胜",
-      "baseName": "陈胜",
+      "name": "朱温",
+      "baseName": "朱温",
       "faction": "Monsters",
       "factionDisplayName": "草莽星火",
       "category": "leader",
@@ -5968,7 +5974,7 @@ const DATA = {
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/陈胜.webp"
+      "imageUrl": "assets/card-icons/朱温.webp"
     },
     {
       "id": "zhangyu-0017",
@@ -6013,8 +6019,8 @@ const DATA = {
     {
       "id": "token-transformed-vildkaarl",
       "baseName": "Transformed Vildkaarl",
-      "name": "背水死士",
-      "displayName": "背水死士",
+      "name": "越王勾践",
+      "displayName": "越王勾践",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -6029,7 +6035,7 @@ const DATA = {
       "abilityDisplayNames": [
         "振势"
       ],
-      "abilityText": "奋起转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。",
+      "abilityText": "蛰伏转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -6039,8 +6045,8 @@ const DATA = {
     {
       "id": "token-transformed-young-vildkaarl",
       "baseName": "Transformed Young Vildkaarl",
-      "name": "背水锐卒",
-      "displayName": "背水锐卒",
+      "name": "越相文种",
+      "displayName": "越相文种",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
@@ -6055,7 +6061,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "奋起转化：战力 8；同名背水锐卒在同一阵线并列时战力倍增。",
+      "abilityText": "蛰伏转化：战力 8；同名越相文种在同一阵线并列时战力倍增。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
@@ -6065,8 +6071,8 @@ const DATA = {
     {
       "id": "token-howling-sky-hound",
       "baseName": "Howling Sky Hound",
-      "name": "啸天犬",
-      "displayName": "啸天犬",
+      "name": "东吴水师",
+      "displayName": "东吴水师",
       "faction": "Neutral",
       "factionDisplayName": "天下共识",
       "category": "unit",
@@ -6077,18 +6083,18 @@ const DATA = {
       "strength": 8,
       "abilities": [],
       "abilityDisplayNames": [],
-      "abilityText": "杨戬每次离开战场后于下一回合召唤的灵犬，战力固定为 8；可多张并存。",
+      "abilityText": "周瑜离开战场后召唤的东吴水师，战力固定为 8；若周瑜因小局清场离场，则在下一局开始入场。",
       "leaderAbility": "",
       "hero": false,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": "assets/card-icons/啸天犬.webp"
+      "imageUrl": "assets/card-icons/东吴水师.webp"
     },
     {
       "id": "token-hemdall",
       "baseName": "Hemdall",
-      "name": "陆抗",
-      "displayName": "陆抗",
+      "name": "无当飞军",
+      "displayName": "无当飞军",
       "faction": "Skellige",
       "factionDisplayName": "遗策复兴",
       "category": "hero",
@@ -6103,12 +6109,12 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "陆逊离开战场后召唤的继承者；陆抗为 11 点传世人物，不受时局、奇策、请辞、鼓舞、振势、同盟等特殊效果影响。",
+      "abilityText": "诸葛亮离开战场后召唤的蜀汉精锐；无当飞军为 11 点传世军队，不受时局、奇策、请辞、鼓舞、振势、同盟等特殊效果影响。",
       "leaderAbility": "",
       "hero": true,
       "copyIndex": 1,
       "copyLabel": "",
-      "imageUrl": ""
+      "imageUrl": "assets/card-icons/无当飞军.webp"
     }
   ]
 };

@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, card } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, card, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
@@ -54,9 +54,9 @@ function pageLayout(view) {
   const leaderY = top + 102;
   const tabY = leaderY + 38;
   const listTop = tabY + 38;
-  const bottomY = view.height - view.safeBottom - 48;
-  const toolY = bottomY - 48;
-  const listBottom = toolY - 20;
+  const bottomY = view.height - view.safeBottom - 12;
+  const toolY = bottomY - 36;
+  const listBottom = toolY - 16;
   return { top, factionY, leaderY, toolY, tabY, listTop, bottomY, listBottom };
 }
 
@@ -72,9 +72,43 @@ function filteredCardGroups(faction, tab) {
   return groupCards(cards).sort((a, b) => cardValue(b.card) - cardValue(a.card));
 }
 
-function selectedCount(ids, group) {
-  const groupIds = new Set(group.cards.map(card => card.id));
-  return ids.filter(id => groupIds.has(id)).length;
+let deckViewCache = null;
+
+function invalidateDeckViewCache() {
+  deckViewCache = null;
+}
+
+function deckViewModel(ui = {}) {
+  const cardTab = ui.settingCardTab || "all";
+  if (ui.settingDeckScrolling && deckViewCache && deckViewCache.cardTab === cardTab) return deckViewCache;
+
+  const settings = loadSettings();
+  const faction = settings.humanFaction;
+  const selectedIds = getActiveCustomDeckIds(settings, faction);
+  const leaderId = settings.humanLeaderIds?.[faction] || "";
+  const cacheKey = `${faction}|${cardTab}|${leaderId}|${selectedIds.join(",")}`;
+  if (deckViewCache && deckViewCache.cacheKey === cacheKey) return deckViewCache;
+
+  const selectedSet = new Set(selectedIds);
+  const groups = filteredCardGroups(faction, cardTab).map(group => {
+    const cardIds = group.cards.map(card => card.id);
+    let selectedCount = 0;
+    cardIds.forEach(id => {
+      if (selectedSet.has(id)) selectedCount += 1;
+    });
+    return { ...group, cardIds, selectedCount };
+  });
+  deckViewCache = {
+    cacheKey,
+    cardTab,
+    settings,
+    faction,
+    selectedIds,
+    status: deckStatus(selectedIds, faction),
+    humanLeader: selectedLeader(settings, faction),
+    groups
+  };
+  return deckViewCache;
 }
 
 function scrollBounds(view, itemCount) {
@@ -159,19 +193,15 @@ function draw(ctx, view, actions, ui = {}) {
     detail = cardById(ui.settingCardDetailId);
     if (!detail) ui.settingCardDetailId = "";
   }
-  const settings = loadSettings();
-  const faction = settings.humanFaction;
-  const selectedIds = getActiveCustomDeckIds(settings, faction);
-  const status = deckStatus(selectedIds, faction);
-  const humanLeader = selectedLeader(settings, faction);
-  const cardTab = ui.settingCardTab || "all";
+  const model = deckViewModel(ui);
+  const { settings, faction, status, humanLeader, cardTab, groups } = model;
   const scrollY = ui.settingDeckScroll || 0;
   const anchors = {};
-  const groups = filteredCardGroups(faction, cardTab);
   const bounds = scrollBounds(view, groups.length);
   const safeScroll = Math.max(0, Math.min(scrollY || 0, bounds.maxScroll));
   const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
 
+  drawTopLeftBack(ctx, view, actions, "back");
   text(ctx, "我的牌组", view.width / 2, bounds.top, 24, "#2f2417", "center");
   text(ctx, `${FACTION_LABELS[faction]} · 已选 ${status.total}/40 · 总战力 ${status.score}`, view.width / 2, bounds.top + 25, 12, statusColor, "center");
   text(ctx, `人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, bounds.top + 45, 11, "#775c34", "center");
@@ -204,10 +234,10 @@ function draw(ctx, view, actions, ui = {}) {
     const x = bounds.margin + col * (bounds.cardW + GAP);
     const y = bounds.listTop + row * bounds.rowStep + offsetY;
     if (y >= bounds.listBottom || y + bounds.cardH <= bounds.listTop) continue;
-    const count = selectedCount(selectedIds, group);
+    const count = group.selectedCount;
     const selected = count > 0;
     const blocked = !selected && !canAddCard(status, item);
-    const groupIds = group.cards.map(card => card.id);
+    const groupIds = group.cardIds;
     const hitY = Math.max(bounds.listTop, y);
     const hitBottom = Math.min(bounds.listBottom, y + bounds.cardH);
     actions.push({ id: "addSettingCard", cardIds: groupIds, cardId: item.id, x, y: hitY, w: bounds.cardW, h: hitBottom - hitY });
@@ -265,9 +295,6 @@ function draw(ctx, view, actions, ui = {}) {
   actions.push(auto, clearBtn);
   button(ctx, { ...auto, label: "随机推荐", fill: "#2f6f57", size: 11, r: 10 });
   button(ctx, { ...clearBtn, label: "清空", fill: "#8f3c1f", stroke: "#6d2d18", size: 11, r: 10 });
-  const back = { id: "back", x: 46, y: bounds.bottomY, w: view.width - 92, h: 40 };
-  actions.push(back);
-  button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSettingDropdown(ctx, view, actions, settings, ui.settingDropdown || "", anchors);
   if (detail) {
     const detailCards = detail.category === "leader" ? leadersFor(faction) : groups.map(group => group.card);
@@ -297,4 +324,8 @@ function nextLeaderId(current, faction) {
   return leaders[(idx + 1 + leaders.length) % leaders.length].id;
 }
 
-module.exports = { draw, scrollBounds, nextFaction, nextDifficulty, nextLeaderId };
+function scrollMetrics(view, ui = {}) {
+  return scrollBounds(view, deckViewModel(ui).groups.length);
+}
+
+module.exports = { draw, scrollBounds, scrollMetrics, invalidateDeckViewCache, nextFaction, nextDifficulty, nextLeaderId };

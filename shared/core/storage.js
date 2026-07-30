@@ -1,7 +1,7 @@
 const SAVE_KEY = "zhangyu.wechat.demo.save.v2";
 const SETTINGS_KEY = "zhangyu.wechat.demo.settings.v2";
 const MAX_CUSTOM_DECKS = 1;
-const MAX_HISTORY_RECORDS = 100;
+const MAX_HISTORY_RECORDS = 1000;
 
 let recordMatchCloudHook = null;
 

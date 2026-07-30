@@ -278,7 +278,7 @@ test("用例15 济世连锁与空牌库抽牌", () => {
 
 test("用例16 单位型奇策只处理目标阵线", () => {
   const state = blankState();
-  const scorchUnit = catalogCard("田单", 0);
+  const scorchUnit = catalogCard("黄盖", 0);
   toBoard(state, 1, "melee", fakeUnit("近战10", 10, 1));
   toBoard(state, 1, "ranged", fakeUnit("远程20", 20, 1));
   toHand(state, 0, scorchUnit);
@@ -400,15 +400,114 @@ test("用例26 请辞归隐在含非传世济世时最多带3张，无济世时�
   assert.ok(checked > 0);
 });
 
-test("用例27 济世不复活集结（集结为一次性效果）", () => {
+test("用例27 济世可复归集贤人物", () => {
   const state = blankState();
-  const muster = fakeUnit("集结甲", 5, 0, { abilities: ["Muster"] });
+  const medic = catalogCard("华佗", 0);
+  const mengchang = catalogCard("孟尝君", 0);
   const plain = fakeUnit("弃牌高点", 10, 0);
-  toDiscard(state, 0, muster, plain);
+  toHand(state, 0, medic);
+  toDiscard(state, 0, mengchang, plain);
   const cand = battle.reviveCandidates(state, 0);
-  const names = cand.map(c => c.name || c.baseName);
-  assert.ok(!cand.includes(muster), "复活候选不应包含集结单位");
-  assert.ok(cand.includes(plain), "复活候选应包含普通弃牌单位");
+  assert.ok(cand.includes(mengchang), "复归候选应包含孟尝君等集贤人物");
+  assert.ok(cand.includes(plain), "复归候选应包含普通弃牌单位");
+  assert.equal(battle.playCard(state, medic.uid, "siege", { medicTargetUid: mengchang.uid }), true);
+  assert.ok(state.players[0].board.ranged.some(card => card.uid === mengchang.uid), "华佗应可复归孟尝君到朝堂");
+});
+
+test("用例28 秦昭襄王启用随机济世", () => {
+  const state = blankState(["Nilfgaardian Empire", "Monsters"]);
+  const medic = catalogCard("华佗", 0);
+  const high = fakeUnit("高点弃牌", 10, 0, { row: "melee" });
+  const low = fakeUnit("低点弃牌", 1, 0, { row: "siege" });
+  state.players[0].leader = {
+    id: "leader-random-restore",
+    uid: "leader-random-restore-0",
+    name: "秦昭襄王",
+    baseName: "秦昭襄王",
+    leaderAbility: "Abilities that restore a unit from the discard pile restore a randomly-chosen unit.",
+    abilityText: "双方济世复归改为随机目标。"
+  };
+  state.players[0].leaderUsed = false;
+  toHand(state, 0, medic);
+  toDiscard(state, 0, high, low);
+  battle.useLeader(state, 0);
+  assert.equal(state.randomRestore, true);
+  state.current = 0;
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0.99;
+    assert.equal(battle.playCard(state, medic.uid, "siege"), true);
+  } finally {
+    Math.random = originalRandom;
+  }
+  assert.equal(state.pending, null);
+  assert.ok(state.players[0].board.siege.some(card => card.uid === low.uid), "应随机复归低点弃牌");
+  assert.ok(state.players[0].discard.some(card => card.uid === high.uid), "不应固定复归最高价值弃牌");
+});
+
+test("用例29 范蠡不会被雪耻清废策略选到非法阵线", () => {
+  const state = blankState(["Northern Realms", "Skellige"]);
+  const fanLi = catalogCard("范蠡", 1);
+  toBoard(state, 0, "melee", fakeUnit("玩家领先", 49, 0));
+  toBoard(state, 1, "melee", fakeUnit("系统疆场", 26, 1));
+  toHand(state, 0, fakeUnit("玩家手牌", 4, 0));
+  toHand(state, 1, fanLi);
+  state.players[0].roundsWon = 1;
+  state.current = 1;
+  assert.equal(battle.autoStep(state, { playerIndex: 1, cfg: HARD }), true);
+  assert.ok(state.players[1].board.ranged.some(card => card.uid === fanLi.uid), "范蠡应合法打到朝堂");
+});
+
+test("用例30 雪耻清废始终选择合法作用线", () => {
+  const state = blankState(["Northern Realms", "Skellige"]);
+  const mardroeme = catalogCard("卧薪尝胆", 1);
+  toBoard(state, 1, "siege", fakeUnit("系统文脉", 26, 1));
+  toHand(state, 0, fakeUnit("玩家手牌", 4, 0));
+  toHand(state, 1, mardroeme);
+  state.current = 1;
+  assert.equal(battle.autoStep(state, { playerIndex: 1, cfg: HARD }), true);
+  assert.ok(state.players[1].discard.some(card => card.uid === mardroeme.uid), "卧薪尝胆应成功打出而非卡在系统回合");
+});
+
+test("用例31 两种离场召唤均立即生效且允许重复触发", () => {
+  [
+    { sourceName: "周瑜", sourceRow: "ranged", tokenName: "东吴水师" },
+    { sourceName: "诸葛亮", sourceRow: "melee", tokenName: "无当飞军" }
+  ].forEach(({ sourceName, sourceRow, tokenName }) => {
+    const state = blankState();
+    const source = catalogCard(sourceName, 0);
+    toBoard(state, 0, sourceRow, source);
+    toHand(state, 0, catalogCard("请辞归隐", 0));
+    toHand(state, 1, fakeUnit("对手手牌", 1, 1));
+
+    const firstDecoy = state.players[0].hand[0];
+    assert.equal(battle.playCard(state, firstDecoy.uid, null, { decoyTargetUid: source.uid }), true, `${sourceName}首次请辞应成功`);
+    assert.equal(state.players[0].board.melee.filter(card => card.name === tokenName).length, 1, `${sourceName}首次离场应立即召唤${tokenName}`);
+    assert.ok(state.players[0].hand.some(card => card.uid === source.uid), `${sourceName}应回到手牌`);
+
+    const secondDecoy = catalogCard("请辞归隐", 0);
+    toHand(state, 0, secondDecoy);
+    state.current = 0;
+    assert.equal(battle.playCard(state, source.uid, sourceRow), true, `${sourceName}应可再次打出`);
+    state.current = 0;
+    assert.equal(battle.playCard(state, secondDecoy.uid, null, { decoyTargetUid: source.uid }), true, `${sourceName}第二次请辞应成功`);
+    assert.equal(state.players[0].board.melee.filter(card => card.name === tokenName).length, 2, `${sourceName}重复离场应再次召唤${tokenName}`);
+  });
+});
+
+test("用例32 两种召唤源因小局清场离场时均在下一局入场", () => {
+  const state = blankState();
+  toBoard(state, 0, "ranged", catalogCard("周瑜", 0));
+  toBoard(state, 0, "melee", catalogCard("诸葛亮", 0));
+  toHand(state, 0, fakeUnit("玩家手牌", 1, 0));
+  toHand(state, 1, fakeUnit("对手手牌", 1, 1));
+
+  battle.pass(state);
+  battle.pass(state);
+  battle.continueRoundTransition(state);
+
+  assert.ok(state.players[0].board.melee.some(card => card.name === "东吴水师"));
+  assert.ok(state.players[0].board.melee.some(card => card.name === "无当飞军"));
 });
 
 const filter = process.argv.find(arg => arg.startsWith("--filter="))?.slice(9) || "";

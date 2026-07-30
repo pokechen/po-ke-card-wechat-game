@@ -54,7 +54,7 @@ function effectSections(card) {
   }
   if (effects.length) {
     sections.push({
-      title: leader ? "主将技能" : "特殊效果",
+      title: leader ? "主将技能" : (card?.category === "weather" ? "时局效果" : "特殊效果"),
       content: effects.join("\n"),
       color: "#f1d58a",
       lines: 8
@@ -211,6 +211,22 @@ function drawDetail(ctx, view, actions, card, options = {}) {
       fillRoundRect(ctx, mcx - mainCardW / 2 - 10, mcy - 10, mainCardW + 20, mainCardH + 20, 18, "rgba(47, 111, 87, 0.16)", "#2f6f57");
       fillRoundRect(ctx, mcx + mainCardW / 2 - 58, mcy + 10, 48, 24, 12, "#2f6f57", "#fff7d8");
       text(ctx, "已选", mcx + mainCardW / 2 - 34, mcy + 22, 12, "#fff7d8", "center");
+    }
+
+    // 同名卡牌数量角标（x2 / x3 ...）
+    const stackCount = options.count || 1;
+    if (stackCount > 1) {
+      const badgeText = `x${stackCount}`;
+      const badgeH = 24;
+      ctx.save();
+      ctx.font = `bold 14px "PingFang SC", "Microsoft YaHei", sans-serif`;
+      const tw = ctx.measureText(badgeText).width;
+      const badgeW = Math.max(badgeH, tw + 16);
+      const bgx = mcx + mainCardW / 2 - badgeW + 4;
+      const bgy = mcy + 4;
+      fillRoundRect(ctx, bgx, bgy, badgeW, badgeH, badgeH / 2, "#8f3c1f", "#f4d9a8");
+      text(ctx, badgeText, bgx + badgeW / 2, bgy + badgeH / 2 + 1, 14, "#fff7d8", "center");
+      ctx.restore();
     }
 
     // 战力icon

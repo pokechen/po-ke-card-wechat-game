@@ -2,7 +2,7 @@
 description: 游戏交互体验规则
 alwaysApply: true
 enabled: true
-updatedAt: 2026-07-23T18:47:00.000+08:00
+updatedAt: 2026-07-30T00:00:00.000+08:00
 provider:
 ---
 
@@ -22,6 +22,12 @@ CodeBuddy 在本项目中新增或修改游戏界面、交互逻辑时，必须�
 ## 选择框展示
 
 - 当选择框的可选项大于 2 个时，统一使用下拉框展示，不使用点击循环切换。
+
+## 返回导航
+
+- 普通页面返回、返回首页、返回上一级、返回准备页、返回结算页等导航类操作，统一放在左上角返回图标中，不在页面底部或内容区额外绘制“返回首页”“返回”“返回准备”“返回结算”等文字按钮。
+- 左上角返回图标应使用透明背景，颜色简洁，避免大面积色块、描边按钮或多色装饰；应与页面标题保持固定相对位置，形成统一返回入口。
+- 涉及解散房间、离开房间、认输等有状态改变或破坏性含义的操作，需要保留必要确认逻辑；若作为返回入口承载，也应优先放在左上角返回图标触发，不单独增加丑陋的返回文字按钮。
 
 ## 数据库存储与前端缓存
 
@@ -85,6 +91,13 @@ CodeBuddy 在本项目中新增或修改游戏界面、交互逻辑时，必须�
 
 - `../temp/card-icons/card-image-map.json` 是卡牌（含人物）的设计参考文件。
 - 当该文件中的人物或卡牌内容（名称、能力名称、说明文案、效果规则等）发生变化，且对游戏的展示或功能有影响时，必须同步修改游戏内对应内容（`shared/data/zhangyu_cards.js`、`shared/core/cards.js`、`shared/core/battle.js` 及 `js/` 下的展示逻辑），确保参考文件与实际游戏展示、结算逻辑一致。
+
+## 卡牌图片缺失统计与生成
+
+- 后续需要统计或生成「还没有图片的卡牌」时，必须先运行脚本 `../tmp/scripts/check-missing-card-images.js`，不要手工凭印象筛选缺图列表。
+- 默认运行命令：`node ../tmp/scripts/check-missing-card-images.js`；该脚本默认读取 `../tmp/docs/card-image-map.json`，对比图片目录 `../tmp/card-icons/compress-icons`，检查分类为 `人物`、`传世`、`主将`、`谋略`、`时局` 的卡，并会从召唤文案与 `shared/data/zhangyu_cards.js` 的 `tokens` 中额外确认 `无当飞军`、`东吴水师`、`越王勾践`、`越相文种` 等特殊卡牌。
+- 如需把缺图数据提供给后续图片生成流程，使用：`node ../tmp/scripts/check-missing-card-images.js --out=../tmp/scripts/missing-card-images.json --format=json`。
+- 若生成或补充了新图片，需重新运行该脚本确认缺图列表已更新，再继续处理剩余缺图项。
 
 ## 对战策略修改与胜率验证
 
@@ -163,3 +176,13 @@ node scripts/sync-pvp-core.js
 4. 若该指引只在特定条件满足时才显示（如 `fieldCardDetail` 需场上已有卡牌），除在目标记录处把不存在时置 `null` 外，无需在 `drawStepGuide` 额外判断——`if (!target) return;` 已天然处理「条件不满足不显示」。
 
 部署要求：因为指引状态存于 `shared/core/storage.js`（属于影响云函数的共享核心文件），修改后必须按「PVP 共享核心同步」与「云函数自动同步 CloudBase」规则同步并部署，无需询问用户确认。
+
+## CloudBase 云函数 CLI 部署与鉴权故障处理
+
+- 修改 `cloudfunctions/` 任意代码，或修改影响云函数的共享核心文件后，优先通过 CloudBase 集成能力更新代码；更新后必须验证 `pvpRoom` 的 `{ "action": "getLoginContext" }` 与 `adminStats` 的 `{}` 均返回 `ok: true`。
+- 当 CloudBase 集成返回 `[DescribeEnvs] Token verification failed`，或集成 `login` 因 `3721~3735` 端口被 CodeBuddy CloudBase MCP helper 占用而失败时，不得反复调用集成 `login`，不得结束或杀掉 `integration-mcp/tcb/index.cjs` / `CodeBuddy CN Helper (Plugin)` 进程。
+- 集成鉴权不可用时，改用本机 `tcb` CLI 的设备授权流程。先由用户在项目根目录执行 `tcb login --flow device` 并在浏览器完成授权；不得要求用户在聊天中提供 `SecretId`、`SecretKey`、Token 或 CloudBase API Key。
+- CLI 授权完成后，在项目根目录执行：`TCB_ENV_ID=po-ke-card-d0gg2ewaac3e700c4 TCB_DEPLOY_MODE=zip ./scripts/deploy-cloudfunctions.sh`。该脚本会先运行 `node scripts/sync-pvp-core.js`，再更新 `pvpRoom` 与 `adminStats` 并进行调用验证。
+- 不使用 `TCB_DEPLOY_MODE=cos`：该上传模式可能导致 CloudBase 控制台出现 `函数更新失败 / ResourceNotFound.Entryfile`。CLI 部署统一指定 `TCB_DEPLOY_MODE=zip`。
+- 管理员 OpenID 仅允许配置在云函数后台服务环境变量 `ADMIN_OPENID` 中；`pvpRoom` 与 `adminStats` 必须配置相同值，多个 OpenID 用英文逗号分隔。不得写入数据库 `admin_openids` 集合、代码、前端持久缓存或文档示例中的具体值。
+- 若 CLI 登录、部署或验证失败，必须如实报告失败命令、错误与尚未生效的云端状态；不得声称代码已同步。

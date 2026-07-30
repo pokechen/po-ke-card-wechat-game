@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, card, wrapText, short } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, card, wrapText, short, drawTopLeftBack } = require("../ui/canvas");
 const { cardById, deckExpectedScore, categoryLabel, displayName, groupCards } = require("../core/cards");
 const { sortedHandCards } = require("./battleScene");
 const { drawDetail } = require("./cardDetail");
@@ -56,15 +56,14 @@ function pageLayout(view) {
   const tabsY = top + 36;
   const summaryY = tabsY + 42;
   const listTop = summaryY + 74;
-  const backY = view.height - view.safeBottom - 46;
-  const availableBottom = backY - 12;
+  const availableBottom = view.height - view.safeBottom - 12;
   const margin = 14;
   const cardW = Math.floor((view.width - margin * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
   const cardH = Math.round(cardW * CARD_RATIO);
   const rowStep = cardH + GAP;
   const viewportH = Math.max(cardH, availableBottom - listTop);
   const listBottom = availableBottom;
-  return { top, tabsY, summaryY, listTop, listBottom, backY, margin, cardW, cardH, rowStep, viewportH };
+  return { top, tabsY, summaryY, listTop, listBottom, margin, cardW, cardH, rowStep, viewportH };
 }
 
 function scrollState(view, state, ui = {}) {
@@ -126,7 +125,7 @@ function drawScoreHelp(ctx, view, actions) {
   actions.push({ id: "battleCardsHelpPanel", x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d1ad6a");
   text(ctx, "总战力说明", panelX + 20, panelY + 28, 18, "#2f2417");
-  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、破釜+8、奋起+6、通才+2、鼓舞+7、奇策+6、时局+6。\n总战力是按以上规则计算出的整体强度分，数字越高，代表这组卡牌的基础战力和能力加成整体越强，便于对比双方卡牌强度。";
+  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、雪耻+8、蛰伏+6、通才+2、鼓舞+7、奇策+6、时局+6。\n总战力是按以上规则计算出的整体强度分，数字越高，代表这组卡牌的基础战力和能力加成整体越强，便于对比双方卡牌强度。";
   wrapText(ctx, rule, panelX + 20, panelY + 64, panelW - 40, 21, 8, 13, "#5f4727");
   const close = { id: "closeBattleCardsHelp", x: panelX + 74, y: panelY + panelH - 48, w: panelW - 148, h: 34 };
   actions.push(close);
@@ -142,6 +141,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   if (!Array.isArray(ui.battleCardsScrolls)) ui.battleCardsScrolls = [0, 0];
   ui.battleCardsScrolls[info.playerIndex] = info.scroll;
 
+  drawTopLeftBack(ctx, view, actions, "backBattleCards");
   text(ctx, "本局卡牌总览", view.width / 2, info.top, 22, "#2f2417", "center");
   const tabGap = 10;
   const tabW = (view.width - 36 - tabGap) / 2;
@@ -226,10 +226,6 @@ function draw(ctx, view, actions, state, ui = {}) {
     fillRoundRect(ctx, trackX, trackY, 3, trackH, 1.5, "rgba(119,92,52,0.18)");
     fillRoundRect(ctx, trackX - 1, thumbY, 5, thumbH, 2.5, "rgba(143,60,31,0.72)");
   }
-
-  const back = { id: "backBattleCards", x: 18, y: info.backY, w: view.width - 36, h: 38 };
-  actions.push(back);
-  button(ctx, { ...back, label: "返回结算", size: 13, fill: "#8d6840" });
 
   const detail = ui.battleCardsDetailId ? cardById(ui.battleCardsDetailId) : null;
   if (detail) {

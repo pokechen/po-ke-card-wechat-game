@@ -1,4 +1,4 @@
-const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
 const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById, factionPerkSummary } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
@@ -170,13 +170,14 @@ function draw(ctx, view, actions, ui = {}) {
   const panelX = 18;
   const panelW = view.width - 36;
   const panelY = top + 48;
-  const bottom = view.height - view.safeBottom - 108;
+  const bottom = view.height - view.safeBottom - 64;
   const panelH = Math.max(442, bottom - panelY - 12);
   const contentX = panelX + 20;
   const rowW = panelW - 40;
   const dropdownField = ui.matchSetupDropdown || "";
   const anchors = {};
 
+  drawTopLeftBack(ctx, view, actions, "back");
   text(ctx, "单机准备", view.width / 2, top, 24, "#2f2417", "center");
   text(ctx, "选择主将、牌组与对手，开始单机对局", view.width / 2, top + 26, 12, "#775c34", "center");
 
@@ -233,10 +234,8 @@ function draw(ctx, view, actions, ui = {}) {
   drawRow(ctx, actions, { id: "difficulty", label: "难度", value: DIFFICULTY_LABELS[settings.difficulty], x: contentX, y: panelY + 390, w: rowW, fill: "#8d6840" }, dropdownField === "difficulty", anchors);
 
   const start = { id: "startPrepared", x: 46, y: bottom, w: view.width - 92, h: 46 };
-  const back = { id: "back", x: 46, y: bottom + 58, w: view.width - 92, h: 42 };
-  actions.push(start, back);
+  actions.push(start);
   button(ctx, { ...start, label: randomLineup ? "使用随机阵容开始" : (useCustomDeck ? "使用该阵营牌组开始" : "随机卡牌开始"), fill: "#2f6f57", stroke: "#1d4f3c", size: 15 });
-  button(ctx, { ...back, label: "返回首页", fill: "#8d6840", stroke: "#6f4d29", size: 13 });
   drawSetupDropdown(ctx, view, actions, settings, dropdownField, anchors);
   if (detail) {
     const leaders = detailLeaderCards(settings, detail.id);

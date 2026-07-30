@@ -162,12 +162,16 @@ const STATIC_CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893
 let imageRenderHook = null;
 
 function pruneCardImageCache() {
-  const entries = Object.keys(imageCache)
-    .filter(key => !key.startsWith("asset:"))
+  const keys = Object.keys(imageCache).filter(key => {
+    if (key.startsWith("asset:") || key.startsWith("remote:")) return false;
+    const entry = imageCache[key];
+    return entry?.loaded || entry?.failed;
+  });
+  const removeCount = keys.length - MAX_CARD_IMAGE_CACHE;
+  if (removeCount <= 0) return;
+  const entries = keys
     .map(key => ({ key, lastUsed: imageCache[key]?.lastUsed || 0 }))
     .sort((a, b) => a.lastUsed - b.lastUsed);
-  const removeCount = entries.length - MAX_CARD_IMAGE_CACHE;
-  if (removeCount <= 0) return;
   for (let i = 0; i < removeCount; i++) delete imageCache[entries[i].key];
 }
 
@@ -215,8 +219,8 @@ const ABILITY_MARKS = {
   "Summon Shield Maidens": "召唤",
   "Summon Avenger": "召唤",
   "Summon Sky Hound": "召唤",
-  Berserker: "奋起",
-  Mardroeme: "破釜"
+  Berserker: "蛰伏",
+  Mardroeme: "雪耻"
 };
 
 function abilityIconLabel(label) {
@@ -617,6 +621,39 @@ function drawRemoteImage(ctx, url, x, y, w, h, options = {}) {
   return false;
 }
 
+function drawTopLeftBack(ctx, view, actions, id = "back", options = {}) {
+  const rect = {
+    id,
+    x: options.x == null ? 18 : options.x,
+    y: options.y == null ? view.safeTop + 14 : options.y,
+    w: options.w || 48,
+    h: options.h || 42
+  };
+  actions.push({ ...rect, ...options.action });
+  const color = options.color || "#6f4d29";
+  const x = rect.x;
+  const y = rect.y;
+  const cy = y + rect.h / 2;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.shadowColor = "rgba(48, 35, 18, 0.14)";
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetY = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 6, cy);
+  ctx.lineTo(x + 24, cy - 15);
+  ctx.quadraticCurveTo(x + 27, cy - 18, x + 27, cy - 13);
+  ctx.lineTo(x + 27, cy - 8);
+  ctx.bezierCurveTo(x + 39, cy - 8, x + 44, cy + 1, x + 38, cy + 13);
+  ctx.bezierCurveTo(x + 34, cy + 6, x + 30, cy + 5, x + 27, cy + 5);
+  ctx.lineTo(x + 27, cy + 13);
+  ctx.quadraticCurveTo(x + 27, cy + 18, x + 24, cy + 15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  return rect;
+}
+
 function hit(point, rect) {
   return point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h;
 }
@@ -633,6 +670,7 @@ module.exports = {
   drawAssetImage,
   drawRemoteImage,
   drawCardImage,
+  drawTopLeftBack,
   card,
   hit
 };

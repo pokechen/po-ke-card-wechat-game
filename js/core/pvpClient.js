@@ -240,8 +240,8 @@ function recordMatchHistory(record) {
   return callRoom("recordMatchHistory", { record });
 }
 
-function listMatchHistory(limit = 100) {
-  return callRoom("listMatchHistory", { limit });
+function listMatchHistory(limit = 20, skip = 0) {
+  return callRoom("listMatchHistory", { limit, skip });
 }
 
 function getLoginContext() {

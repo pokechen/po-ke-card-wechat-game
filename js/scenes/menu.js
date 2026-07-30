@@ -99,25 +99,36 @@ function drawSummaryCard(ctx, view, actions, y, h, save, settings, latest, ui = 
   ctx.shadowOffsetY = 4;
   fillRoundRect(ctx, summaryRect.x, summaryRect.y, summaryRect.w, summaryRect.h, 18, "rgba(255,250,240,0.94)", "#dcc48d");
   ctx.restore();
-  const tight = h < 90;
+
+  const padX = 22;
   const historyReady = !!ui.cloudHistoryLoaded;
+  const lines = [];
   if (!historyReady) {
-    text(ctx, ui.cloudHistoryError ? "战绩加载失败" : "正在读取云端战绩…", view.width / 2, y + (tight ? 17 : 24), tight ? 13 : 15, "#2f2417", "center");
-    text(ctx, ui.cloudHistoryError || "数据加载完成后将显示真实战绩", view.width / 2, y + (tight ? 43 : 58), 11, "#775c34", "center");
+    lines.push({ t: ui.cloudHistoryError ? "战绩加载失败" : "正在读取云端战绩…", s: 15, c: "#2f2417" });
+    lines.push({ t: ui.cloudHistoryError || "数据加载完成后将显示真实战绩", s: 11, c: "#775c34" });
   } else {
-    text(ctx, `已试玩 ${save.matches || 0} 局，胜利 ${save.wins || 0} 局`, view.width / 2, y + (tight ? 17 : 24), tight ? 13 : 15, "#2f2417", "center");
+    const totalGames = ui.cloudHistoryTotal != null ? ui.cloudHistoryTotal : (save.matches || 0);
+    const winsGames = ui.cloudHistoryWins != null ? ui.cloudHistoryWins : (save.wins || 0);
+    lines.push({ t: `已对战 ${totalGames} 局，胜利 ${winsGames} 局`, s: 15, c: "#2f2417" });
     if (latest) {
-      text(ctx, latestMatchLine(latest), view.width / 2, y + (tight ? 38 : 52), 12, resultColor(latest), "center");
-      text(ctx, latestMatchDetail(latest), view.width / 2, y + (tight ? 56 : 76), 10, "#775c34", "center");
+      lines.push({ t: latestMatchLine(latest), s: 12, c: resultColor(latest) });
+      lines.push({ t: latestMatchDetail(latest), s: 10, c: "#775c34" });
     } else {
-      text(ctx, currentSettingsLine(settings), view.width / 2, y + (tight ? 38 : 52), 11, "#775c34", "center");
-      text(ctx, tight ? "点击查看战绩" : "完成一局后，这里会显示最近一局对局信息", view.width / 2, y + (tight ? 56 : 76), 10, "#8d6840", "center");
+      lines.push({ t: currentSettingsLine(settings), s: 11, c: "#775c34" });
+      lines.push({ t: "完成一局后，这里会显示最近一局对局信息", s: 10, c: "#8d6840" });
     }
   }
-  if (!tight) {
-    fillRoundRect(ctx, view.width - 126, y + h - 32, 84, 24, 12, "#fff5df", "#dcc48d");
-    text(ctx, "查看战绩 ›", view.width - 84, y + h - 20, 11, "#8f3c1f", "center");
-  }
+  const lineGap = 19;
+  const blockH = (lines.length - 1) * lineGap;
+  const startY = y + h / 2 - blockH / 2;
+  lines.forEach((ln, i) => text(ctx, ln.t, summaryRect.x + padX, startY + i * lineGap, ln.s, ln.c, "left", "middle"));
+
+  // 「查看战绩」入口放在右上角，避免底部留白
+  const badgeW = 92, badgeH = 26;
+  const badgeX = summaryRect.x + summaryRect.w - badgeW - 14;
+  const badgeY = y + 13;
+  fillRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 13, "#fff5df", "#dcc48d");
+  text(ctx, "查看战绩 ›", badgeX + badgeW / 2, badgeY + badgeH / 2, 11, "#8f3c1f", "center", "middle");
 }
 
 function formatTime(ts) {
@@ -173,15 +184,15 @@ function currentSettingsLine(settings) {
 
 function menuLayout(view) {
   const compact = view.height < 700;
-  const top = view.safeTop + (compact ? 8 : 18);
-  const logoSize = compact ? 78 : 96;
+  const top = view.safeTop + (compact ? 8 : 16);
+  const logoSize = compact ? 80 : 92;
   const logoX = (view.width - logoSize) / 2;
-  const titleY = top + logoSize + (compact ? 26 : 34);
-  const summaryY = top + logoSize + (compact ? 58 : 72);
-  const summaryH = compact ? 104 : 116;
+  const titleY = top + logoSize + (compact ? 22 : 28);
+  const summaryY = top + logoSize + (compact ? 50 : 60);
+  const summaryH = compact ? 96 : 108;
   const buttonH = compact ? 40 : 44;
   const gap = view.height < 620 ? 44 : 50;
-  const buttonY0 = summaryY + summaryH + (compact ? 18 : 22);
+  const buttonY0 = summaryY + summaryH + (compact ? 14 : 18);
   return { compact, top, logoSize, logoX, titleY, summaryY, summaryH, buttonH, gap, buttonY0 };
 }
 

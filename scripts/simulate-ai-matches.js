@@ -87,6 +87,7 @@ function resolveAutoPending(state) {
   if (!pending) return true;
   if (pending.type === "firstPlayer") return battle.resolvePending(state, { playerIndex: pending.playerIndex === 0 ? 1 : 0 });
   if (pending.type === "row") return battle.resolvePending(state, { row: pending.rows && pending.rows[0] });
+  if (pending.type === "reviveRow") return battle.resolvePending(state, { row: pending.rows && pending.rows[0] });
   if (pending.type === "revive") {
     const best = (pending.candidates || []).slice().sort((a, b) => cardValue(b) - cardValue(a))[0];
     return battle.resolvePending(state, best ? { uid: best.uid } : { skip: true });

@@ -176,6 +176,7 @@ function createMatch(options = {}) {
     lastPlayedSeq: 0,
     playedHistory: [],
     leaderReveals: [null, null],
+    randomRestore: false,
     roundTransition: null
   };
   draw(state.players[0], 10);
@@ -353,22 +354,26 @@ function isDecoy(card) {
 }
 
 function isMardroeme(card) {
-  return hasAbility(card, "Mardroeme") || card.baseName === "破釜沉舟";
+  return hasAbility(card, "Mardroeme") || card.baseName === "卧薪尝胆" || card.baseName === "破釜沉舟";
 }
 
-// ---- 破釜沉舟「死牌开局即打」策略（默认行为）----
-// 破釜沉舟只转化场上的奋起人物；若双方场上与己方手牌均无奋起，则破釜沉舟为彻底无用的死牌。
+function isMardroemeSpecial(card) {
+  return card.category === "special" && isMardroeme(card);
+}
+
+// ---- 卧薪尝胆「死牌开局即打」策略（默认行为）----
+// 卧薪尝胆只转化场上的蛰伏人物；若双方场上与己方手牌均无蛰伏，则卧薪尝胆为彻底无用的死牌。
 // 轮到自己且对手尚未放弃时，立即把该死牌打出清掉废牌、让对手多打一张，随后按对手出牌做正常决策：
-//  - 无出使（手牌/牌库/弃牌均无 Spy，抽不到奋起）-> 开局直接打。
-//  - 有出使：出使还在手或牌库中时本回合不打，等出使打出后若仍未抽到奋起立即打
-//    （按需求「不需要看济世」，不考虑济世复归弃牌堆奋起）。
+//  - 无出使（手牌/牌库/弃牌均无 Spy，抽不到蛰伏）-> 开局直接打。
+//  - 有出使：出使还在手或牌库中时本回合不打，等出使打出后若仍未抽到蛰伏立即打
+//    （按需求「不需要看济世」，不考虑济世复归弃牌堆蛰伏）。
 //  - 对手已放弃本回合时返回 null，由常规逻辑去收割该局，避免误打废牌送掉本该拿下的局。
 function mardroemeProactiveDumpDecision(state, playerIndex) {
   const p = state.players[playerIndex];
-  const card = p.hand.find(item => isMardroeme(item));
+  const card = p.hand.find(item => isMardroemeSpecial(item));
   if (!card) return null;
-  // 己方与对手场上均无奋起、己方手牌也无奋起：破釜沉舟彻底无用
-  // （若对手场上有奋起，打出破釜反而会帮对手把奋起转化成强力单位，故不打）。
+  // 己方与对手场上均无蛰伏、己方手牌也无蛰伏：卧薪尝胆彻底无用
+  // （若对手场上有蛰伏，打出雪耻反而会帮对手把蛰伏转化成强力单位，故不打）。
   if (ROWS.some(row => countBerserkers(state, playerIndex, row) > 0)) return null;
   if (ROWS.some(row => countBerserkers(state, otherIndex(playerIndex), row) > 0)) return null;
   if (p.hand.some(c => hasAbility(c, "Berserker"))) return null;
@@ -378,16 +383,44 @@ function mardroemeProactiveDumpDecision(state, playerIndex) {
   const scoutInDiscard = (p.discard || []).some(c => hasAbility(c, "Spy"));
   // 出使还在手或牌库：本回合不打，等出使打出后再判断
   if (scoutInHand || scoutInDeck) return null;
-  // 无出使（抽不到奋起）-> 开局立即打出；有出使且已打出(在弃牌堆)且未抽到奋起 -> 立即打出
-  return { action: "play", card, row: bestOwnRow(state, playerIndex) || "melee" };
+  // 无出使（抽不到蛰伏）-> 开局立即打出；有出使且已打出(在弃牌堆)且未抽到蛰伏 -> 立即打出
+  return { action: "play", card, row: rowForCard(state, playerIndex, card) || "melee" };
 }
 
 function cardLabel(card) {
   return card.name || card.baseName || "卡牌";
 }
 
+// 朱温选牌时，同名、同效果的时局牌只展示一次；保留首张的真实 uid 供后续从牌库打出。
+function uniqueDeckWeatherCards(player) {
+  const seen = new Set();
+  return (player?.deck || []).filter(card => {
+    if (card?.category !== "weather") return false;
+    const key = [
+      card.baseName || card.name || card.id || "",
+      card.abilityText || "",
+      Array.isArray(card.row) ? card.row.join(",") : ""
+    ].join("\u0001");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function leaderText(player) {
   return `${player.leader?.baseName || ""} ${player.leader?.leaderAbility || ""} ${player.leader?.abilityText || ""}`.toLowerCase();
+}
+
+// 朱元璋（巫师三昆特牌 Eredin Bréacc Glas: The Treacherous）：
+// 双方出使人物战力翻倍。对应 Gwent 原版「Doubles the strength of all Spy cards on both sides」。
+// 注意：仅对「出使(Spy)」卡生效，且作用于双方场上所有出使卡，不是某行的号令(Commander's Horn)。
+function isSpyDoubleLeader(player) {
+  if (!player || !player.leader) return false;
+  return /treacherous|both sides|spy.*double|出使.*翻倍|间谍翻倍/i.test(leaderText(player));
+}
+
+function spyDoubleActive(state) {
+  return state.players.some(p => p.leaderUsed && isSpyDoubleLeader(p));
 }
 
 function playWeatherFromLeader(state, name, preferredRow) {
@@ -403,6 +436,27 @@ function playWeatherFromLeader(state, name, preferredRow) {
   const alreadyActive = !!state.weather[row];
   state.weather[row] = true;
   return alreadyActive ? [] : [row];
+}
+
+function playLeaderWeatherCard(state, playerIndex, uid) {
+  const player = state.players[playerIndex];
+  if (!player) return false;
+  const idx = player.deck.findIndex(card => card.uid === uid);
+  if (idx < 0) return false;
+  const card = player.deck.splice(idx, 1)[0];
+  // 立即打出该时局牌（与从手牌打出时局牌的表现保持一致）
+  resolveSpecial(state, playerIndex, card, null);
+  card.owner = playerIndex;
+  card.controller = playerIndex;
+  card.zone = "discard";
+  card.boardRow = null;
+  card.playedBy = playerIndex;
+  player.discard.push(card);
+  player.leaderUsed = true;
+  markLeaderUsed(state, playerIndex, `打出时局牌「${cardLabel(card)}」`);
+  addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」并打出时局牌「${cardLabel(card)}」。`);
+  afterPlay(state);
+  return true;
 }
 
 function takeBestDiscardToHand(state, fromIndex, toIndex, targetUid) {
@@ -447,18 +501,28 @@ function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
 
 function optimizeAgileRows(state, playerIndex) {
   const player = state.players[playerIndex];
+  recalcScores(state);
   let moved = 0;
-  ROWS.forEach(row => {
-    player.board[row].slice().forEach(card => {
-      if (!hasAbility(card, "Agile") || !card.row || card.row.length < 2) return;
-      const best = bestRowForCard(state, playerIndex, card);
-      if (!best || best === row) return;
-      player.board[row] = player.board[row].filter(item => item.uid !== card.uid);
-      player.board[best].push(card);
-      moved += 1;
+  let changed = true;
+  let guard = 0;
+  // 多张通才卡可能互相影响（士气、号令等），反复评估直到稳定
+  while (changed && guard < 50) {
+    changed = false;
+    guard += 1;
+    ROWS.forEach(row => {
+      player.board[row].slice().forEach(card => {
+        if (!hasAbility(card, "Agile") || !card.row || card.row.length < 2) return;
+        const best = agileBestRow(state, playerIndex, card);
+        if (!best || best === card.boardRow) return;
+        player.board[card.boardRow] = player.board[card.boardRow].filter(item => item.uid !== card.uid);
+        player.board[best].push(card);
+        card.boardRow = best;
+        moved += 1;
+        changed = true;
+      });
     });
-  });
-  addLog(state, `${player.name}调整机动单位到更优战线。`);
+  }
+  if (moved > 0) addLog(state, `${player.name}调整机动单位到更优战线。`);
   return moved;
 }
 
@@ -490,23 +554,27 @@ function placeUnitOnBoard(state, playedBy, target, row, card) {
   state.players[target].board[row].push(card);
 }
 
-function hasActiveAvengerToken(player) {
-  if (!player) return false;
-  const onBoard = ROWS.some(row => (player.board[row] || []).some(card => card.baseName === "Hemdall"));
-  const retained = (player.retained || []).some(card => card.baseName === "Hemdall");
-  return onBoard || retained;
+function leaveSummonSpec(card) {
+  if (hasAbility(card, "Summon Avenger")) {
+    return { tokenName: "Hemdall", sourceName: "召唤无当飞军", fallbackName: "无当飞军" };
+  }
+  if (hasAbility(card, "Summon Sky Hound")) {
+    return { tokenName: "Howling Sky Hound", sourceName: "召唤东吴水师", fallbackName: "东吴水师" };
+  }
+  return null;
 }
 
-function summonAvengerOnLeave(state, owner, row, card, options = {}) {
+function summonTokenOnLeave(state, owner, card, options = {}) {
   const player = state.players[owner];
-  if (!player || !hasAbility(card, "Summon Avenger") || hasActiveAvengerToken(player)) return null;
-  const token = tokenCard("Hemdall", owner);
+  const spec = leaveSummonSpec(card);
+  if (!player || !spec) return null;
+  const token = tokenCard(spec.tokenName, owner);
   if (!token) return null;
-  const targetRow = ROWS.includes(row) ? row : ((token.row || [])[0] || "melee");
+  const targetRow = (token.row || []).find(row => ROWS.includes(row)) || "melee";
   const originName = cardLabel(card);
   if (options.nextRound) {
     token.retainedRow = targetRow;
-    token.retainedSource = "召唤陆抗";
+    token.retainedSource = spec.sourceName;
     token.retainedOriginName = originName;
     player.retained.push(token);
     addLog(state, `${player.name}的「${originName}」离开战场，「${cardLabel(token)}」将在下一局开始时入场。`);
@@ -514,12 +582,19 @@ function summonAvengerOnLeave(state, owner, row, card, options = {}) {
     placeUnitOnBoard(state, owner, owner, targetRow, token);
     addLog(state, `${player.name}的「${originName}」离开战场，召唤「${cardLabel(token)}」进入${ROW_LABELS[targetRow]}。`);
   }
-  return { token, row: targetRow, sourceName: "召唤陆抗", originName };
+  return { token, row: targetRow, sourceName: spec.sourceName, fallbackName: spec.fallbackName, originName };
 }
 
-function avengerEffectText(avengers) {
-  const names = (avengers || []).map(item => cardLabel(item.token));
-  return compactNameCounts(names, "陆抗");
+function appendLeaveSummonEffects(state, summons) {
+  const groups = new Map();
+  (summons || []).filter(Boolean).forEach(item => {
+    if (!groups.has(item.sourceName)) groups.set(item.sourceName, []);
+    groups.get(item.sourceName).push(item);
+  });
+  groups.forEach((items, sourceName) => {
+    const names = items.map(item => cardLabel(item.token));
+    appendLastBattleActionEffect(state, sourceName, compactNameCounts(names, items[0]?.fallbackName || "召唤物"));
+  });
 }
 
 function discardBoardCard(state, controllerIndex, card, row = null, options = {}) {
@@ -530,10 +605,9 @@ function discardBoardCard(state, controllerIndex, card, row = null, options = {}
   card.controller = owner;
   card.zone = "discard";
   card.boardRow = null;
-  const avenger = summonAvengerOnLeave(state, owner, row, card, { nextRound: !!options.nextRound });
-  queueSkyHoundSummon(state, owner, card);
+  const summon = summonTokenOnLeave(state, owner, card, { nextRound: !!options.nextRound });
   state.players[owner].discard.push(card);
-  return { card, avenger };
+  return { card, summon };
 }
 
 function choiceRowsForCard(state, playerIndex, card) {
@@ -755,6 +829,38 @@ function useLeader(state, playerIndex, actionOptions = {}) {
   const text = leaderText(player);
   const discardsTwo = /discard 2 cards/.test(text);
   if (discardsTwo && player.hand.length < 2) return false;
+
+  // 朱温：从牌组选择任意 1 张时局牌并立即打出（需要玩家选择具体牌）
+  const picksDeckWeather = /pick any weather.*deck|从牌组选择.*时局牌/i.test(text);
+  if (picksDeckWeather) {
+    const deckWeather = uniqueDeckWeatherCards(player);
+    if (!deckWeather.length) return false;
+    // 已明确指定要打出的牌（云端 AI 决策 / 联机提交）：直接打出
+    if (actionOptions.leaderCardUid) {
+      const chosen = deckWeather.find(card => card.uid === actionOptions.leaderCardUid);
+      if (!chosen) return false;
+      return playLeaderWeatherCard(state, playerIndex, chosen.uid);
+    }
+    if (isHumanControlled(state, playerIndex)) {
+      state.pending = {
+        type: "leaderWeather",
+        playerIndex,
+        candidates: deckWeather,
+        title: "朱温：从牌组选 1 张时局牌打出"
+      };
+      addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」，从牌组选择时局牌。`);
+      return true;
+    }
+    // 非人类且无指定牌：自动选最优时局牌打出，避免 AI 卡在待选状态
+    let best = deckWeather[0];
+    let bestScore = -Infinity;
+    deckWeather.forEach(card => {
+      const s = estimatePlayGain(state, playerIndex, card);
+      if (s > bestScore) { bestScore = s; best = card; }
+    });
+    return playLeaderWeatherCard(state, playerIndex, best.uid);
+  }
+
   if (discardsTwo && isHumanControlled(state, playerIndex)) {
     state.pending = {
       type: "leaderDiscard",
@@ -795,6 +901,10 @@ function useLeader(state, playerIndex, actionOptions = {}) {
         const drawn = player.hand.length - before;
         if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
       }
+    } else if (/restore.*random|randomly-chosen|济世.*随机|随机目标/.test(text)) {
+      state.randomRestore = true;
+      addLog(state, `${player.name}启用随机济世：双方济世复归目标改为随机。`);
+      appendLastBattleActionEffect(state, "济世", "随机目标");
     } else if (/restore a card from your discard|弃牌堆.*手牌/.test(text)) {
       const taken = takeBestDiscardToHand(state, playerIndex, playerIndex, actionOptions.leaderTargetUid);
       if (taken) appendLastBattleActionEffect(state, "取回", cardLabel(taken));
@@ -834,6 +944,9 @@ function useLeader(state, playerIndex, actionOptions = {}) {
       const clearedRows = ROWS.filter(row => state.weather[row]).map(row => ROW_LABELS[row]);
       state.weather = {};
       if (clearedRows.length) appendLastBattleActionEffect(state, "晴天", `清除${clearedRows.join("、")}`);
+    } else if (isSpyDoubleLeader(player)) {
+      // 朱元璋（The Treacherous）：双方出使人物战力翻倍，仅对出使(Spy)卡生效，非某行号令。
+      appendLastBattleActionEffect(state, "主将技能", "双方出使人物战力翻倍");
     } else if (/double|翻倍|horn|鼓舞|号令/.test(text)) {
       const row = rowFromLeaderText(text) || (ROWS.includes(actionOptions.leaderRow) ? actionOptions.leaderRow : null) || bestOwnRow(state, playerIndex) || "melee";
       const wasActive = !!state.rowHorn[playerIndex][row];
@@ -945,9 +1058,11 @@ function resolveUnitAbility(state, playedBy, target, row, card, actionOptions = 
       : (actionOptions.medicTargetUid ? [actionOptions.medicTargetUid] : []);
     const sequenceIndex = Number(actionOptions.medicTargetIndex || 0);
     const selectedUid = sequence[sequenceIndex];
-    const selected = selectedUid && candidates.find(item => item.uid === selectedUid);
+    const selected = !state.randomRestore && selectedUid && candidates.find(item => item.uid === selectedUid);
     if (selected) {
       reviveCardByUid(state, playedBy, selected.uid, { ...actionOptions, medicTargetIndex: sequenceIndex + 1 });
+    } else if (state.randomRestore) {
+      reviveBest(state, playedBy);
     } else if (isHumanControlled(state, playedBy) && candidates.length) {
       state.pending = { type: "revive", playerIndex: playedBy, candidates, title: "选择举荐复归目标" };
       addLog(state, "请选择要复归的人物，或跳过。 ");
@@ -1041,7 +1156,6 @@ function isReviveCandidate(card) {
 function reviveCandidates(state, playerIndex) {
   return state.players[playerIndex].discard
     .filter(isReviveCandidate)
-    .filter(card => !hasAbility(card, "Muster")) // 集结为一次性效果，复活不会再触发，济世/复起均不复活集结单位
     .sort((a, b) => cardValue(b) - cardValue(a));
 }
 
@@ -1049,6 +1163,24 @@ function reviveCardByUid(state, playerIndex, uid, actionOptions = {}) {
   const player = state.players[playerIndex];
   const card = reviveCandidates(state, playerIndex).find(item => item.uid === uid);
   if (!card) return false;
+  // 通才（机动/Agile）等多战线人物被举荐复归时，应像正常出牌一样让玩家选择落点战线
+  // （参考巫师三昆特牌：灵活单位复归可由玩家指定部署战线）。仅人类玩家控制且非随机复归时给出选择。
+  if (
+    actionOptions.forceAuto !== true &&
+    isHumanControlled(state, playerIndex) &&
+    !state.randomRestore &&
+    needsHumanChoice(state, player, card, null)
+  ) {
+    state.pending = {
+      type: "reviveRow",
+      playerIndex,
+      cardUid: uid,
+      rows: pendingRowsForCard(state, playerIndex, card),
+      title: `选择「${cardLabel(card)}」复归战线`
+    };
+    addLog(state, `请选择「${cardLabel(card)}」复归的战线。`);
+    return true;
+  }
   player.discard = player.discard.filter(item => item.uid !== uid);
   const target = boardTargetForCard(playerIndex, card);
   const row = rowForCard(state, playerIndex, card) || "melee";
@@ -1056,6 +1188,21 @@ function reviveCardByUid(state, playerIndex, uid, actionOptions = {}) {
   addLog(state, `举荐生效：${player.name}复归「${cardLabel(card)}」到${target === playerIndex ? "己方" : "对方"}${ROW_LABELS[row]}。`);
   appendLastBattleActionEffect(state, "济世", cardLabel(card));
   resolveUnitAbility(state, playerIndex, target, row, card, actionOptions);
+  return true;
+}
+
+// 在确定落点战线后实际执行复归，供 reviveRow 选择流程复用。
+function finishReviveAtRow(state, playerIndex, uid, row, actionOptions = {}) {
+  const player = state.players[playerIndex];
+  const card = player.discard.find(item => item.uid === uid);
+  if (!card) return false;
+  player.discard = player.discard.filter(item => item.uid !== uid);
+  const target = boardTargetForCard(playerIndex, card);
+  const chosen = ROWS.includes(row) ? row : (rowForCard(state, playerIndex, card) || "melee");
+  placeUnitOnBoard(state, playerIndex, target, chosen, card);
+  addLog(state, `举荐生效：${player.name}复归「${cardLabel(card)}」到${target === playerIndex ? "己方" : "对方"}${ROW_LABELS[chosen]}。`);
+  appendLastBattleActionEffect(state, "济世", cardLabel(card));
+  resolveUnitAbility(state, playerIndex, target, chosen, card, actionOptions);
   return true;
 }
 
@@ -1139,8 +1286,7 @@ function doDecoyTarget(state, playerIndex, uid) {
   if (!entry) return null;
   player.board[entry.row] = player.board[entry.row].filter(card => card.uid !== entry.card.uid);
   const owner = Number.isInteger(entry.card.owner) && state.players[entry.card.owner] ? entry.card.owner : playerIndex;
-  const avenger = summonAvengerOnLeave(state, owner, entry.row, entry.card);
-  queueSkyHoundSummon(state, owner, entry.card);
+  const summon = summonTokenOnLeave(state, owner, entry.card);
   entry.card.owner = playerIndex;
   entry.card.controller = playerIndex;
   entry.card.zone = "hand";
@@ -1149,13 +1295,14 @@ function doDecoyTarget(state, playerIndex, uid) {
   if (hasAbility(entry.card, "Medic")) entry.card.medicReuseCount = (entry.card.medicReuseCount || 0) + 1; // 济世被请辞回收，记录复用次数用于边际递减
   player.hand.push(entry.card);
   addLog(state, `${player.name}收回「${cardLabel(entry.card)}」。`);
-  return { card: entry.card, avenger };
+  return { card: entry.card, summon };
 }
 
 function reviveBest(state, playerIndex) {
   const candidates = reviveCandidates(state, playerIndex);
   if (!candidates.length) return;
-  reviveCardByUid(state, playerIndex, candidates[0].uid);
+  const selected = state.randomRestore ? randomItem(candidates, candidates[0]) : candidates[0];
+  reviveCardByUid(state, playerIndex, selected.uid);
 }
 
 function collectScorchTargets(state, playerIndex, row, opponentOnly, minEffective = 10) {
@@ -1193,8 +1340,7 @@ function doScorch(state, playerIndex, row, opponentOnly, minEffective = 10) {
   const results = burned.map(item => removeFromBoardToDiscard(state, item.pi, item.row, item.card.uid)).filter(Boolean);
   addLog(state, `奇策摧毁 ${burned.length} 张战力 ${max} 的非传世人物：${details.join("、")}。`);
   appendLastBattleActionEffect(state, "奇策", `摧毁${compactNameCounts(details)}`);
-  const avengers = results.map(item => item.avenger).filter(Boolean);
-  if (avengers.length) appendLastBattleActionEffect(state, "召唤陆抗", avengerEffectText(avengers));
+  appendLeaveSummonEffects(state, results.map(item => item.summon));
 }
 
 function doDecoy(state, playerIndex, targetUid) {
@@ -1203,7 +1349,7 @@ function doDecoy(state, playerIndex, targetUid) {
   const selected = targets.find(item => item.card.uid === targetUid) || targets[0];
   const result = doDecoyTarget(state, playerIndex, selected.card.uid);
   if (result?.card) appendLastBattleActionEffect(state, "请辞", cardLabel(result.card));
-  if (result?.avenger) appendLastBattleActionEffect(state, "召唤陆抗", avengerEffectText([result.avenger]));
+  appendLeaveSummonEffects(state, [result?.summon]);
 }
 
 function transformedBerserkerToken(card, row) {
@@ -1217,26 +1363,26 @@ function applyTransformedBerserker(card, token, row) {
   const fallback = isYoung
     ? {
       baseName: "Transformed Young Vildkaarl",
-      displayName: "背水锐卒",
+      displayName: "越相文种",
       category: "unit",
       row: ["ranged"],
       rowDisplayName: ROW_LABELS.ranged,
       strength: 8,
       abilities: ["Tight Bond"],
       abilityDisplayNames: ["同盟"],
-      abilityText: "奋起转化：战力 8；同名背水锐卒在同一阵线并列时战力倍增。",
+      abilityText: "蛰伏转化：战力 8；同名越相文种在同一阵线并列时战力倍增。",
       hero: false
     }
     : {
       baseName: "Transformed Vildkaarl",
-      displayName: "背水死士",
+      displayName: "越王勾践",
       category: "unit",
       row: ["melee"],
       rowDisplayName: ROW_LABELS.melee,
       strength: 14,
       abilities: ["Morale Boost"],
       abilityDisplayNames: ["振势"],
-      abilityText: "奋起转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。",
+      abilityText: "蛰伏转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。",
       hero: false
     };
   const next = token || fallback;
@@ -1271,8 +1417,8 @@ function transformBerserkers(state, row) {
       }
     });
   });
-  addLog(state, `破釜触发 ${count} 张奋起人物转化。`);
-  if (count) appendLastBattleActionEffect(state, "破釜", `奋起x${count}`);
+  addLog(state, `雪耻触发 ${count} 张蛰伏人物转化。`);
+  if (count) appendLastBattleActionEffect(state, "雪耻", `蛰伏x${count}`);
 }
 
 function removeFromBoardToDiscard(state, playerIndex, row, uid) {
@@ -1343,6 +1489,7 @@ function finishRound(state) {
     if (state.players[winnerIndex].faction === "Northern Realms") {
       draw(state.players[winnerIndex], 1);
       addLog(state, "开国群雄被动：获胜后抽 1 张牌。");
+      markFactionPerkAction(state, winnerIndex, "乘胜追策", "摸 1 张牌");
     }
   }
   markBattleAction(state, {
@@ -1400,17 +1547,6 @@ function tokenCard(name, owner) {
   const raw = tokenByName(name);
   if (!raw) return null;
   return cloneCard({ ...raw, id: `token-${name}`, hero: raw.category === "hero" || (raw.abilities || []).includes("Hero") }, owner);
-}
-
-function queueSkyHoundSummon(state, owner, card) {
-  const player = state.players[owner];
-  if (!player || !hasAbility(card, "Summon Sky Hound")) return;
-  const token = tokenCard("Howling Sky Hound", owner);
-  if (!token) return;
-  token.retainedSource = "召唤啸天犬";
-  token.retainedOriginName = cardLabel(card);
-  player.retained.push(token);
-  addLog(state, `${player.name}的「${cardLabel(card)}」离开战场，啸天犬将在下一回合开始时入场。`);
 }
 
 function retainableMonsterUnits(player) {
@@ -1544,6 +1680,7 @@ function hasActiveHalfWeatherLeader(state, player) {
 }
 
 function recalcScores(state) {
+  const spyDouble = spyDoubleActive(state); // 朱元璋：双方出使人物战力翻倍（Gwent The Treacherous）
   state.players.forEach((player, pi) => {
     ROWS.forEach(row => {
       const cards = player.board[row];
@@ -1562,7 +1699,7 @@ function recalcScores(state) {
         if (!card.hero) {
           value += moraleCards.filter(item => item.uid !== card.uid).length;
           if (hasHorn) value *= 2;
-          if (hasAbility(card, "Spy") && player.leader && /treacherous/i.test(player.leader.baseName || "")) value *= 2;
+          if (hasAbility(card, "Spy") && spyDouble) value *= 2;
         }
         card.effective = value;
       });
@@ -1587,6 +1724,35 @@ function bestRowForCard(state, playerIndex, card) {
     const score = rowScore(state.players[playerIndex], row);
     if (score > bestScore) { bestScore = score; best = row; }
   });
+  return best;
+}
+
+// 惠施主将技能专用：计算机动（通才）单位去往哪条战线能使己方总战力最大化。
+// 与 bestRowForCard 不同，这里以「把该卡从当前战线移除后，加入候选战线的己方总战力」
+// 作为评判标准（边际收益），避免被当前战线已计入的卡牌自身战力抬高门槛导致该移动却不移动。
+function agileBestRow(state, playerIndex, card) {
+  const player = state.players[playerIndex];
+  if (!card.row || card.row.length < 2) return card.row && card.row[0] ? card.row[0] : null;
+  const currentRow = card.boardRow;
+  if (!ROWS.includes(currentRow)) return card.row[0];
+  recalcScores(state);
+  const baseTotal = totalScore(player);
+  let best = currentRow;
+  let bestTotal = baseTotal;
+  card.row.forEach(row => {
+    if (row === currentRow) return;
+    // 临时把卡牌移到候选战线，重算战力，再还原
+    player.board[currentRow] = player.board[currentRow].filter(c => c.uid !== card.uid);
+    player.board[row].push(card);
+    card.boardRow = row;
+    recalcScores(state);
+    const total = totalScore(player);
+    player.board[row] = player.board[row].filter(c => c.uid !== card.uid);
+    player.board[currentRow].push(card);
+    card.boardRow = currentRow;
+    if (total > bestTotal) { bestTotal = total; best = row; }
+  });
+  recalcScores(state);
   return best;
 }
 
@@ -1701,7 +1867,7 @@ function estimatePlayGain(state, playerIndex, card) {
     const threshold = state.round >= 3 ? 8 : 12;
     return decoyTargetSortValue(state, playerIndex, target.card, target.row) >= threshold ? 5 : -1;
   }
-  if (isMardroeme(card)) {
+  if (isMardroemeSpecial(card)) {
     const row = rowForCard(state, playerIndex, card);
     return row && countBerserkers(state, playerIndex, row) ? 6 : -2;
   }
@@ -1781,7 +1947,10 @@ function cloneAiState(state) {
 function canUseLeaderAction(state, playerIndex) {
   const player = state.players[playerIndex];
   if (!player || player.passed || player.leaderUsed || !player.leader || state.current !== playerIndex) return false;
-  return !/discard 2 cards/.test(leaderText(player)) || player.hand.length >= 2;
+  const text = leaderText(player);
+  if (/discard 2 cards/.test(text) && player.hand.length < 2) return false;
+  if (/pick any weather.*deck|从牌组选择.*时局牌/i.test(text) && !player.deck.some(card => card.category === "weather")) return false;
+  return true;
 }
 
 function executeAiAction(state, playerIndex, action) {
@@ -2039,11 +2208,23 @@ function leaderActionsDocumentV2(state, playerIndex) {
   if (/clear|清除|拨云/.test(text)) return Object.keys(state.weather).length ? [{ action: "leader" }] : [];
   if (/shuffle all cards/.test(text)) return state.players.some(item => item.discard.length) ? [{ action: "leader" }] : [];
   if (/move agile/.test(text)) {
-    const movable = ROWS.some(row => player.board[row].some(card => hasAbility(card, "Agile") && card.row?.length > 1 && bestRowForCard(state, playerIndex, card) !== row));
+    const movable = ROWS.some(row => player.board[row].some(card => hasAbility(card, "Agile") && card.row?.length > 1 && agileBestRow(state, playerIndex, card) !== card.boardRow));
     return movable ? [{ action: "leader" }] : [];
   }
   if (/cancel your opponent|取消.*主将|cancel.*leader/.test(text)) return opponent.leaderUsed ? [] : [{ action: "leader" }];
   if (/look at 3 random/.test(text)) return opponent.hand.length ? [{ action: "leader" }] : [];
+  if (/pick any weather.*deck|从牌组选择.*时局牌/i.test(text)) {
+    const deckWeather = uniqueDeckWeatherCards(player);
+    if (!deckWeather.length) return [];
+    let best = null;
+    let bestScore = -Infinity;
+    deckWeather.forEach(card => {
+      const s = estimatePlayGain(state, playerIndex, card);
+      if (s > bestScore) { bestScore = s; best = card; }
+    });
+    if (!best || bestScore <= 0) return [];
+    return [{ action: "leader", leaderCardUid: best.uid }];
+  }
   if (/pick any weather/.test(text)) return ROWS.filter(row => !state.weather[row]).map(row => ({ action: "leader", leaderRow: row }));
   if (/pick a .*weather|biting frost|impenetrable fog|torrential rain|边患|党争|典籍/.test(text)) {
     const row = rowFromLeaderText(text) || (/边患/.test(text) ? "melee" : /党争/.test(text) ? "ranged" : /典籍/.test(text) ? "siege" : null);
@@ -2076,7 +2257,7 @@ function cardActionsDocumentV2(state, playerIndex, card) {
       const beneficiaries = (state.players[playerIndex].board[row] || []).filter(item => !item.hero).length;
       if (!beneficiaries || state.rowHorn[playerIndex][row]) return;
     }
-    if (isMardroeme(card) && countBerserkers(state, playerIndex, row) === 0) return;
+    if (isMardroemeSpecial(card) && countBerserkers(state, playerIndex, row) === 0) return;
     decoys.forEach(decoy => {
       medicSequences.forEach(sequence => {
         actions.push({
@@ -2301,7 +2482,7 @@ function analyzeDocumentTurnV2Legacy(state, cfg, playerIndex = 1) {
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
 
-  // 破釜沉舟死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的破釜沉舟，
+  // 卧薪尝胆死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的卧薪尝胆，
   // 立即打出清掉废牌（无出使则开局直接打；有出使则等出使打出后再判断）。对手已放弃时
   // 不打，避免放弃本应拿下的这一局。
   const proactiveMardroeme = mardroemeProactiveDumpDecision(state, playerIndex);
@@ -2387,7 +2568,7 @@ function analyzeDocumentTurnV2Optimized(state, cfg, playerIndex = 1) {
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
 
-  // 破釜沉舟死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的破釜沉舟，
+  // 卧薪尝胆死牌「开局即打」：轮到自己且对手尚未放弃时，若持有彻底无用的卧薪尝胆，
   // 立即打出清掉废牌（无出使则开局直接打；有出使则等出使打出后再判断）。对手已放弃时
   // 不打，避免放弃本应拿下的这一局。
   const proactiveMardroeme = mardroemeProactiveDumpDecision(state, playerIndex);
@@ -2531,10 +2712,32 @@ function resolvePending(state, choice = {}) {
     afterPlay(state);
     return true;
   }
+  if (pending.type === "leaderWeather") {
+    const uid = String(choice.uid || "");
+    const player = state.players[playerIndex];
+    const isCandidate = pending.candidates.some(card => card.uid === uid);
+    const isStillInDeck = player?.deck.some(card => card.uid === uid && card.category === "weather");
+    if (!uid || !isCandidate || !isStillInDeck) return false;
+    state.pending = null;
+    return playLeaderWeatherCard(state, playerIndex, uid);
+  }
   state.pending = null;
   if (pending.type === "revive") {
     if (!choice.skip && choice.uid) reviveCardByUid(state, playerIndex, choice.uid);
     else addLog(state, `${state.players[playerIndex].name}跳过举荐复归。`);
+    if (!state.pending) afterPlay(state);
+    return true;
+  }
+  if (pending.type === "reviveRow") {
+    const pi = pending.playerIndex;
+    const uid = pending.cardUid;
+    state.pending = null;
+    if (choice.skip || !pending.rows.includes(choice.row)) {
+      // 不指定战线时自动选择最优落点
+      reviveCardByUid(state, pi, uid, { forceAuto: true });
+    } else {
+      finishReviveAtRow(state, pi, uid, choice.row);
+    }
     if (!state.pending) afterPlay(state);
     return true;
   }
@@ -2560,7 +2763,7 @@ function resolvePending(state, choice = {}) {
     player.discard.push(card);
     addLog(state, `${player.name}打出${categoryLabel(card)}「${cardLabel(card)}」。`);
     if (result?.card) appendLastBattleActionEffect(state, "请辞", cardLabel(result.card));
-    if (result?.avenger) appendLastBattleActionEffect(state, "召唤陆抗", avengerEffectText([result.avenger]));
+    appendLeaveSummonEffects(state, [result?.summon]);
     afterPlay(state);
     return true;
   }
@@ -2579,6 +2782,12 @@ function cancelPending(state) {
     const player = state.players[state.pending.playerIndex];
     state.pending = null;
     addLog(state, `${player.name}取消了主将「${cardLabel(player.leader)}」的弃牌，请重新出牌。`);
+    return true;
+  }
+  if (state.pending.type === "leaderWeather") {
+    const player = state.players[state.pending.playerIndex];
+    state.pending = null;
+    addLog(state, `${player.name}取消了主将「${cardLabel(player.leader)}」的时局选牌，请重新行动。`);
     return true;
   }
   if (state.pending.type === "decoy") return resolvePending(state, { cancel: true });
