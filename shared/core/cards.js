@@ -319,6 +319,10 @@ function isMardroemeCard(card) {
   return hasAbility(card, "Mardroeme") || name === "卧薪尝胆" || name === "破釜沉舟";
 }
 
+function isMardroemeSpecialCard(card) {
+  return card?.category === "special" && isMardroemeCard(card);
+}
+
 // 特殊/时局牌的能力加分配置。
 // 人物牌有基础战力 + 能力加分，而特殊/时局牌基础战力为 0、只有能力加分，
 // 因此这里把特殊牌的能力加分提到与强力人物相当的水平，使牌组总战力与自动组牌排序更合理。
@@ -519,7 +523,14 @@ function addAutoDeckGroup(picked, group, pool) {
     ? group.cards
     : group.cards.filter(card => !pickedIds[card.id]).slice(0, 1);
   if (!seedCards.length) return [];
-  const cards = expandAutoDeckGroup(seedCards, pool).filter(card => !pickedIds[card.id]);
+  const expanded = expandAutoDeckGroup(seedCards, pool).filter(card => !pickedIds[card.id]);
+  let mardroemeSpecialCount = picked.filter(isMardroemeSpecialCard).length;
+  const cards = expanded.filter(card => {
+    if (!isMardroemeSpecialCard(card)) return true;
+    if (mardroemeSpecialCount >= 1) return false;
+    mardroemeSpecialCount += 1;
+    return true;
+  });
   if (!cards.length || picked.length + cards.length > 40) return [];
   picked.push(...cards);
   return cards;

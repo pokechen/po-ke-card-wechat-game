@@ -115,31 +115,19 @@ function drawReadyBadge(ctx, x, y, ready, animate = false, labelOverride = "") {
   return { w, h };
 }
 
-function drawFriendSeat(ctx, view, player, ready, ui, compact = false) {
-  const seatW = compact ? 104 : 118;
-  const seatH = compact ? 74 : 90;
-  const x = (view.width - seatW) / 2;
-  const y = view.safeTop + (compact ? 38 : 66);
-  fillRoundRect(ctx, x, y, seatW, seatH, compact ? 15 : 18, "rgba(255,250,240,0.82)", "rgba(216,189,131,0.92)");
-  const avatarSize = compact ? 40 : 48;
-  const ax = x + (seatW - avatarSize) / 2;
-  const ay = y + 8;
-  drawAvatar(ctx, player, ax, ay, avatarSize, "友", !player);
-  fillRoundRect(ctx, ax + avatarSize - 16, ay - 5, 38, 18, 9, "#8f3c1f", "rgba(255,247,216,0.9)");
-  text(ctx, "好友", ax + avatarSize + 3, ay + 4, 9, "#fff7d8", "center");
-  text(ctx, player ? playerName(player, "好友") : "等待好友", x + seatW / 2, y + seatH - 16, compact ? 11 : 12, player ? "#2f2417" : "#9a8562", "center");
-  if (player && !compact) drawReadyBadge(ctx, x + seatW - 62, y + seatH - 28, ready, ui.pvpReadyAnimUntil > Date.now());
-}
-
 function drawPlayerStatusRow(ctx, room, player, index, label, rect, ui) {
   const ready = readyOf(room, index);
-  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 13, ready ? "rgba(47,111,87,0.08)" : "rgba(255,255,255,0.38)", ready ? "rgba(47,111,87,0.32)" : "rgba(216,189,131,0.42)");
-  drawAvatar(ctx, player, rect.x + 10, rect.y + 9, 34, label.slice(0, 1), !player);
-  text(ctx, `${label}：${player ? playerName(player, label) : "等待加入"}`, rect.x + 52, rect.y + 18, 11, label === "我方" ? "#2f6f57" : "#8f3c1f", "left");
-  if (player) {
-    wrapText(ctx, playerSetupText(player, label, room?.status, room, "", index), rect.x + 52, rect.y + 36, rect.w - 116, 12, 1, 9, "#775c34");
-  }
-  drawReadyBadge(ctx, rect.x + rect.w - 66, rect.y + 18, ready, ui.pvpReadyAnimUntil > Date.now());
+  const accent = label === "我方" ? "#2f6f57" : "#8f3c1f";
+  const fill = ready ? "rgba(47,111,87,0.10)" : (player ? "rgba(255,255,255,0.58)" : "rgba(255,250,240,0.78)");
+  const stroke = ready ? "rgba(47,111,87,0.34)" : "rgba(216,189,131,0.48)";
+  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 14, fill, stroke);
+  fillRoundRect(ctx, rect.x + 6, rect.y + 10, 4, rect.h - 20, 2, accent);
+  const avatarSize = Math.min(36, rect.h - 14);
+  const avatarY = rect.y + (rect.h - avatarSize) / 2;
+  drawAvatar(ctx, player, rect.x + 16, avatarY, avatarSize, label.slice(0, 1), !player);
+  const name = player ? playerName(player, label) : "等待加入";
+  text(ctx, `${label} · ${name}`, rect.x + 60, rect.y + rect.h / 2, 13, accent, "left");
+  drawReadyBadge(ctx, rect.x + rect.w - 66, rect.y + (rect.h - 22) / 2, ready, ui.pvpReadyAnimUntil > Date.now());
 }
 
 function errorMetrics(err, panelW) {
@@ -205,38 +193,59 @@ function drawShareGuideOverlay(ctx, view, actions, roomId, ui) {
   ctx.fillStyle = "rgba(24, 18, 12, 0.62)";
   ctx.fillRect(0, 0, view.width, view.height);
 
-  const panelW = Math.min(view.width - 44, 336);
-  const panelH = Math.min(430, view.height - view.safeTop - view.safeBottom - 72);
-  const panelX = (view.width - panelW) / 2;
-  const panelY = Math.max(view.safeTop + 42, Math.floor((view.height - panelH) / 2));
-
   let menuRect = { x: view.width - 102, y: view.safeTop + 8, width: 92, height: 38 };
   try {
     const current = typeof wx !== "undefined" && wx.getMenuButtonBoundingClientRect ? wx.getMenuButtonBoundingClientRect() : null;
-    if (current && current.width > 0 && current.height > 0) menuRect = current;
+    const currentX = Number(current?.x ?? current?.left);
+    const currentY = Number(current?.y ?? current?.top);
+    const currentW = Number(current?.width);
+    const currentH = Number(current?.height);
+    if ([currentX, currentY, currentW, currentH].every(Number.isFinite) && currentW > 0 && currentH > 0) {
+      menuRect = { x: currentX, y: currentY, width: currentW, height: currentH };
+    }
   } catch (err) {}
-  const tipH = 34;
-  const tipY = menuRect.y + menuRect.height + 10;
-  if (tipY + tipH + 10 < panelY) {
-    const tipText = "点击右上角「···」转发给好友";
-    const tipX = 16;
-    const tipW = Math.max(190, Math.min(menuRect.x - tipX - 12, 280));
-    fillRoundRect(ctx, tipX, tipY, tipW, tipH, 17, "rgba(255, 248, 225, 0.96)", "rgba(255, 216, 106, 0.95)");
-    text(ctx, tipText, tipX + tipW / 2, tipY + tipH / 2, 12, "#5f4727", "center");
-    ctx.strokeStyle = "rgba(255, 248, 225, 0.96)";
-    ctx.lineWidth = 3;
+
+  const panelW = Math.min(view.width - 44, 336);
+  const panelH = Math.min(430, view.height - view.safeTop - view.safeBottom - 72);
+  const panelX = (view.width - panelW) / 2;
+  const basePanelY = Math.max(view.safeTop + 42, Math.floor((view.height - panelH) / 2));
+  const maxPanelY = view.height - view.safeBottom - panelH - 12;
+  const panelY = Math.min(maxPanelY, Math.max(basePanelY, menuRect.y + menuRect.height + 58));
+
+  const guideBottom = panelY - 30;
+  const guideTop = Math.max(menuRect.y + menuRect.height + 4, guideBottom - 48);
+  const guideH = guideBottom - guideTop;
+  if (guideH >= 20) {
+    actions.push({ id: "pvpShareGuideTip", x: 0, y: guideTop, w: view.width, h: guideH });
+    ctx.fillStyle = "rgba(38, 28, 20, 0.22)";
+    ctx.fillRect(0, guideTop, view.width, guideH);
+    const tipText = "点击「···」直接分享小程序";
+    const tipSize = view.width < 350 || guideH < 34 ? 13 : 15;
+    text(ctx, tipText, 20, guideTop + guideH / 2, tipSize, "rgba(255, 255, 255, 0.96)", "left");
+
+    const menuBottom = menuRect.y + menuRect.height;
+    const arrowX = menuRect.x + menuRect.width * 0.3;
+    const arrowY = menuBottom + 3;
+    const arrowStartX = Math.max(18, menuRect.x - 34);
+    const arrowStartY = Math.max(menuBottom + 14, Math.min(guideTop, menuBottom + 44));
+    const controlX = menuRect.x + 2;
+    const controlY = arrowStartY - 9;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.96)";
+    ctx.lineWidth = 2.5;
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(tipX + tipW - 8, tipY + 8);
-    ctx.quadraticCurveTo(menuRect.x - 18, tipY - 4, menuRect.x + menuRect.width * 0.42, menuRect.y + menuRect.height * 0.35);
+    ctx.moveTo(arrowStartX, arrowStartY);
+    ctx.quadraticCurveTo(controlX, controlY, arrowX, arrowY);
     ctx.stroke();
-    ctx.fillStyle = "rgba(255, 248, 225, 0.96)";
+
+    const arrowAngle = Math.atan2(arrowY - controlY, arrowX - controlX);
+    const arrowLength = 8;
     ctx.beginPath();
-    ctx.moveTo(menuRect.x + menuRect.width * 0.42, menuRect.y + menuRect.height * 0.35);
-    ctx.lineTo(menuRect.x + menuRect.width * 0.42 - 8, menuRect.y + menuRect.height * 0.35 + 3);
-    ctx.lineTo(menuRect.x + menuRect.width * 0.42 - 2, menuRect.y + menuRect.height * 0.35 + 10);
-    ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(arrowX - arrowLength * Math.cos(arrowAngle - 0.62), arrowY - arrowLength * Math.sin(arrowAngle - 0.62));
+    ctx.lineTo(arrowX, arrowY);
+    ctx.lineTo(arrowX - arrowLength * Math.cos(arrowAngle + 0.62), arrowY - arrowLength * Math.sin(arrowAngle + 0.62));
+    ctx.stroke();
   }
 
   actions.push({ id: "pvpShareGuidePanel", x: panelX, y: panelY, w: panelW, h: panelH });
@@ -295,36 +304,66 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
   const status = pvp.room?.status || "waiting";
   const isHost = selfIndex === 0;
   const selfReady = readyOf(pvp.room, selfIndex);
-  const friendReady = readyOf(pvp.room, friendIndex);
+  const showRuleControls = roomId && hasRoom && isHost && (status === "waiting" || status === "finished");
 
-  if (roomId && hasRoom) drawFriendSeat(ctx, view, friend, friendReady, ui, compact);
+  const panelTop = roomId && hasRoom ? top + (compact ? 42 : 54) : top + 58;
+  const targetPanelH = roomId && hasRoom ? (compact ? 360 : 420) : 236;
+  const maxPanelH = Math.max(236, view.height - view.safeBottom - panelTop - (roomId && hasRoom ? 86 : 118));
+  const panelH = hasError ? 250 : Math.min(targetPanelH, maxPanelH);
+  const panel = { x: 18, y: panelTop, w: view.width - 36, h: panelH };
+  ctx.save();
+  ctx.shadowColor = "rgba(48,35,18,0.13)";
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 5;
+  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 22, "rgba(255,250,240,0.96)", "#dcc48d");
+  ctx.restore();
 
-  const panelTop = roomId && hasRoom ? view.safeTop + (compact ? 112 : 168) : top + 58;
-  const panelH = hasError ? 250 : (roomId && hasRoom ? (compact ? 310 : 376) : 236);
-  const panel = { x: 20, y: panelTop, w: view.width - 40, h: panelH };
-  fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 18, "#fffaf0", "#dcc48d");
-
-  text(ctx, roomId ? "房间号" : "联网对战", view.width / 2, panel.y + 25, 13, "#775c34", "center");
-  text(ctx, roomId || "准备开始", view.width / 2, panel.y + 64, roomId ? 34 : 24, "#8f3c1f", "center");
-  if (roomId) actions.push({ id: "pvpCopy", x: panel.x + panel.w / 2 - 78, y: panel.y + 38, w: 156, h: 44 });
+  if (roomId) {
+    const roomCard = { x: panel.x + panel.w / 2 - 86, y: panel.y + 32, w: 172, h: compact ? 54 : 60 };
+    fillRoundRect(ctx, roomCard.x, roomCard.y, roomCard.w, roomCard.h, 18, "rgba(143,60,31,0.08)", "rgba(143,60,31,0.18)");
+    text(ctx, "房间号", view.width / 2, panel.y + 22, 13, "#775c34", "center");
+    text(ctx, roomId, view.width / 2, roomCard.y + roomCard.h / 2 + 1, roomId ? 34 : 24, "#8f3c1f", "center");
+    actions.push({ id: "pvpCopy", x: roomCard.x, y: roomCard.y, w: roomCard.w, h: roomCard.h });
+  } else {
+    text(ctx, "联网对战", view.width / 2, panel.y + 25, 13, "#775c34", "center");
+    text(ctx, "准备开始", view.width / 2, panel.y + 64, 24, "#8f3c1f", "center");
+  }
 
   let factionRuleAnchor = null;
   let factionRuleDropdownRules = null;
   if (hasError) {
     drawErrorPanel(ctx, view, actions, panel, pvp);
   } else {
-    wrapText(ctx, statusText(pvp), panel.x + 18, panel.y + 96, panel.w - 36, 18, 2, 12, "#2f6f57");
     if (roomId && hasRoom) {
-      const ruleY = panel.y + (compact ? 126 : 136);
-      wrapText(ctx, ruleText(pvp.room), panel.x + 18, ruleY, panel.w - 36, compact ? 14 : 16, 2, 11, "#8f3c1f");
-      wrapText(ctx, factionSkillText(pvp.room), panel.x + 18, panel.y + (compact ? 154 : 172), panel.w - 36, 14, compact ? 1 : 2, 10, "#775c34");
+      const statusBoxY = panel.y + (compact ? 92 : 102);
+      fillRoundRect(ctx, panel.x + 16, statusBoxY, panel.w - 32, compact ? 42 : 46, 14, "rgba(47,111,87,0.08)", "rgba(47,111,87,0.18)");
+      wrapText(ctx, statusText(pvp), panel.x + 30, statusBoxY + (compact ? 16 : 18), panel.w - 60, 16, 2, 12, "#2f6f57");
+
+      const ruleCardY = statusBoxY + (compact ? 52 : 60);
+      const ruleCardH = compact ? 76 : 84;
+      fillRoundRect(ctx, panel.x + 16, ruleCardY, panel.w - 32, ruleCardH, 14, "rgba(255,250,240,0.72)", "rgba(216,189,131,0.42)");
+      text(ctx, "房间规则", panel.x + 30, ruleCardY + 18, 13, "#2f2417", "left");
+      const ruleLineH = wrapText(ctx, ruleText(pvp.room), panel.x + 30, ruleCardY + 42, panel.w - 60, compact ? 14 : 16, 1, 11, "#8f3c1f");
+      wrapText(ctx, factionSkillText(pvp.room), panel.x + 30, ruleCardY + 42 + ruleLineH + 8, panel.w - 60, 14, 1, 10, "#775c34");
+
       const rowW = panel.w - 32;
-      const rowH = compact ? 42 : 54;
-      drawPlayerStatusRow(ctx, pvp.room, players[selfIndex], selfIndex, "我方", { x: panel.x + 16, y: panel.y + (compact ? 178 : 212), w: rowW, h: rowH }, ui);
-      drawPlayerStatusRow(ctx, pvp.room, friend, friendIndex, "好友", { x: panel.x + 16, y: panel.y + (compact ? 224 : 272), w: rowW, h: rowH }, ui);
+      const rowH = 42;
+      const rowGap = compact ? 8 : 10;
+      const controlsY = panel.y + panel.h - 38;
+      const playerTitleY = ruleCardY + ruleCardH + (compact ? 14 : 18);
+      let selfRowY = playerTitleY + (compact ? 14 : 18);
+      if (showRuleControls && selfRowY + rowH * 2 + rowGap > controlsY - 12) {
+        selfRowY = Math.max(playerTitleY + 12, controlsY - 12 - rowH * 2 - rowGap);
+      }
+      const friendRowY = selfRowY + rowH + rowGap;
+      text(ctx, "玩家状态", panel.x + 20, playerTitleY, 12, "#2f2417", "left");
+      drawPlayerStatusRow(ctx, pvp.room, players[selfIndex], selfIndex, "我方", { x: panel.x + 16, y: selfRowY, w: rowW, h: rowH }, ui);
+      drawPlayerStatusRow(ctx, pvp.room, friend, friendIndex, "好友", { x: panel.x + 16, y: friendRowY, w: rowW, h: rowH }, ui);
+    } else {
+      wrapText(ctx, statusText(pvp), panel.x + 18, panel.y + 96, panel.w - 36, 18, 2, 12, "#2f6f57");
     }
 
-    if (roomId && hasRoom && isHost && (status === "waiting" || status === "finished")) {
+    if (showRuleControls) {
       const rules = rulesOf(pvp.room);
       const editable = status !== "selecting" && status !== "playing";
       const y = panel.y + panel.h - 38;

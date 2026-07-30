@@ -4101,7 +4101,7 @@ function handlePvpRoom(action) {
   }
   if (action.id === "savePvpShareCode") return savePvpShareCode();
   if (action.id === "retryPvpShareCode") return loadPvpShareCode(app.pvp.roomId, true);
-  if (action.id === "pvpShareGuidePanel") return render();
+  if (action.id === "pvpShareGuidePanel" || action.id === "pvpShareGuideTip") return render();
   if (app.ui.pvpShareGuideOpen) return render();
   if (action.id === "closePvpRoomRuleDropdown") {
     app.ui.matchSetupDropdown = "";
