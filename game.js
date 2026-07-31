@@ -858,7 +858,11 @@ const PROFILE_DEFAULT_NAME = "章鱼隐士";
 const CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
 let profileAuthButton = null;
 let profileAuthButtonMode = "";
-let profileUploading = false;
+let profileUpdating = false;
+let profileSaving = false;
+let profileAvatarUploading = false;
+let profileAvatarUploadPromise = null;
+let profileAvatarPickVersion = 0;
 
 function randomCardImageUrl() {
   const cards = Array.isArray(allCards) ? allCards : [];
@@ -892,16 +896,12 @@ function applyProfile(userInfo) {
     tokenStorage: app.ui.authTokenStorage || ""
   });
   render();
-  if (!profileUploading) {
-    profileUploading = true;
+  if (!profileUpdating) {
+    profileUpdating = true;
     ensureCloudAuth()
-      .then(authed => {
-        if (!authed) { profileUploading = false; return; }
-        return pvpClient.updateProfile({ nickName, avatarUrl })
-          .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err));
-      })
-      .catch(() => {})
-      .then(() => { profileUploading = false; });
+      .then(authed => authed ? pvpClient.updateProfile({ nickName, avatarUrl }) : null)
+      .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err))
+      .then(() => { profileUpdating = false; });
   }
 }
 
@@ -933,63 +933,168 @@ function stopNameKeyboard() {
   try { wx.hideKeyboard(); } catch (err) {}
 }
 
-function chooseAvatarImage() {
-  if (typeof wx === "undefined") return;
-  const pick = typeof wx.chooseMedia !== "undefined"
-    ? () => wx.chooseMedia({ count: 1, mediaType: ["image"], sizeType: ["compressed"], sourceType: ["album", "camera"] })
-    : typeof wx.chooseImage !== "undefined"
-      ? () => wx.chooseImage({ count: 1, sizeType: ["compressed"], sourceType: ["album", "camera"] })
-      : null;
-  if (!pick) return;
-  pick().then(res => {
-    const paths = res.tempFiles ? res.tempFiles.map(f => f.tempFilePath) : (res.tempFilePaths || []);
-    const url = paths[0] || "";
-    if (!url) return;
-    if (app.ui.profileDraft) app.ui.profileDraft.avatarUrl = url;
-    render();
-    uploadAvatarToCloud(url);
-  }).catch(() => {});
+function profileAvatarErrorTip(error) {
+  const message = String(error?.errMsg || error?.message || error || "");
+  if (/cancel/i.test(message)) return "";
+  if (/112|not declared|privacy agreement|announce your privacy usage|1025|1026/i.test(message)) {
+    return "请先在隐私保护指引中声明头像图片用途";
+  }
+  if (/104|privacy permission is not authorized|privacy/i.test(message)) return "请先同意隐私保护指引";
+  if (/permission|authorize|denied|deny/i.test(message)) return "未获得相册或相机权限";
+  return "头像选择失败，请稍后重试";
+}
+
+function requireProfilePrivacy(api) {
+  if (typeof api?.requirePrivacyAuthorize !== "function") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    try { api.requirePrivacyAuthorize({ success: resolve, fail: reject }); }
+    catch (err) { reject(err); }
+  });
+}
+
+function pickProfileImage(api) {
+  const chooseMedia = typeof api?.chooseMedia === "function" ? api.chooseMedia.bind(api) : null;
+  const chooseImage = typeof api?.chooseImage === "function" ? api.chooseImage.bind(api) : null;
+  const picker = chooseMedia || chooseImage;
+  if (!picker) return Promise.reject(new Error("当前环境不支持选择头像"));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = value => { if (!settled) { settled = true; resolve(value || {}); } };
+    const fail = error => { if (!settled) { settled = true; reject(error); } };
+    const options = chooseMedia
+      ? { count: 1, mediaType: ["image"], sizeType: ["compressed"], sourceType: ["album", "camera"], success: done, fail }
+      : { count: 1, sizeType: ["compressed"], sourceType: ["album", "camera"], success: done, fail };
+    try {
+      const result = picker(options);
+      if (result && typeof result.then === "function") result.then(done).catch(fail);
+    } catch (err) { fail(err); }
+  });
 }
 
 function uploadAvatarToCloud(localPath) {
-  if (!localPath || !pvpClient.uploadAvatarFile) return;
-  ensureCloudAuth()
-    .then(authed => authed ? pvpClient.uploadAvatarFile(localPath) : null)
+  if (!localPath || typeof pvpClient.uploadAvatarFile !== "function") return Promise.reject(new Error("当前环境不支持头像上传"));
+  return ensureCloudAuth()
+    .then(authed => {
+      if (!authed) throw new Error("登录失败，请稍后重试");
+      return pvpClient.uploadAvatarFile(localPath);
+    })
     .then(res => {
       const avatarUrl = res?.avatarUrl || res?.fileID || "";
-      if (avatarUrl && app.ui.profileDraft) { app.ui.profileDraft.avatarUrl = avatarUrl; render(); }
+      if (!avatarUrl) throw new Error("头像上传未返回有效地址");
+      return avatarUrl;
+    });
+}
+
+function chooseAvatarImage() {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api) return toast("当前环境不支持选择头像");
+  if (profileAvatarUploading || profileAvatarUploadPromise) return toast("头像正在上传，请稍候");
+  app.ui.profileTip = "正在打开相册…";
+  render();
+  requireProfilePrivacy(api)
+    .then(() => pickProfileImage(api))
+    .then(res => {
+      const paths = Array.isArray(res.tempFiles)
+        ? res.tempFiles.map(file => file?.tempFilePath || file?.path || "")
+        : (res.tempFilePaths || []);
+      const localPath = paths[0] || "";
+      if (!localPath) throw new Error("未读取到所选图片");
+      const version = ++profileAvatarPickVersion;
+      profileAvatarUploading = true;
+      if (app.ui.profileDraft) app.ui.profileDraft.avatarPreviewUrl = localPath;
+      app.ui.profileTip = "头像上传中…";
+      render();
+      profileAvatarUploadPromise = uploadAvatarToCloud(localPath)
+        .then(avatarUrl => {
+          if (version !== profileAvatarPickVersion) return;
+          if (app.ui.profileDraft) {
+            app.ui.profileDraft.avatarUrl = avatarUrl;
+            app.ui.profileDraft.avatarPreviewUrl = "";
+          }
+          app.ui.profileTip = "头像上传成功";
+          toast("头像上传成功");
+        })
+        .catch(err => {
+          if (version !== profileAvatarPickVersion) return;
+          console.warn("[profile] upload avatar failed", err && err.message ? err.message : err);
+          if (app.ui.profileDraft) app.ui.profileDraft.avatarPreviewUrl = "";
+          app.ui.profileTip = "头像上传失败，请重试";
+          toast("头像上传失败，请重试");
+        })
+        .then(() => {
+          if (version === profileAvatarPickVersion) {
+            profileAvatarUploading = false;
+            profileAvatarUploadPromise = null;
+            render();
+          }
+        });
+      return profileAvatarUploadPromise;
     })
-    .catch(err => console.warn("[profile] upload avatar failed", err && err.message ? err.message : err));
+    .catch(err => {
+      const tip = profileAvatarErrorTip(err);
+      app.ui.profileTip = tip;
+      if (tip) {
+        console.warn("[profile] choose avatar failed", err && err.errMsg ? err.errMsg : err);
+        toast(tip);
+      } else {
+        app.ui.profileTip = "";
+      }
+      render();
+    });
 }
 
 function saveProfileDraft() {
+  if (profileAvatarUploading || profileAvatarUploadPromise) {
+    toast("头像正在上传，请稍候");
+    return Promise.resolve(false);
+  }
+  if (profileSaving) {
+    toast("资料正在保存，请稍候");
+    return Promise.resolve(false);
+  }
   const draft = app.ui.profileDraft || {};
   const nickName = (draft.nickName || "").trim() || PROFILE_DEFAULT_NAME;
   const avatarUrl = draft.avatarUrl || "";
-  app.ui.authUser = { nickName, avatarUrl };
-  saveAuthSession({
-    token: app.ui.authToken,
-    expiresAt: app.ui.authExpiresAt,
-    tokenStorage: app.ui.authTokenStorage || ""
-  });
+  profileSaving = true;
+  app.ui.profileTip = "资料保存中…";
   render();
-  if (!profileUploading) {
-    profileUploading = true;
-    ensureCloudAuth()
-      .then(authed => {
-        if (!authed) { profileUploading = false; return; }
-        return pvpClient.updateProfile({ nickName, avatarUrl })
-          .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err));
-      })
-      .catch(() => {})
-      .then(() => { profileUploading = false; });
-  }
+  return ensureCloudAuth()
+    .then(authed => {
+      if (!authed) throw new Error("登录失败，请稍后重试");
+      return pvpClient.updateProfile({ nickName, avatarUrl });
+    })
+    .then(result => {
+      const profile = result?.customProfile || result?.user || {};
+      app.ui.authUser = {
+        nickName: profile.nickName || nickName,
+        avatarUrl: profile.avatarUrl || avatarUrl
+      };
+      saveAuthSession({
+        token: app.ui.authToken,
+        expiresAt: app.ui.authExpiresAt,
+        tokenStorage: app.ui.authTokenStorage || ""
+      });
+      app.ui.profileTip = "资料保存成功";
+      toast("资料保存成功");
+      return true;
+    })
+    .catch(err => {
+      console.warn("[profile] update failed", err && err.message ? err.message : err);
+      app.ui.profileTip = "资料保存失败，请重试";
+      toast("资料保存失败，请重试");
+      return false;
+    })
+    .then(saved => {
+      profileSaving = false;
+      render();
+      return saved;
+    });
 }
 
 function openProfileSheet(tip = "") {
   destroyProfileAuthButton();
   const user = app.ui.authUser || {};
-  app.ui.profileDraft = { nickName: user.nickName || "", avatarUrl: user.avatarUrl || "" };
+  app.ui.profileDraft = { nickName: user.nickName || "", avatarUrl: user.avatarUrl || "", avatarPreviewUrl: "" };
   app.ui.profileEditingName = false;
   app.ui.profileTip = tip;
   app.ui.profileSheetOpen = true;
@@ -998,20 +1103,26 @@ function openProfileSheet(tip = "") {
 }
 
 function closeProfileSheet() {
+  if (profileAvatarUploading || profileAvatarUploadPromise) {
+    toast("头像正在上传，请稍候");
+    return false;
+  }
+  if (profileSaving) return false;
   const wasFirst = app.ui.profileFirstOpen;
   app.ui.profileSheetOpen = false;
   app.ui.profileFirstOpen = false;
   destroyProfileAuthButton();
   stopNameKeyboard();
-  // 首次进入若未设置任何真实昵称，则落一个默认资料，保证 users 表有头像昵称
+  // 首次进入若未设置真实昵称，则落默认昵称，同时保留已上传头像。
   if (wasFirst) {
     const draft = app.ui.profileDraft || {};
     if (!(draft.nickName && draft.nickName !== PROFILE_DEFAULT_NAME)) {
-      applyProfile({ nickName: PROFILE_DEFAULT_NAME, avatarUrl: "" });
-      return;
+      applyProfile({ nickName: PROFILE_DEFAULT_NAME, avatarUrl: draft.avatarUrl || app.ui.authUser?.avatarUrl || "" });
+      return true;
     }
   }
   render();
+  return true;
 }
 
 function profileNeedsNickname(user = app.ui.authUser) {
@@ -1119,16 +1230,21 @@ function drawProfileSheet(ctx, view, actions) {
   if (firstOpen) {
     wrapText(ctx, "设置你的昵称和头像，用于联机对战展示身份。", px + 20, py + 48, pw - 40, 11, 2, 11, "#8a7860");
   }
-  if (app.ui.profileTip) text(ctx, app.ui.profileTip, px + pw / 2, py + 58, 11, "#8a7860", "center");
 
   const draft = app.ui.profileDraft || {};
   const sz = 60;
   const cx = px + pw / 2;
   const cy = py + (firstOpen ? 96 : 76);
+  const avatarUrl = draft.avatarPreviewUrl || draft.avatarUrl || "";
 
   fillRoundRect(ctx, cx - sz / 2, cy - sz / 2, sz, sz, sz / 2, "#ede5d5", "#c4b49a");
-  const hasImg = drawRemoteImage(ctx, draft.avatarUrl, cx - sz / 2, cy - sz / 2, sz, sz, { radius: sz / 2 });
+  const hasImg = drawRemoteImage(ctx, avatarUrl, cx - sz / 2, cy - sz / 2, sz, sz, { radius: sz / 2 });
   if (!hasImg) text(ctx, "+", cx, cy + 2, 28, "#b0a488", "center", "middle");
+  if (profileAvatarUploading) {
+    fillRoundRect(ctx, cx - sz / 2, cy - sz / 2, sz, sz, sz / 2, "rgba(32,25,18,0.48)");
+    text(ctx, "上传中", cx, cy + 1, 11, "#fff7e8", "center", "middle");
+  }
+  if (app.ui.profileTip) text(ctx, app.ui.profileTip, cx, cy + sz / 2 + 14, 10, profileAvatarUploading ? "#8f5c25" : "#8a7860", "center");
   const nameY = cy + sz / 2 + 36;
   const nameLabel = draft.nickName || (app.ui.profileEditingName ? "输入中…" : "未设置昵称");
   const editSize = 20;
@@ -1154,12 +1270,15 @@ function drawProfileSheet(ctx, view, actions) {
 
   const bw = pw - 40, bx = px + 20;
   const saveY = cy + sz / 2 + 56;
-  button(ctx, { x: bx, y: saveY, w: bw, h: 40, label: "保存", fill: "#3a6b58", stroke: "#3a6b58", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
+  const busy = profileAvatarUploading || profileSaving;
+  const saveLabel = profileAvatarUploading ? "头像上传中…" : (profileSaving ? "保存中…" : "保存");
+  button(ctx, { x: bx, y: saveY, w: bw, h: 40, label: saveLabel, fill: busy ? "#8d9a91" : "#3a6b58", stroke: busy ? "#8d9a91" : "#3a6b58", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
 
   // 遮罩位于最底层；资料框本身吞掉点击，只有框外点击会关闭。
   actions.push({ id: "profileMask", x: 0, y: 0, w: view.width, h: view.height });
   actions.push({ id: "profilePanel", x: px, y: py, w: pw, h: ph });
-  actions.push({ id: "profileAvatar", x: cx - sz / 2, y: cy - sz / 2, w: sz, h: sz });
+  const avatarHitSize = 84;
+  actions.push({ id: "profileAvatar", x: cx - avatarHitSize / 2, y: cy - avatarHitSize / 2, w: avatarHitSize, h: avatarHitSize });
   actions.push({ id: "profileName", x: cx - 100, y: nameY - 16, w: 200, h: 28 });
   actions.push({ id: "profileSave", x: bx, y: saveY, w: bw, h: 40 });
   actions.push({ id: "profileClose", x: px + pw - 40, y: py + 4, w: 36, h: 36 });
@@ -3470,7 +3589,7 @@ function handleMenu(action) {
   if (app.ui.profileSheetOpen) {
     if (action.id === "profileName") startNameKeyboard();
     else if (action.id === "profileAvatar") chooseAvatarImage();
-    else if (action.id === "profileSave") { saveProfileDraft(); closeProfileSheet(); }
+    else if (action.id === "profileSave") saveProfileDraft().then(saved => { if (saved) closeProfileSheet(); });
     else if (action.id === "profileClose" || action.id === "profileMask") closeProfileSheet();
     // profilePanel 仅拦截资料框内的空白点击，不关闭弹窗。
     return;
