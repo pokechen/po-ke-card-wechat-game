@@ -319,7 +319,8 @@ function publicPlayer(player) {
 function publicRoom(room, viewerIndex = null) {
   if (!room) return null;
   const roomId = normalizeRoomId(room.roomId || room._id);
-  const players = Array.isArray(room.players) ? room.players.map(publicPlayer) : [];
+  const readyPlayers = safeArray(room.players).map((player, index) => roomPlayerReady(room, index));
+  const players = safeArray(room.players).map((player, index) => publicPlayer({ ...player, ready: readyPlayers[index] }));
   let match = room.match;
   if (Array.isArray(match?.leaderReveals)) {
     match = {
@@ -327,7 +328,7 @@ function publicRoom(room, viewerIndex = null) {
       leaderReveals: match.leaderReveals.map((reveal, index) => index === viewerIndex ? reveal : null)
     };
   }
-  return { ...room, players, match, roomId, _id: roomId };
+  return { ...room, players, readyPlayers, match, roomId, _id: roomId };
 }
 
 function playerIndexOf(room, openid) {
@@ -1480,60 +1481,95 @@ async function getRoomForPlayer(event, openid) {
 
 async function joinRoom(event, openid) {
   const roomId = normalizeRoomId(event.roomId);
-  const room = await getRoom(roomId);
-  if (!room) return fail("房间不存在", "NOT_FOUND");
-  if (room.status === "dissolved") return fail("房主已解散房间", "ROOM_DISSOLVED");
-  const existedIndex = playerIndexOf(room, openid);
-  if (existedIndex >= 0) return ok({ roomId, playerIndex: existedIndex, room: publicRoom(room, existedIndex) });
-  if (room.status !== "waiting") return fail("房间已开始或已结束", "ROOM_CLOSED");
-  if ((room.players || []).length >= 2) return fail("房间已满", "ROOM_FULL");
+  try {
+    const result = await db.runTransaction(async transaction => {
+      const ref = transaction.collection(ROOMS).doc(roomId);
+      const snapshot = await ref.get();
+      const room = snapshot.data ? { ...snapshot.data, _id: roomId, roomId } : null;
+      if (!room) throw roomActionError("房间不存在", "NOT_FOUND");
+      if (room.status === "dissolved") throw roomActionError("房主已解散房间", "ROOM_DISSOLVED");
+      const existedIndex = playerIndexOf(room, openid);
+      if (existedIndex >= 0) return { room, playerIndex: existedIndex };
+      if (room.status !== "waiting") throw roomActionError("房间已开始或已结束", "ROOM_CLOSED");
+      if ((room.players || []).length >= 2) throw roomActionError("房间已满", "ROOM_FULL");
 
-  const activeRules = safeRules(room.rules || {});
-  const players = (room.players || []).concat(makePlayer(openid, 1, event.setup, activeRules));
-  const readyPlayers = readyPlayersOf(players);
-  const nextRoom = {
-    ...room,
-    status: "waiting",
-    players,
-    readyPlayers,
-    readySeq: room.readySeq || 0,
-    match: null,
-    turnSeq: (room.turnSeq || 0) + 1,
-    updatedAt: now()
-  };
-  await db.collection(ROOMS).doc(roomId).update({
-    data: {
-      status: nextRoom.status,
-      players,
-      readyPlayers,
-      readySeq: nextRoom.readySeq,
-      match: null,
-      turnSeq: nextRoom.turnSeq,
-      updatedAt: nextRoom.updatedAt
-    }
-  });
-  return ok({ roomId, playerIndex: 1, room: publicRoom(nextRoom, 1) });
+      const activeRules = safeRules(room.rules || {});
+      const players = safeArray(room.players).concat(makePlayer(openid, 1, event.setup, activeRules));
+      const readyPlayers = players.map((player, index) => roomPlayerReady({ ...room, players }, index));
+      const normalizedPlayers = players.map((player, index) => ({ ...player, ready: readyPlayers[index] }));
+      const updatedAt = now();
+      const nextRoom = {
+        ...room,
+        status: "waiting",
+        players: normalizedPlayers,
+        readyPlayers,
+        readySeq: room.readySeq || 0,
+        match: null,
+        turnSeq: (room.turnSeq || 0) + 1,
+        updatedAt
+      };
+      await ref.update({
+        data: {
+          status: nextRoom.status,
+          players: normalizedPlayers,
+          readyPlayers,
+          readySeq: nextRoom.readySeq,
+          match: null,
+          turnSeq: nextRoom.turnSeq,
+          updatedAt
+        }
+      });
+      return { room: nextRoom, playerIndex: 1 };
+    });
+    return ok({ roomId, playerIndex: result.playerIndex, room: publicRoom(result.room, result.playerIndex) });
+  } catch (err) {
+    const failure = roomActionFailure(err);
+    if (failure) return failure;
+    throw err;
+  }
 }
 
 async function updateRules(event, openid) {
   const roomId = normalizeRoomId(event.roomId);
-  const room = await getRoom(roomId);
-  if (!room) return fail("房间不存在", "NOT_FOUND");
-  if (playerIndexOf(room, openid) !== 0) return fail("只有房主可以修改规则", "FORBIDDEN");
-  if (room.status === "dissolved") return fail("房间已解散", "ROOM_DISSOLVED");
-  if (room.status === "playing" || room.status === "selecting") return fail("本局已开始，不能修改规则", "ROOM_BUSY");
-  const previous = {
-    ...safeRules(room.rules || {}),
-    version: Math.max(0, Number(room.rules?.version || 0) || 0)
-  };
-  const rules = { ...safeRules(event.rules, previous), version: previous.version + 1, changedAt: now() };
-  const players = resetPlayerFlags(room.players || []);
-  const readyPlayers = readyPlayersOf(players);
-  const nextRoom = { ...room, status: "waiting", rules, players, readyPlayers, readySeq: (room.readySeq || 0) + 1, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
-  await db.collection(ROOMS).doc(roomId).update({
-    data: { status: "waiting", rules, players, readyPlayers, readySeq: nextRoom.readySeq, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt }
-  });
-  return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom, 0) });
+  try {
+    const nextRoom = await db.runTransaction(async transaction => {
+      const ref = transaction.collection(ROOMS).doc(roomId);
+      const snapshot = await ref.get();
+      const room = snapshot.data ? { ...snapshot.data, _id: roomId, roomId } : null;
+      if (!room) throw roomActionError("房间不存在", "NOT_FOUND");
+      if (playerIndexOf(room, openid) !== 0) throw roomActionError("只有房主可以修改规则", "FORBIDDEN");
+      if (room.status === "dissolved") throw roomActionError("房间已解散", "ROOM_DISSOLVED");
+      if (room.status === "playing" || room.status === "selecting") throw roomActionError("本局已开始，不能修改规则", "ROOM_BUSY");
+      const previous = {
+        ...safeRules(room.rules || {}),
+        version: Math.max(0, Number(room.rules?.version || 0) || 0)
+      };
+      const updatedAt = now();
+      const rules = { ...safeRules(event.rules, previous), version: previous.version + 1, changedAt: updatedAt };
+      const players = resetPlayerFlags(room.players || []);
+      const readyPlayers = readyPlayersOf(players);
+      const next = {
+        ...room,
+        status: "waiting",
+        rules,
+        players,
+        readyPlayers,
+        readySeq: (room.readySeq || 0) + 1,
+        match: null,
+        turnSeq: (room.turnSeq || 0) + 1,
+        updatedAt
+      };
+      await ref.update({
+        data: { status: next.status, rules, players, readyPlayers, readySeq: next.readySeq, match: null, turnSeq: next.turnSeq, updatedAt }
+      });
+      return next;
+    });
+    return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom, 0) });
+  } catch (err) {
+    const failure = roomActionFailure(err);
+    if (failure) return failure;
+    throw err;
+  }
 }
 
 async function setReady(event, openid) {
