@@ -3283,6 +3283,8 @@ function handleLaunchRoom() {
   }
   if (api.onHide) {
     api.onHide(() => {
+      // 微信通常只隐藏小游戏而不销毁 JS 进程；下次从聊天分享卡片进入时应重新允许手动加入提示。
+      sharedCardJoinPromptShown = false;
       if (!activeSingleMatch()) return;
       persistActiveSingleMatch();
       clearAiTimer();

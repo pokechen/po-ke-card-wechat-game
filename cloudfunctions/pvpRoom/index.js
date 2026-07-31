@@ -37,6 +37,17 @@ function fail(message, code = "BAD_REQUEST") {
   return { ok: false, code, message };
 }
 
+function roomActionError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  error.isRoomActionError = true;
+  return error;
+}
+
+function roomActionFailure(error) {
+  return error?.isRoomActionError ? fail(error.message, error.code) : null;
+}
+
 function now() {
   return Date.now();
 }
@@ -488,14 +499,27 @@ async function saveOnlineMatchHistoryForPlayers(room) {
 
 async function touchRoomPlayer(room, playerIndex) {
   if (!room || playerIndex < 0) return room;
-  const players = safeArray(room.players).map((player, index) => index === playerIndex ? { ...player, lastSeenAt: now() } : player);
-  room.players = players;
+  const roomId = normalizeRoomId(room.roomId || room._id);
+  const openid = room.players?.[playerIndex]?.openid;
+  if (!roomId || !openid) return room;
   try {
-    await db.collection(ROOMS).doc(normalizeRoomId(room.roomId || room._id)).update({ data: { players } });
+    return await db.runTransaction(async transaction => {
+      const ref = transaction.collection(ROOMS).doc(roomId);
+      const result = await ref.get();
+      const latest = result.data ? { ...result.data, _id: roomId, roomId } : null;
+      if (!latest) return room;
+      const latestPlayerIndex = playerIndexOf(latest, openid);
+      if (latestPlayerIndex < 0) return latest;
+      const players = safeArray(latest.players).map((player, index) => index === latestPlayerIndex
+        ? { ...player, lastSeenAt: now() }
+        : player);
+      await ref.update({ data: { players } });
+      return { ...latest, players };
+    });
   } catch (err) {
     console.warn("[pvp] heartbeat update failed", err?.message || err);
+    return await getRoom(roomId) || room;
   }
-  return room;
 }
 
 async function settleDisconnectedPlayer(room) {
@@ -1516,90 +1540,97 @@ async function setReady(event, openid) {
   const roomId = normalizeRoomId(event.roomId);
   const desiredReady = !!event.ready;
   const traceId = String(event.traceId || `server-${now()}`).slice(0, 64);
-  let lastRoom = null;
-  let lastPlayerIndex = -1;
   console.log("[pvp-ready-debug] server setReady begin", { version: PVP_READY_DEBUG_VERSION, traceId, roomId, desiredReady });
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const room = await getRoom(roomId);
-    console.log("[pvp-ready-debug] server setReady read", { traceId, attempt: attempt + 1, room: roomReadyDebug(room) });
-    if (!room) {
-      if (attempt < 3) {
-        await wait(80 * (attempt + 1));
-        continue;
-      }
-      return fail("房间不存在", "NOT_FOUND");
-    }
-    if (room.status !== "waiting") return fail("当前不能准备", "ROOM_BUSY");
-    const playerIndex = playerIndexOf(room, openid);
-    console.log("[pvp-ready-debug] server setReady player", { traceId, attempt: attempt + 1, playerIndex, desiredReady });
-    if (playerIndex < 0) {
-      if (attempt < 3) {
-        await wait(80 * (attempt + 1));
-        continue;
-      }
-      return fail("加入信息同步中，请再点一次准备", "PLAYER_SYNCING");
-    }
+  try {
+    const result = await db.runTransaction(async transaction => {
+      const ref = transaction.collection(ROOMS).doc(roomId);
+      const snapshot = await ref.get();
+      const room = snapshot.data ? { ...snapshot.data, _id: roomId, roomId } : null;
+      console.log("[pvp-ready-debug] server setReady transaction read", { traceId, room: roomReadyDebug(room) });
+      if (!room) throw roomActionError("房间不存在", "NOT_FOUND");
+      if (room.status !== "waiting") throw roomActionError("当前不能准备", "ROOM_BUSY");
+      const playerIndex = playerIndexOf(room, openid);
+      if (playerIndex < 0) throw roomActionError("加入信息同步中，请再点一次准备", "PLAYER_SYNCING");
 
-    const players = (room.players || []).map((player, index) => index === playerIndex ? { ...player, ready: desiredReady } : player);
-    const readyPlayers = readyPlayersOf(players);
-    const readySeq = (room.readySeq || 0) + 1;
-    const turnSeq = (room.turnSeq || 0) + 1;
-    const updatedAt = now();
-    console.log("[pvp-ready-debug] server setReady write", {
-      traceId,
-      attempt: attempt + 1,
-      playerIndex,
-      desiredReady,
-      next: { turnSeq, readySeq, playerReady: players.map(player => !!player?.ready), readyPlayers }
+      const players = safeArray(room.players).map((player, index) => ({
+        ...player,
+        ready: index === playerIndex ? desiredReady : roomPlayerReady(room, index)
+      }));
+      const readyPlayers = readyPlayersOf(players);
+      const alreadySynced = roomPlayerReady(room, playerIndex) === desiredReady
+        && players.every((player, index) => !!room.players?.[index]?.ready === !!player.ready)
+        && readyPlayers.every((ready, index) => !!room.readyPlayers?.[index] === ready);
+      if (alreadySynced) return { room, playerIndex };
+
+      const readySeq = (room.readySeq || 0) + 1;
+      const turnSeq = (room.turnSeq || 0) + 1;
+      const updatedAt = now();
+      const nextRoom = { ...room, players, readyPlayers, readySeq, turnSeq, updatedAt };
+      console.log("[pvp-ready-debug] server setReady transaction write", {
+        traceId,
+        playerIndex,
+        desiredReady,
+        next: roomReadyDebug(nextRoom)
+      });
+      await ref.update({ data: { players, readyPlayers, readySeq, turnSeq, updatedAt } });
+      return { room: nextRoom, playerIndex };
     });
-    const updateResult = await db.collection(ROOMS).doc(roomId).update({ data: { players, readyPlayers, readySeq, turnSeq, updatedAt } });
-    console.log("[pvp-ready-debug] server setReady write result", { traceId, attempt: attempt + 1, updateResult });
-
-    const confirmed = await getRoom(roomId);
-    const confirmedPlayerIndex = playerIndexOf(confirmed || {}, openid);
-    lastRoom = confirmed || { ...room, players, readyPlayers, readySeq, turnSeq, updatedAt };
-    lastPlayerIndex = confirmedPlayerIndex >= 0 ? confirmedPlayerIndex : playerIndex;
-    const readyConfirmed = confirmedPlayerIndex >= 0
-      && roomPlayerReady(confirmed, confirmedPlayerIndex) === desiredReady
-      && Number(confirmed.readySeq || 0) >= readySeq;
-    console.log("[pvp-ready-debug] server setReady confirm", {
-      traceId,
-      attempt: attempt + 1,
-      confirmedPlayerIndex,
-      desiredReady,
-      readyConfirmed,
-      room: roomReadyDebug(confirmed)
-    });
-    if (readyConfirmed) {
-      console.log("[pvp-ready-debug] server setReady success", { traceId, attempt: attempt + 1, playerIndex: confirmedPlayerIndex });
-      return ok({ roomId, playerIndex: confirmedPlayerIndex, room: publicRoom(confirmed, confirmedPlayerIndex), traceId });
-    }
-    if (attempt < 3) await wait(100 * (attempt + 1));
+    console.log("[pvp-ready-debug] server setReady success", { traceId, playerIndex: result.playerIndex, room: roomReadyDebug(result.room) });
+    return ok({ roomId, playerIndex: result.playerIndex, room: publicRoom(result.room, result.playerIndex), traceId });
+  } catch (err) {
+    const failure = roomActionFailure(err);
+    if (failure) return failure;
+    console.error("[pvp-ready-debug] server setReady failed", { traceId, desiredReady, message: err?.message || String(err) });
+    throw err;
   }
-
-  if (lastRoom && lastPlayerIndex >= 0 && roomPlayerReady(lastRoom, lastPlayerIndex) === desiredReady) {
-    console.log("[pvp-ready-debug] server setReady fallback success", { traceId, playerIndex: lastPlayerIndex, room: roomReadyDebug(lastRoom) });
-    return ok({ roomId, playerIndex: lastPlayerIndex, room: publicRoom(lastRoom, lastPlayerIndex), traceId });
-  }
-  console.error("[pvp-ready-debug] server setReady failed", { traceId, desiredReady, playerIndex: lastPlayerIndex, room: roomReadyDebug(lastRoom) });
-  return fail("准备状态同步失败，请重试", "READY_NOT_CONFIRMED");
 }
 
 async function startSelection(event, openid) {
   const roomId = normalizeRoomId(event.roomId);
-  const room = await getRoom(roomId);
-  if (!room) return fail("房间不存在", "NOT_FOUND");
-  if (playerIndexOf(room, openid) !== 0) return fail("只有房主可以开始", "FORBIDDEN");
-  if (room.status !== "waiting") return fail("当前不能开始", "ROOM_BUSY");
-  const players = room.players || [];
-  if (players.length < 2) return fail("等待好友加入", "WAITING_PLAYER");
-  if (!roomPlayerReady(room, 0) || !roomPlayerReady(room, 1)) return fail("双方准备后才能开始", "WAITING_READY");
-  const nextPlayers = resetPlayerFlags(players);
-  const readyPlayers = readyPlayersOf(nextPlayers);
-  const nextRoom = { ...room, status: "selecting", players: nextPlayers, readyPlayers, readySeq: (room.readySeq || 0) + 1, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
-  await db.collection(ROOMS).doc(roomId).update({ data: { status: "selecting", players: nextPlayers, readyPlayers, readySeq: nextRoom.readySeq, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt } });
-  return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom, 0) });
+  try {
+    const nextRoom = await db.runTransaction(async transaction => {
+      const ref = transaction.collection(ROOMS).doc(roomId);
+      const snapshot = await ref.get();
+      const room = snapshot.data ? { ...snapshot.data, _id: roomId, roomId } : null;
+      if (!room) throw roomActionError("房间不存在", "NOT_FOUND");
+      if (playerIndexOf(room, openid) !== 0) throw roomActionError("只有房主可以开始", "FORBIDDEN");
+      if (room.status !== "waiting") throw roomActionError("当前不能开始", "ROOM_BUSY");
+      const players = room.players || [];
+      if (players.length < 2) throw roomActionError("等待好友加入", "WAITING_PLAYER");
+      if (!roomPlayerReady(room, 0) || !roomPlayerReady(room, 1)) throw roomActionError("双方准备后才能开始", "WAITING_READY");
+      const nextPlayers = resetPlayerFlags(players);
+      const readyPlayers = readyPlayersOf(nextPlayers);
+      const updatedAt = now();
+      const next = {
+        ...room,
+        status: "selecting",
+        players: nextPlayers,
+        readyPlayers,
+        readySeq: (room.readySeq || 0) + 1,
+        match: null,
+        turnSeq: (room.turnSeq || 0) + 1,
+        updatedAt
+      };
+      await ref.update({
+        data: {
+          status: next.status,
+          players: nextPlayers,
+          readyPlayers,
+          readySeq: next.readySeq,
+          match: null,
+          turnSeq: next.turnSeq,
+          updatedAt
+        }
+      });
+      return next;
+    });
+    return ok({ roomId, playerIndex: 0, room: publicRoom(nextRoom, 0) });
+  } catch (err) {
+    const failure = roomActionFailure(err);
+    if (failure) return failure;
+    throw err;
+  }
 }
 
 async function submitSetup(event, openid) {

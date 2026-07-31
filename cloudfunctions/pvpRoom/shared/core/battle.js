@@ -2117,7 +2117,23 @@ function leaderActionValue(state, playerIndex, stats) {
   return value;
 }
 
+// 出牌打分可调权重：默认完全等于 ADVANCED_AI（旧策略基线不变），
+// 仅当 cfg.strategy 提供时覆盖，用于攻略新策略的公平对比实验。
+function resolveScoreStrategy(cfg) {
+  const s = (cfg && cfg.strategy) || {};
+  const num = (v, d) => (typeof v === "number" ? v : d);
+  return {
+    handDeltaWeight: num(s.handDeltaWeight, ADVANCED_AI.handDeltaWeight),
+    finalScoreGainWeight: num(s.finalScoreGainWeight, ADVANCED_AI.finalScoreGainWeight),
+    scoreGainWeight: num(s.scoreGainWeight, ADVANCED_AI.scoreGainWeight),
+    envoyEarlyBonus: num(s.envoyEarlyBonus, 22),
+    envoyLatePenalty: num(s.envoyLatePenalty, -16),
+    tempoHoldPenalty: num(s.tempoHoldPenalty, 8),
+  };
+}
+
 function scoreAiCandidateAdvanced(state, cfg, playerIndex, action) {
+  const S = resolveScoreStrategy(cfg);
   const opponent = state.players[otherIndex(playerIndex)];
   const diff = totalScore(state.players[playerIndex]) - totalScore(opponent);
   const mustContest = mustContestRound(state, playerIndex);
@@ -2125,17 +2141,17 @@ function scoreAiCandidateAdvanced(state, cfg, playerIndex, action) {
   const stats = simulateActionStats(state, playerIndex, action);
   if (!stats.ok) return { ...action, score: ADVANCED_AI.terminalLoss, cost, stats };
 
-  const scoreGainWeight = state.round >= 3 ? ADVANCED_AI.finalScoreGainWeight : ADVANCED_AI.scoreGainWeight;
+  const scoreGainWeight = state.round >= 3 ? S.finalScoreGainWeight : S.scoreGainWeight;
   let score = stats.gain * scoreGainWeight
     - cost * advancedFutureWeight(state, playerIndex)
-    + stats.handDeltaGain * ADVANCED_AI.handDeltaWeight
+    + stats.handDeltaGain * S.handDeltaWeight
     + (knownFuturePower(stats.state, playerIndex) - knownFuturePower(state, playerIndex)) * 0.18
     - visibleCounterRisk(state, playerIndex, action, stats);
 
   if (mustContest && roundSecuredByDiff(state, playerIndex, stats.diffAfter)) score += 24;
   if (action.action === "leader") score += leaderActionValue(state, playerIndex, stats);
   const card = action.card;
-  if (card && hasAbility(card, "出使")) score += state.round < 3 ? 22 : -16;
+  if (card && hasAbility(card, "出使")) score += state.round < 3 ? S.envoyEarlyBonus : S.envoyLatePenalty;
   if (card && isRecall(card)) score += recallTargetValue(state, playerIndex, action.recallTargetUid);
   if (card && hasAbility(card, "济世")) score += revivalTargetValue(state, playerIndex, action.revivalTargetUid);
 
@@ -2146,7 +2162,7 @@ function scoreAiCandidateAdvanced(state, cfg, playerIndex, action) {
   }
   if (card && card.category === "situation" && !isSituationClear(card)) score += controlGain >= ADVANCED_AI.situationNetSwing ? 10 + controlGain : -14;
   if (card && isSituationClear(card)) score += controlGain >= ADVANCED_AI.situationNetSwing ? 8 : -12;
-  if (card && (isHorn(card) || isHeroCard(card) || hasAbility(card, "集贤") || hasAbility(card, "召唤岳家军")) && state.round < 3 && !mustContest && !opponent.passed) score -= 8;
+  if (card && (isHorn(card) || isHeroCard(card) || hasAbility(card, "集贤") || hasAbility(card, "召唤岳家军")) && state.round < 3 && !mustContest && !opponent.passed) score -= S.tempoHoldPenalty;
   if (!mustContest && state.round < 3 && diff < -10 && cost > 12 && stats.diffAfter <= 0) score -= 14;
   if (!mustContest && state.round < 3 && diff > 0 && stats.diffAfter > 18) score -= Math.min(16, stats.diffAfter - 18);
 
@@ -2707,7 +2723,8 @@ function surrender(state, playerIndex = 0, reason = "surrender") {
   state.roundTransition = null;
   state.endReason = disconnected ? "disconnect" : "surrender";
   state.winner = otherIndex(playerIndex);
-  state.morale = playerIndex === 0 ? [0, MATCH_MORALE] : [MATCH_MORALE, 0];
+  state.morale = moraleFromRoundResults(state.roundResults);
+  state.morale[playerIndex] = 0;
   state.resultText = disconnected
     ? (playerIndex === 0 ? "你已掉线" : `${state.players[playerIndex].name}掉线`)
     : (playerIndex === 0 ? "你已认输" : `${state.players[playerIndex].name}认输`);

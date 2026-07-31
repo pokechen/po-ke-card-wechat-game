@@ -88,8 +88,11 @@ function draw(ctx, view, actions, state) {
     ? `${state.finalScores?.[local] || 0} : ${state.finalScores?.[enemy] || 0}`
     : `${state.finalScores?.[0] || 0} : ${state.finalScores?.[1] || 0}`;
   const morale = Array.isArray(state.morale) ? state.morale : moraleAfterRoundResults(state.roundResults);
+  const finalScoresLabel = state.endReason === "surrender"
+    ? "认输时场面分"
+    : (state.endReason === "disconnect" ? "掉线时场面分" : "末局分");
   text(ctx, roundsText, view.width / 2, top + 92, online ? 12 : 18, "#3b2b18", "center");
-  text(ctx, `末局分：${finalScoresText}`, view.width / 2, top + 122, 15, "#8f3c1f", "center");
+  text(ctx, `${finalScoresLabel}：${finalScoresText}`, view.width / 2, top + 122, 15, "#8f3c1f", "center");
   text(ctx, "军心", view.width / 2, top + 144, 11, "#8a6132", "center");
   drawMoraleTokens(ctx, view.width / 2 - 48, top + 164, morale[local] || 0, "#2f6f57");
   drawMoraleTokens(ctx, view.width / 2 + 18, top + 164, morale[enemy] || 0, "#8f3c1f");

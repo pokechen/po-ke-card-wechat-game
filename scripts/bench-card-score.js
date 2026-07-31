@@ -6,6 +6,7 @@ const battle = require("../shared/core/battle");
 const {
   FACTION_KEYS,
   STRATEGY_CARD_BONUS,
+  STRATEGY_CARD_BONUS_BASELINE,
   buildDeck,
   cardValue,
   makeCardValue
@@ -39,8 +40,97 @@ function parseArgs(argv) {
   return args;
 }
 
+function hasAbility(card, name) {
+  return (card.abilities || []).includes(name);
+}
+
+function contextPool(context) {
+  if (Array.isArray(context)) return context;
+  if (Array.isArray(context?.pool)) return context.pool;
+  if (Array.isArray(context?.cards)) return context.cards;
+  return [];
+}
+
+function allianceBonus(card, pool, factor) {
+  if (!hasAbility(card, "同盟")) return 0;
+  const count = pool.filter(item => item.name === card.name && hasAbility(item, "同盟")).length;
+  if (count <= 1) return 0;
+  return Math.min(18, Math.max(2, Math.round((card.strength || 0) * (count - 1) * factor)));
+}
+
+function baselineAllianceBonus(card, pool) {
+  if (!hasAbility(card, "同盟")) return 0;
+  const count = pool.filter(item => item.name === card.name && hasAbility(item, "同盟")).length;
+  if (count <= 1) return 0;
+  return Math.min(8, Math.max(2, Math.round((card.strength || 0) * (count - 1) * 0.25 + Math.max(0, count - 2))));
+}
+
+function recruitRelated(card, pool) {
+  return pool.filter(item => {
+    if (card.recruitTarget) return item.name === card.recruitTarget || item.name === card.name;
+    if (card.recruitGroupDisplayName) return item.recruitGroupDisplayName === card.recruitGroupDisplayName;
+    return item.name === card.name;
+  });
+}
+
+function baselineRecruitBonus(card, pool) {
+  if (!hasAbility(card, "集贤")) return 0;
+  const related = recruitRelated(card, pool);
+  if (related.length <= 1) return 0;
+  if (card.recruitGroupDisplayName === "桃园三杰" || card.recruitGroupDisplayName === "星火五雄") return 10;
+  if (card.name === "曾子") return 12;
+  if (card.name === "孟尝君") return 5;
+  if (card.name === "鬼谷子") return 7;
+  if (card.name === "李密") return 8;
+  const totalStrength = related.reduce((sum, item) => sum + (item.strength || 0), 0);
+  return Math.min(14, Math.round(2 + related.length * 1.5 + totalStrength * 0.15));
+}
+
+function mechanicsCandidateValue(card, context = {}, options = {}) {
+  const pool = contextPool(context);
+  let value = cardValue(card, context);
+  if (options.alliance && hasAbility(card, "同盟")) {
+    value += allianceBonus(card, pool, options.alliance) - baselineAllianceBonus(card, pool);
+  }
+  if (options.recruitFactor != null && hasAbility(card, "集贤")) {
+    const bonus = baselineRecruitBonus(card, pool);
+    value -= bonus * (1 - options.recruitFactor);
+  }
+  if (options.heroEnvoy && hasAbility(card, "出使") && hasAbility(card, "传世")) value += options.heroEnvoy;
+  if (options.era && card.name === "时代洪流") value += options.era;
+  return value;
+}
+
 function candidateValueFn(name) {
   if (name === "display") return makeCardValue(STRATEGY_CARD_BONUS);
+  if (name === "alliance-real") return (card, context) => mechanicsCandidateValue(card, context, { alliance: 0.75 });
+  if (name === "recruit-quarter") return (card, context) => mechanicsCandidateValue(card, context, { recruitFactor: 0.25 });
+  if (name === "recruit-discount") return (card, context) => mechanicsCandidateValue(card, context, { recruitFactor: 0.5 });
+  if (name === "recruit-three-quarter") return (card, context) => mechanicsCandidateValue(card, context, { recruitFactor: 0.75 });
+  if (name === "synergy-balanced") return (card, context) => mechanicsCandidateValue(card, context, { alliance: 0.75, recruitFactor: 0.5 });
+  if (name === "mechanics-balanced") return (card, context) => mechanicsCandidateValue(card, context, { alliance: 0.75, recruitFactor: 0.5, heroEnvoy: 3, era: 4 });
+  if (name === "unit-ability") {
+    return makeCardValue({
+      ...STRATEGY_CARD_BONUS_BASELINE,
+      rowBoost: STRATEGY_CARD_BONUS.rowBoost,
+      awakening: STRATEGY_CARD_BONUS.awakening
+    });
+  }
+  if (name === "special-only") {
+    return makeCardValue({
+      ...STRATEGY_CARD_BONUS,
+      rowBoost: STRATEGY_CARD_BONUS_BASELINE.rowBoost,
+      awakening: STRATEGY_CARD_BONUS_BASELINE.awakening,
+      highestPowerRemovalUnitHuangGai: STRATEGY_CARD_BONUS_BASELINE.highestPowerRemovalUnitHuangGai,
+      highestPowerRemovalUnitOther: STRATEGY_CARD_BONUS_BASELINE.highestPowerRemovalUnitOther
+    });
+  }
+  if (name === "horn-unit") {
+    return makeCardValue({ ...STRATEGY_CARD_BONUS_BASELINE, rowBoost: STRATEGY_CARD_BONUS.rowBoost });
+  }
+  if (name === "awakening-unit") {
+    return makeCardValue({ ...STRATEGY_CARD_BONUS_BASELINE, awakening: STRATEGY_CARD_BONUS.awakening });
+  }
   return (card, context = {}) => {
     let value = cardValue(card, context);
     if (name.includes("era") && card.name === "时代洪流") value += 4;

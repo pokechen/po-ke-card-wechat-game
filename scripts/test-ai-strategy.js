@@ -123,6 +123,21 @@ test("用例0 普通阵营平分双方失去军心", () => {
   assert.equal(state.roundTransition.winner, null);
 });
 
+test("认输方归零且胜方保留实际军心", () => {
+  const state = blankState();
+  state.roundResults = [
+    { round: 1, scores: [30, 0], winner: 0, morale: [2, 1] },
+    { round: 2, scores: [4, 12], winner: 1, morale: [1, 1] }
+  ];
+  state.players[0].roundsWon = 1;
+  state.players[1].roundsWon = 1;
+
+  assert.equal(battle.surrender(state, 1), true);
+  assert.deepEqual(state.morale, [1, 0]);
+  assert.equal(state.winner, 0);
+  assert.equal(state.roundResults.length, 2);
+});
+
 test("用例1 对手停牌使用最低成本4点牌", () => {
   const state = blankState();
   toBoard(state, 0, "疆场", fakeUnit("己方17", 17, 0));
