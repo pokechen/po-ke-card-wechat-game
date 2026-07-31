@@ -8,8 +8,8 @@ const { spawn } = require("child_process");
 const path = require("path");
 const HARD = battle.HARD || {};
 
-const NEW_BASE = { unitTarget: 22, specialTarget: 4, topRatio: 0.25, randomPick: true, maxHeroes: 99, maxSpyCards: 99 };
-const OLD_BASE = { unitTarget: 22, specialTarget: 4, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxSpyCards: 99 };
+const NEW_BASE = { unitTarget: 22, strategyTarget: 4, topRatio: 0.25, randomPick: true, maxHeroes: 99, maxEnvoyCards: 99 };
+const OLD_BASE = { unitTarget: 22, strategyTarget: 4, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxEnvoyCards: 99 };
 const SEED = 20260721;
 
 function randomFaction() { return FACTION_KEYS[Math.floor(Math.random() * FACTION_KEYS.length)]; }
@@ -18,9 +18,9 @@ function resetProfiledDeck(player, index, profile) {
   player.difficulty = "hard"; player.deckMode = "random";
   player.deck = buildDeck(index, { faction: player.faction, difficulty: "hard", deckProfile: profile });
   player.battleCardIds = player.deck.map(card => card.id);
-  player.hand = []; player.board = { melee: [], ranged: [], siege: [] };
+  player.hand = []; player.board = { "疆场": [], "朝堂": [], "文脉": [] };
   player.discard = []; player.passed = false; player.autoPassed = false; player.roundsWon = 0;
-  player.retained = []; player.leaderUsed = false; player.halfWeatherRound = null;
+  player.retained = []; player.leaderUsed = false; player.halfSituationRound = null;
   draw(player, 10);
 }
 function createProfiledMatch(profileA, profileB) {
@@ -31,7 +31,7 @@ function createProfiledMatch(profileA, profileB) {
   while (state.pending && resolveAutoPending(state)) {}
   return state;
 }
-function specialsOf(deck) { return deck.filter(card => card.category === "special" || card.category === "weather").map(card => card.baseName || card.name); }
+function strategiesOf(deck) { return deck.filter(card => card.category === "stratagem" || card.category === "situation").map(card => card.name); }
 
 function runChildMatch(i) {
   const pairSeed = SEED + Math.floor(i / 2) * 9973;
@@ -39,17 +39,17 @@ function runChildMatch(i) {
   const profileA = newAsP0 ? NEW_BASE : OLD_BASE;
   const profileB = newAsP0 ? OLD_BASE : NEW_BASE;
   const initialState = withSeed(pairSeed, () => createProfiledMatch(profileA, profileB));
-  const newSpecials = specialsOf(initialState.players[newAsP0 ? 0 : 1].deck);
-  const oldSpecials = specialsOf(initialState.players[newAsP0 ? 1 : 0].deck);
+  const newStrategyCards = strategiesOf(initialState.players[newAsP0 ? 0 : 1].deck);
+  const oldStrategyCards = strategiesOf(initialState.players[newAsP0 ? 1 : 0].deck);
   // 先打印特殊牌，再跑；崩溃只杀本子进程
-  process.stdout.write("SPECIALS " + JSON.stringify({ i, newSpecials, oldSpecials }) + "\n");
+  process.stdout.write("STRATEGY_CARDS " + JSON.stringify({ i, newStrategyCards, oldStrategyCards }) + "\n");
   const state = initialState; let steps = 0;
   withSeed(pairSeed + 1000003, () => {
     while (!state.over && steps < 5000) {
       steps += 1;
       if (state.roundTransition) { battle.continueRoundTransition(state); continue; }
       if (state.pending) { if (!resolveAutoPending(state)) throw new Error("pending"); continue; }
-      const ok = battle.autoStep(state, { playerIndex: state.current, cfg: { ...HARD, strategy: "optimized" } });
+      const ok = battle.autoStep(state, { playerIndex: state.current, cfg: HARD });
       if (!ok) throw new Error("autoStep fail");
     }
   });
@@ -79,7 +79,7 @@ function main() {
         buf += d.toString();
         const lines = buf.split("\n"); buf = lines.pop();
         lines.forEach(line => {
-          if (line.startsWith("SPECIALS ")) { try { const o = JSON.parse(line.slice(9)); o.newSpecials.forEach(n => newFreq[n] = (newFreq[n] || 0) + 1); child._specials = o; } catch (e) {} }
+          if (line.startsWith("STRATEGY_CARDS ")) { try { const o = JSON.parse(line.slice(9)); o.newStrategyCards.forEach(n => newFreq[n] = (newFreq[n] || 0) + 1); child._strategies = o; } catch (e) {} }
           else if (line.startsWith("DONE ")) { child._done = true; }
         });
       });
@@ -88,8 +88,8 @@ function main() {
         clearTimeout(timer); finished++;
         if (crashed || !child._done) {
           crashes++;
-          const o = child._specials;
-          if (o) { o.newSpecials.forEach(n => crashNew[n] = (crashNew[n] || 0) + 1); o.oldSpecials.forEach(n => crashOld[n] = (crashOld[n] || 0) + 1); }
+          const o = child._strategies;
+          if (o) { o.newStrategyCards.forEach(n => crashNew[n] = (crashNew[n] || 0) + 1); o.oldStrategyCards.forEach(n => crashOld[n] = (crashOld[n] || 0) + 1); }
         }
         process.stdout.write(`\r  进度 ${finished}/${MATCHES} 崩溃 ${crashes}`);
         if (next < MATCHES) launch();

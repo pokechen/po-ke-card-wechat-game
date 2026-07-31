@@ -28,13 +28,28 @@ function readyOf(room, index) {
   return !!(players[index]?.ready || readyPlayers[index]);
 }
 
+function rematchReadyOf(room, index) {
+  if (!Number.isInteger(index) || index < 0) return false;
+  const players = room?.players || [];
+  return !!players[index]?.rematchReady;
+}
+
 function statusText(pvp) {
   if (pvp.loading) return "正在连接云端房间...";
   if (pvp.error) return pvp.error;
   if (!pvp.roomId) return "请选择创建房间，或输入好友给你的房间号加入。";
   if (pvp.room?.status === "selecting") return "双方已准备，正在选择出战配置。";
   if (pvp.room?.status === "playing") return "对战进行中";
-  if (pvp.room?.status === "finished") return "本局已结束，可重新准备再开一局。";
+  if (pvp.room?.status === "finished") {
+    const selfIndex = Number.isInteger(pvp.playerIndex) ? pvp.playerIndex : 0;
+    const friendIndex = selfIndex === 0 ? 1 : 0;
+    const selfReady = rematchReadyOf(pvp.room, selfIndex);
+    const friendReady = rematchReadyOf(pvp.room, friendIndex);
+    if (selfReady && friendReady) return "双方已确认继续，正在返回准备。";
+    if (selfReady) return "已选择继续对战，等待对方确认。";
+    if (friendReady) return "对方想继续对战，你也可以点击继续。";
+    return "本局已结束，可继续对战或查看双方卡牌。";
+  }
   if (pvp.room?.status === "dissolved") return "房主已解散房间。";
   const players = pvp.room?.players || [];
   if (players.length < 2) return "等待好友加入。可分享二维码或通过右上角转发邀请。";
@@ -58,8 +73,9 @@ function playerSetupText(player, fallbackName, status, room, sideLabel, playerIn
   const faction = randomLineup ? "随机阵容" : (FACTION_LABELS[setup.faction] || setup.faction || "未选阵营");
   const leaderName = randomLineup ? "随机主将" : (setup.leader ? displayName(setup.leader) : "待选择主将");
   const deckMode = randomLineup ? "随机卡牌" : (player.customDeckIds && player.customDeckIds.length ? `自定义${player.customDeckIds.length}张` : "自动卡牌");
-  const ready = readyOf(room, Number.isInteger(playerIndex) ? playerIndex : player.index);
-  const flag = status === "selecting" ? (player.setupReady ? "已确认" : "选择中") : (ready ? "已准备" : "未准备");
+  const index = Number.isInteger(playerIndex) ? playerIndex : player.index;
+  const ready = status === "finished" ? rematchReadyOf(room, index) : readyOf(room, index);
+  const flag = status === "finished" ? (ready ? "想继续" : "未确认") : (status === "selecting" ? (player.setupReady ? "已确认" : "选择中") : (ready ? "已准备" : "未准备"));
   const identity = sideLabel ? `${sideLabel}·${player.name || fallbackName}` : (player.name || fallbackName);
   return `${identity}：${short(faction, 5)} · ${short(leaderName, 7)} · ${deckMode} · ${flag}`;
 }
@@ -116,7 +132,8 @@ function drawReadyBadge(ctx, x, y, ready, animate = false, labelOverride = "") {
 }
 
 function drawPlayerStatusRow(ctx, room, player, index, label, rect, ui) {
-  const ready = readyOf(room, index);
+  const isFinished = room?.status === "finished";
+  const ready = isFinished ? rematchReadyOf(room, index) : readyOf(room, index);
   const accent = label === "我方" ? "#2f6f57" : "#8f3c1f";
   const fill = ready ? "rgba(47,111,87,0.10)" : (player ? "rgba(255,255,255,0.58)" : "rgba(255,250,240,0.78)");
   const stroke = ready ? "rgba(47,111,87,0.34)" : "rgba(216,189,131,0.48)";
@@ -127,7 +144,7 @@ function drawPlayerStatusRow(ctx, room, player, index, label, rect, ui) {
   drawAvatar(ctx, player, rect.x + 16, avatarY, avatarSize, label.slice(0, 1), !player);
   const name = player ? playerName(player, label) : "等待加入";
   text(ctx, `${label} · ${name}`, rect.x + 60, rect.y + rect.h / 2, 13, accent, "left");
-  drawReadyBadge(ctx, rect.x + rect.w - 66, rect.y + (rect.h - 22) / 2, ready, ui.pvpReadyAnimUntil > Date.now());
+  drawReadyBadge(ctx, rect.x + rect.w - 66, rect.y + (rect.h - 22) / 2, ready, ui.pvpReadyAnimUntil > Date.now(), isFinished ? (ready ? "想继续" : "未确认") : "");
 }
 
 function errorMetrics(err, panelW) {
@@ -219,7 +236,7 @@ function drawShareGuideOverlay(ctx, view, actions, roomId, ui) {
     actions.push({ id: "pvpShareGuideTip", x: 0, y: guideTop, w: view.width, h: guideH });
     ctx.fillStyle = "rgba(38, 28, 20, 0.22)";
     ctx.fillRect(0, guideTop, view.width, guideH);
-    const tipText = "点击「···」直接分享小程序";
+    const tipText = "点击右上角「···」转发邀请";
     const tipSize = view.width < 350 || guideH < 34 ? 13 : 15;
     text(ctx, tipText, 20, guideTop + guideH / 2, tipSize, "rgba(255, 255, 255, 0.96)", "left");
 
@@ -250,13 +267,23 @@ function drawShareGuideOverlay(ctx, view, actions, roomId, ui) {
 
   actions.push({ id: "pvpShareGuidePanel", x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 22, "rgba(255, 250, 240, 0.99)", "rgba(255, 216, 106, 0.92)");
-  text(ctx, "邀请好友加入房间", panelX + panelW / 2, panelY + 28, 18, "#2f2417", "center");
-  text(ctx, `微信扫码直接进入 · 房间 ${roomId}`, panelX + panelW / 2, panelY + 53, 12, "#775c34", "center");
+  text(ctx, "邀请好友加入房间", panelX + panelW / 2, panelY + 27, 18, "#2f2417", "center");
 
+  const compactPanel = panelH < 390 || view.height < 600;
   const envVersion = ui.pvpShareCodeEnvVersion;
-  const codeSize = Math.max(150, Math.min(190, panelW - 86, panelH - 218));
+  const buttonY = panelY + panelH - 56;
+  const roomBadgeH = compactPanel ? 50 : 58;
+  const roomBadge = { x: panelX + 34, y: panelY + (compactPanel ? 42 : 46), w: panelW - 68, h: roomBadgeH };
+  fillRoundRect(ctx, roomBadge.x, roomBadge.y, roomBadge.w, roomBadge.h, 16, "#fff1dc", "rgba(143, 60, 31, 0.36)");
+  text(ctx, "房间号", roomBadge.x + roomBadge.w / 2, roomBadge.y + 15, 11, "#775c34", "center");
+  text(ctx, roomId.split("").join(" "), roomBadge.x + roomBadge.w / 2, roomBadge.y + roomBadge.h - (compactPanel ? 16 : 18), compactPanel ? 27 : 32, "#8f3c1f", "center");
+
+  const codeY = roomBadge.y + roomBadge.h + (compactPanel ? 12 : 16);
+  const hintReserve = envVersion ? (compactPanel ? 70 : 76) : (compactPanel ? 52 : 58);
+  const availableCodeH = Math.max(96, buttonY - codeY - hintReserve);
+  const maxCodeSize = compactPanel ? 156 : 178;
+  const codeSize = Math.min(maxCodeSize, panelW - 104, availableCodeH);
   const codeX = panelX + (panelW - codeSize) / 2;
-  const codeY = panelY + 82;
   fillRoundRect(ctx, codeX - 8, codeY - 8, codeSize + 16, codeSize + 16, 15, "#ffffff", "#dcc48d");
   if (ui.pvpShareCodePath) {
     const loaded = drawAssetImage(ctx, ui.pvpShareCodePath, codeX, codeY, codeSize, codeSize, { fit: "contain", placeholder: false });
@@ -270,14 +297,13 @@ function drawShareGuideOverlay(ctx, view, actions, roomId, ui) {
     text(ctx, ui.pvpShareCodeLoading ? "正在生成房间二维码..." : "准备二维码...", codeX + codeSize / 2, codeY + codeSize / 2, 13, "#775c34", "center");
   }
 
-  const hintY = codeY + codeSize + 22;
-  text(ctx, "扫码自动加入，无需输入房间号", panelX + panelW / 2, hintY, 11, "#2f6f57", "center");
-  text(ctx, "也可点击右上角「···」转发给好友", panelX + panelW / 2, hintY + 20, 11, "#775c34", "center");
+  const hintY = codeY + codeSize + (compactPanel ? 14 : 18);
+  text(ctx, "扫码自动加入，也可直接输入房间号", panelX + panelW / 2, hintY, 11, "#2f6f57", "center");
+  text(ctx, "转发回来后，房间号会保持在上方", panelX + panelW / 2, hintY + 18, 11, "#775c34", "center");
   const versionTip = envVersion === "develop" ? "开发版码：扫码账号需为项目成员"
     : (envVersion === "trial" ? "体验版码：扫码账号需加入体验成员" : "正式版码");
-  if (envVersion) text(ctx, versionTip, panelX + panelW / 2, hintY + 38, 10, envVersion === "release" ? "#775c34" : "#8f3c1f", "center");
+  if (envVersion) text(ctx, versionTip, panelX + panelW / 2, hintY + 34, 10, envVersion === "release" ? "#775c34" : "#8f3c1f", "center");
 
-  const buttonY = panelY + panelH - 56;
   const save = { id: "savePvpShareCode", x: panelX + 20, y: buttonY, w: panelW - 118, h: 38 };
   const close = { id: "closePvpShareGuide", x: panelX + panelW - 88, y: buttonY, w: 68, h: 38 };
   actions.push(save, close);
@@ -304,7 +330,8 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
   const status = pvp.room?.status || "waiting";
   const isHost = selfIndex === 0;
   const selfReady = readyOf(pvp.room, selfIndex);
-  const showRuleControls = roomId && hasRoom && isHost && (status === "waiting" || status === "finished");
+  const selfRematchReady = rematchReadyOf(pvp.room, selfIndex);
+  const showRuleControls = roomId && hasRoom && isHost && status === "waiting";
 
   const panelTop = roomId && hasRoom ? top + (compact ? 42 : 54) : top + 58;
   const targetPanelH = roomId && hasRoom ? (compact ? 360 : 420) : 236;
@@ -414,14 +441,15 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
     readyStroke = "#1d4f3c";
   } else if (status === "finished") {
     ready = { ...ready, id: "pvpReturnRoom" };
-    readyLabel = "重新准备";
-    readyFill = "#2f6f57";
-    readyStroke = "#1d4f3c";
+    readyLabel = selfRematchReady ? "等待对方继续" : "继续对战";
+    readyFill = selfRematchReady ? "#b6a98e" : "#2f6f57";
+    readyStroke = selfRematchReady ? "#a89a80" : "#1d4f3c";
   }
 
   const canInvite = isHost && status === "waiting" && players.length < 2 && !pvp.submitting;
+  const canClickReady = !pvp.submitting && ["waiting", "selecting", "finished"].includes(status) && !(status === "finished" && selfRematchReady);
   if (canInvite) actions.push(invite);
-  if (!pvp.submitting && ["waiting", "selecting", "finished"].includes(status)) actions.push(ready);
+  if (canClickReady) actions.push(ready);
   button(ctx, { ...invite, label: "邀请好友", fill: canInvite ? "#4aa35f" : "#b6a98e", stroke: canInvite ? "#2e7d46" : "#a89a80", size: 14 });
   button(ctx, { ...ready, label: readyLabel, fill: readyFill, stroke: readyStroke, size: 14 });
   if (y0 + 62 < view.height - view.safeBottom - 4) {

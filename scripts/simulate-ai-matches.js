@@ -1,28 +1,17 @@
 #!/usr/bin/env node
 
 const battle = require("../shared/core/battle");
-const { FACTION_KEYS, buildDeck, cardValue, allCards } = require("../shared/core/cards");
+const { FACTION_KEYS, buildDeck, cardValue } = require("../shared/core/cards");
 
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
 
 function parseArgs(argv) {
-  const args = {
-    matches: 100,
-    seed: 20260721,
-    maxSteps: 1200,
-    json: false,
-    compareStrategies: false,
-    oldStrategy: "legacy",
-    newStrategy: "optimized"
-  };
+  const args = { matches: 100, seed: 20260721, maxSteps: 1200, json: false };
   argv.forEach(arg => {
     if (arg === "--json") args.json = true;
-    else if (arg === "--compareStrategies") args.compareStrategies = true;
     else if (arg.startsWith("--matches=")) args.matches = Math.max(1, Number(arg.slice(10)) || args.matches);
     else if (arg.startsWith("--seed=")) args.seed = Number(arg.slice(7)) || args.seed;
     else if (arg.startsWith("--maxSteps=")) args.maxSteps = Math.max(100, Number(arg.slice(11)) || args.maxSteps);
-    else if (arg.startsWith("--oldStrategy=")) args.oldStrategy = arg.slice(14) || args.oldStrategy;
-    else if (arg.startsWith("--newStrategy=")) args.newStrategy = arg.slice(14) || args.newStrategy;
   });
   return args;
 }
@@ -71,14 +60,14 @@ function resetHardRandomDeck(player, index) {
   player.deck = buildDeck(index, { faction: player.faction, difficulty: "hard" });
   player.battleCardIds = player.deck.map(card => card.id);
   player.hand = [];
-  player.board = { melee: [], ranged: [], siege: [] };
+  player.board = { "疆场": [], "朝堂": [], "文脉": [] };
   player.discard = [];
   player.passed = false;
   player.autoPassed = false;
   player.roundsWon = 0;
   player.retained = [];
   player.leaderUsed = false;
-  player.halfWeatherRound = null;
+  player.halfSituationRound = null;
   draw(player, 10);
 }
 
@@ -92,7 +81,7 @@ function resolveAutoPending(state) {
     const best = (pending.candidates || []).slice().sort((a, b) => cardValue(b) - cardValue(a))[0];
     return battle.resolvePending(state, best ? { uid: best.uid } : { skip: true });
   }
-  if (pending.type === "decoy") {
+  if (pending.type === "recall") {
     const best = (pending.candidates || []).slice().sort((a, b) => cardValue(b.card) - cardValue(a.card))[0];
     return battle.resolvePending(state, best ? { uid: best.card.uid } : { skip: true });
   }
@@ -122,7 +111,7 @@ function cloneState(state) {
   return JSON.parse(JSON.stringify(state));
 }
 
-function runPreparedMatch(seed, maxSteps, initialState, strategiesByPlayer) {
+function runPreparedMatch(seed, maxSteps = 1200, initialState, playerConfigs = [{}, {}]) {
   return withSeed(seed, () => {
     const state = cloneState(initialState);
     state.autoControlAll = true;
@@ -139,34 +128,26 @@ function runPreparedMatch(seed, maxSteps, initialState, strategiesByPlayer) {
         if (!resolveAutoPending(state)) throw new Error(`无法自动处理 pending: ${state.pending.type}`);
         continue;
       }
-      const strat = strategiesByPlayer[state.current];
-      const strategyName = (typeof strat === "string") ? strat : (strat && strat.strategy) || "legacy";
-      const tuning = (typeof strat === "string") ? undefined : (strat && strat.tuning);
-      const ok = battle.autoStep(state, { playerIndex: state.current, cfg: { ...HARD, strategy: strategyName, tuning } });
-      if (!ok) {
-        // 极端情况下 AI 决策无法执行（如选了非法作用线），稳妥回退为放弃本回合，保证对局可完成。
-        // 该脆弱点由随机种子驱动、对双方对称，不影响新旧策略对比的公平性。
-        battle.pass(state);
-      }
+      const playerConfig = playerConfigs[state.current] || {};
+      const ok = battle.autoStep(state, { playerIndex: state.current, cfg: { ...HARD, ...playerConfig } });
+      if (!ok) throw new Error(`自动出牌失败：seed=${seed} current=${state.current}`);
     }
     if (!state.over) {
-      // 病态对局（如双方反复放弃导致回合无法结束）超步数后按平局结束，避免进程崩溃。
-      return {
-        seed,
-        winner: null,
-        draw: true,
-        steps,
-        strategies: strategiesByPlayer.slice(),
-        factions: state.players.map(player => player.faction),
-        finalScores: state.finalScores
+      const snapshot = {
+        pending: state.pending,
+        current: state.current,
+        hands: state.players.map(player => player.hand.length),
+        passed: state.players.map(player => player.passed),
+        round: state.round,
+        lastPlayed: state.lastPlayed
       };
+      throw new Error(`超过最大步数 ${maxSteps}：seed=${seed} state=${JSON.stringify(snapshot)}`);
     }
     return {
       seed,
       winner: state.winner,
       draw: state.winner == null,
       steps,
-      strategies: strategiesByPlayer.slice(),
       factions: state.players.map(player => player.faction),
       finalScores: state.finalScores
     };
@@ -177,9 +158,9 @@ function createSeededInitialState(seed) {
   return withSeed(seed, createMatch);
 }
 
-function runMatch(seed, maxSteps, strategiesByPlayer = ["legacy", "legacy"]) {
+function runMatch(seed, maxSteps = 1200, playerConfigs = [{}, {}]) {
   const initialState = createSeededInitialState(seed);
-  return runPreparedMatch(seed + 1000003, maxSteps, initialState, strategiesByPlayer);
+  return runPreparedMatch(seed + 1000003, maxSteps, initialState, playerConfigs);
 }
 
 function runSuite(options) {
@@ -197,54 +178,46 @@ function runSuite(options) {
   return { matches: options.matches, seed: options.seed, player0Wins, player1Wins, draws, results };
 }
 
-function runStrategyComparison(options) {
+function runConfigComparison(options) {
   const results = [];
-  let oldWins = 0;
-  let newWins = 0;
+  let baselineWins = 0;
+  let candidateWins = 0;
   let draws = 0;
   for (let i = 0; i < options.matches; i++) {
     const pairSeed = options.seed + Math.floor(i / 2) * 9973;
     const initialState = createSeededInitialState(pairSeed);
-    const newAsPlayer0 = i % 2 === 0;
-    const strategies = newAsPlayer0
-      ? [options.newStrategy, options.oldStrategy]
-      : [options.oldStrategy, options.newStrategy];
-    const result = runPreparedMatch(pairSeed + 1000003, options.maxSteps, initialState, strategies);
+    const candidateAsPlayer0 = i % 2 === 0;
+    const configs = candidateAsPlayer0
+      ? [options.candidateConfig || {}, options.baselineConfig || {}]
+      : [options.baselineConfig || {}, options.candidateConfig || {}];
+    const result = runPreparedMatch(pairSeed + 1000003, options.maxSteps || 1200, initialState, configs);
     results.push(result);
-    if (result.winner == null) { draws += 1; continue; }
-    const winnerTag = strategies[result.winner].tag || strategies[result.winner];
-    if (winnerTag === "new") newWins += 1;
-    else if (winnerTag === "old") oldWins += 1;
-    else draws += 1;
+    if (result.winner == null) {
+      draws += 1;
+    } else if (result.winner === (candidateAsPlayer0 ? 0 : 1)) {
+      candidateWins += 1;
+    } else {
+      baselineWins += 1;
+    }
   }
-  const decisive = Math.max(1, newWins + oldWins);
+  const decisive = Math.max(1, candidateWins + baselineWins);
   return {
     matches: options.matches,
     seed: options.seed,
-    oldStrategy: options.oldStrategy,
-    newStrategy: options.newStrategy,
-    oldWins,
-    newWins,
+    baselineWins,
+    candidateWins,
     draws,
-    newWinRate: newWins / options.matches,
-    newDecisiveWinRate: newWins / decisive,
+    candidateWinRate: candidateWins / options.matches,
+    candidateDecisiveWinRate: candidateWins / decisive,
     results
   };
 }
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
-  const summary = options.compareStrategies
-    ? runStrategyComparison(options)
-    : runSuite(options);
+  const summary = runSuite(options);
   if (options.json) {
     console.log(JSON.stringify(summary, null, 2));
-    return;
-  }
-  if (options.compareStrategies) {
-    console.log(`新旧策略对比：${summary.matches} 场，随机卡牌 + 困难难度，种子 ${summary.seed}`);
-    console.log(`新策略(${summary.newStrategy})胜：${summary.newWins}，旧策略(${summary.oldStrategy})胜：${summary.oldWins}，平局：${summary.draws}`);
-    console.log(`新策略胜率：${(summary.newWinRate * 100).toFixed(2)}%，非平局胜率：${(summary.newDecisiveWinRate * 100).toFixed(2)}%`);
     return;
   }
   console.log(`系统自动出牌模拟：${summary.matches} 场，随机卡牌 + 困难难度，种子 ${summary.seed}`);
@@ -256,7 +229,7 @@ if (require.main === module) main();
 module.exports = {
   runSuite,
   runMatch,
-  runStrategyComparison,
+  runConfigComparison,
   runPreparedMatch,
   createMatch,
   resolveAutoPending,

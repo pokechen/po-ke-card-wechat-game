@@ -107,8 +107,8 @@ async function fetchRoom(roomId) {
     getError = err;
   }
   try {
-    const result = await callRoom("returnToRoom", { roomId });
-    console.log("[pvp-ready-debug] fetchRoom source=returnToRoom", roomId, roomReadyDebug(result.room));
+    const result = await callRoom("returnToRoom", { roomId, readOnly: true });
+    console.log("[pvp-ready-debug] fetchRoom source=returnToRoomReadOnly", roomId, roomReadyDebug(result.room));
     return result;
   } catch (returnError) {
     console.warn("[pvp-ready-debug] fetchRoom all failed", roomId, {

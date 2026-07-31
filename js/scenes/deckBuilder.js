@@ -16,7 +16,7 @@ const { drawDetail } = require("./cardDetail");
 
 function canAddCard(status, card) {
   if (status.total >= 40) return false;
-  if ((card.category === "special" || card.category === "weather") && status.specials >= 10) return false;
+  if ((card.category === "stratagem" || card.category === "situation") && status.strategies >= 10) return false;
   return true;
 }
 
@@ -27,7 +27,7 @@ function selectedCount(ids, group) {
 
 function cardMetaText(card) {
   const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/");
-  if (card.category === "weather" || card.category === "special") {
+  if (card.category === "situation" || card.category === "stratagem") {
     return [categoryLabel(card), rowName].filter(Boolean).join(" · ");
   }
   return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
@@ -74,7 +74,7 @@ function draw(ctx, view, actions, ui) {
   text(ctx, "编辑我的牌组", view.width / 2, top, 22, "#2f2417", "center");
   text(ctx, `${FACTION_LABELS[faction] || faction} · 自定义牌组 · ${safePage + 1}/${totalPages}`, view.width / 2, top + 25, 12, "#775c34", "center");
   const statusColor = status.valid ? "#2f6f57" : "#8f3c1f";
-  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略 ${status.specials}/10 · 总分 ${status.score}`, view.width / 2, top + 45, 11, statusColor, "center");
+  text(ctx, `已选 ${status.total}/40 · 人物 ${status.units}/22 · 谋略 ${status.strategies}/10 · 总分 ${status.score}`, view.width / 2, top + 45, 11, statusColor, "center");
 
   const auto = { id: "autoCustomDeck", x: 26, y: toolY, w: (view.width - 64) / 2, h: 34 };
   const clearBtn = { id: "clearCustomDeck", x: auto.x + auto.w + 12, y: toolY, w: auto.w, h: 34 };
@@ -106,8 +106,8 @@ function draw(ctx, view, actions, ui) {
     });
     const x = rect.x + 62;
     const maxCount = group.cards.length;
-    const baseName = short(displayName(card), 9);
-    const nameText = maxCount > 1 ? `${baseName} x${maxCount}` : baseName;
+    const titleName = short(displayName(card), 9);
+    const nameText = maxCount > 1 ? `${titleName} x${maxCount}` : titleName;
     text(ctx, nameText, x, y + 15, 13, disabled ? "#8a8170" : "#3b2b18");
     if (selected && maxCount > 1) {
       fillRoundRect(ctx, x + 92, y + 5, 34, 20, 10, "#2f6f57", "#1d4f3c");

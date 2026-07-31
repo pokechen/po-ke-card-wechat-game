@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 汇总 verify-decoy-medic.js 的多个并行分片 JSON 结果。
+// 汇总 verify-recall-revival.js 的多个并行分片 JSON 结果。
 const fs = require("fs");
 
 const files = process.argv.slice(2);
@@ -28,7 +28,7 @@ lines.push(`汇总：${files.length} 个分片，总种子数=${agg[0].matches /
 if (meta) lines.push(`阵营=${meta.seed ? "" : ""} 策略=${meta.simDepth} simDepth=${meta.simDepth} branchCap=${meta.branchCap}`);
 if (agg[0].firstSeed) {
   const s = agg[0].firstSeed;
-  lines.push(`基准卡组样例：总数=${s.total} 济世数=${s.medics} 请辞数=${s.decoys} 合法=${s.valid}`);
+  lines.push(`基准卡组样例：总数=${s.total} 济世数=${s.revivals} 请辞数=${s.recalls} 合法=${s.valid}`);
 }
 lines.push("");
 lines.push(`请辞数 | 受试胜场 | 平局 | 总场数 | 受试胜率 | 非平局胜率`);

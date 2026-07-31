@@ -132,27 +132,27 @@ function button(ctx, spec) {
 }
 
 const FACTION_COLORS = {
-  "Northern Realms": ["#315d8a", "#d7b25b"],
-  "Nilfgaardian Empire": ["#2f2b2b", "#c4a35a"],
-  "Scoia'tael": ["#2f6f57", "#d7b25b"],
-  Monsters: ["#8a3f35", "#e5a85b"],
-  Skellige: ["#4f6d8a", "#d8c6a0"],
-  Neutral: ["#7a5a95", "#dcc48d"]
+  "开国群雄": ["#315d8a", "#d7b25b"],
+  "纵横权谋": ["#2f2b2b", "#c4a35a"],
+  "百家争鸣": ["#2f6f57", "#d7b25b"],
+  "草莽星火": ["#8a3f35", "#e5a85b"],
+  "遗策复兴": ["#4f6d8a", "#d8c6a0"],
+  "天下共识": ["#7a5a95", "#dcc48d"]
 };
 
 const FACTION_ART = {
-  "Northern Realms": "assets/card-art/northern.webp",
-  "Nilfgaardian Empire": "assets/card-art/nilfgaard.webp",
-  "Scoia'tael": "assets/card-art/scoiatael.webp",
-  Monsters: "assets/card-art/monsters.webp",
-  Skellige: "assets/card-art/skellige.webp",
-  Neutral: "assets/card-art/neutral.webp"
+  "开国群雄": "assets/card-art/开国群雄.webp",
+  "纵横权谋": "assets/card-art/纵横权谋.webp",
+  "百家争鸣": "assets/card-art/百家争鸣.webp",
+  "草莽星火": "assets/card-art/草莽星火.webp",
+  "遗策复兴": "assets/card-art/遗策复兴.webp",
+  "天下共识": "assets/card-art/天下共识.webp"
 };
 
 const ROW_MARKS = {
-  melee: "疆",
-  ranged: "朝",
-  siege: "文"
+  "疆场": "疆",
+  "朝堂": "朝",
+  "文脉": "文"
 };
 
 const imageCache = {};
@@ -179,21 +179,21 @@ function setImageRenderHook(fn) {
   imageRenderHook = typeof fn === "function" ? fn : null;
 }
 
-function isWeatherCategory(category) {
-  return category === "时局" || category === "weather";
+function isSituationCategory(category) {
+  return category === "时局" || category === "situation";
 }
 
-function isSpecialCategory(category) {
-  return category === "谋略" || category === "策略" || category === "special";
+function isStratagemCategory(category) {
+  return category === "谋略" || category === "策略" || category === "stratagem";
 }
 
 function isStrategyCategory(category) {
-  return isWeatherCategory(category) || isSpecialCategory(category);
+  return isSituationCategory(category) || isStratagemCategory(category);
 }
 
 function categoryMark(spec) {
-  if (isWeatherCategory(spec.category)) return "局";
-  if (isSpecialCategory(spec.category)) return "谋";
+  if (isSituationCategory(spec.category)) return "局";
+  if (isStratagemCategory(spec.category)) return "谋";
   if (spec.category === "主将" || spec.category === "leader") return "";
   return "";
 }
@@ -207,20 +207,20 @@ function categoryBadgeStyle(mark) {
 }
 
 const ABILITY_MARKS = {
-  Hero: "传世",
-  Spy: "出使",
-  Medic: "济世",
-  "Tight Bond": "同盟",
-  "Morale Boost": "振势",
-  Muster: "集贤",
-  Agile: "通才",
-  Scorch: "奇策",
-  "Commander's Horn": "鼓舞",
-  "Summon Shield Maidens": "召唤",
-  "Summon Avenger": "召唤",
-  "Summon Sky Hound": "召唤",
-  Berserker: "蛰伏",
-  Mardroeme: "雪耻"
+  "传世": "传世",
+  "出使": "出使",
+  "济世": "济世",
+  "同盟": "同盟",
+  "振势": "振势",
+  "集贤": "集贤",
+  "通才": "通才",
+  "奇策": "奇策",
+  "鼓舞": "鼓舞",
+  "召唤岳家军": "召唤",
+  "召唤无当飞军": "召唤",
+  "召唤东吴水师": "召唤",
+  "蛰伏": "蛰伏",
+  "雪耻": "雪耻"
 };
 
 function abilityIconLabel(label) {
@@ -314,21 +314,9 @@ function drawHeroCornerMarks(ctx, x, y, w, h) {
 }
 
 function defaultImageUrl(spec) {
-  if (spec.category === "weather" || spec.category === "时局") return "assets/card-art/weather.webp";
-  if (spec.category === "special" || spec.category === "谋略") return "assets/card-art/special.webp";
-  return FACTION_ART[spec.faction] || FACTION_ART.Neutral;
-}
-
-function fileNameFromImageUrl(imageUrl) {
-  const value = String(imageUrl || "");
-  if (!value || /Tw3_gwent|gwent/i.test(value)) return "";
-  const cleanValue = value.split("?")[0].split("#")[0];
-  const fileName = cleanValue.split("/").filter(Boolean).pop() || "";
-  try {
-    return decodeURIComponent(fileName);
-  } catch (err) {
-    return fileName;
-  }
+  if (spec.category === "situation" || spec.category === "时局") return "assets/card-art/situation.webp";
+  if (spec.category === "stratagem" || spec.category === "谋略") return "assets/card-art/stratagem.webp";
+  return FACTION_ART[spec.faction] || FACTION_ART["天下共识"];
 }
 
 function cleanCardImageFileName(fileName) {
@@ -346,14 +334,20 @@ function normalizeWebpFileName(fileName) {
   return /\.[^/.]+$/.test(value) ? value.replace(/\.[^/.]+$/, ".webp") : `${value}.webp`;
 }
 
-function staticCardImageUrl(spec) {
-  const rawFileName = fileNameFromImageUrl(spec.imageUrl) || `${spec.baseName || spec.name || ""}.webp`;
-  const fileName = normalizeWebpFileName(rawFileName);
-  return fileName ? encodeURI(`${STATIC_CARD_IMAGE_BASE_URL}/${fileName}`) : "";
+function staticCardImageUrl(fileName) {
+  const normalizedFileName = normalizeWebpFileName(fileName);
+  return normalizedFileName ? encodeURI(`${STATIC_CARD_IMAGE_BASE_URL}/${normalizedFileName}`) : "";
+}
+
+function cardImageFileNames(spec) {
+  return [spec.name]
+    .map(normalizeWebpFileName)
+    .filter((fileName, index, arr) => fileName && arr.indexOf(fileName) === index);
 }
 
 function imageSources(spec) {
-  return [staticCardImageUrl(spec), defaultImageUrl(spec)].filter((src, index, arr) => src && arr.indexOf(src) === index);
+  const fileNames = cardImageFileNames(spec);
+  return [...fileNames.map(staticCardImageUrl), defaultImageUrl(spec)].filter((src, index, arr) => src && arr.indexOf(src) === index);
 }
 
 function createLocalImage(sources) {
@@ -420,21 +414,29 @@ function drawAssetImage(ctx, src, x, y, w, h, options = {}) {
 }
 
 function drawGeneratedCardArt(ctx, spec, x, y, w, h) {
-  const palette = FACTION_COLORS[spec.faction] || FACTION_COLORS.Neutral;
+  const hero = isHeroSpec(spec);
+  const palette = FACTION_COLORS[spec.faction] || FACTION_COLORS["天下共识"];
   const fill = ctx.createLinearGradient ? ctx.createLinearGradient(x, y, x + w, y + h) : null;
   if (fill) {
     fill.addColorStop(0, palette[0]);
     fill.addColorStop(1, palette[1]);
   }
-  fillRoundRect(ctx, x, y, w, h, Math.min(9, Math.floor(h / 4)), fill || palette[0], spec.hero ? "#f6d27a" : "#c6954b");
-  if (spec.hero) {
+  fillRoundRect(ctx, x, y, w, h, Math.min(9, Math.floor(h / 4)), fill || palette[0], hero ? "#f6d27a" : "#c6954b");
+  if (hero) {
     ctx.fillStyle = "rgba(255, 240, 170, 0.14)";
     ctx.fillRect(x, y, w, h);
   }
   ctx.fillStyle = "rgba(255,255,255,0.16)";
   ctx.fillRect(x + w * 0.08, y + h * 0.12, w * 0.24, h * 0.76);
   ctx.fillRect(x + w * 0.58, y + h * 0.12, w * 0.1, h * 0.76);
-  text(ctx, short(spec.name || spec.baseName, 1), x + w / 2, y + h / 2, Math.max(18, Math.min(32, h * 0.58)), "#fff7d8", "center");
+  text(ctx, short(spec.name, 1), x + w / 2, y + h / 2, Math.max(18, Math.min(32, h * 0.58)), "#fff7d8", "center");
+}
+
+function isHeroSpec(spec) {
+  const abilities = Array.isArray(spec?.abilityDisplayNames) && spec.abilityDisplayNames.length
+    ? spec.abilityDisplayNames
+    : (Array.isArray(spec?.abilities) ? spec.abilities : []);
+  return abilities.includes("传世");
 }
 
 function squareImageRect(spec) {
@@ -455,6 +457,7 @@ function squareImageRect(spec) {
 }
 
 function drawCardImage(ctx, spec) {
+  const hero = isHeroSpec(spec);
   const { x, y, w, h } = squareImageRect(spec);
   const sources = imageSources(spec);
   const cacheKey = sources.join("|");
@@ -465,10 +468,10 @@ function drawCardImage(ctx, spec) {
     if (imageCacheTick % 24 === 0) pruneCardImageCache();
   }
   const radius = Math.min(10, Math.floor(h / 4));
-  const border = spec.hero ? "#f0b83f" : "rgba(198,149,75,0.86)";
+  const border = hero ? "#f0b83f" : "rgba(198,149,75,0.86)";
   ctx.save();
-  ctx.shadowColor = spec.hero ? "rgba(246, 210, 122, 0.36)" : "rgba(43, 28, 12, 0.14)";
-  ctx.shadowBlur = spec.hero ? Math.min(12, Math.max(5, h / 8)) : Math.min(8, Math.max(3, h / 12));
+  ctx.shadowColor = hero ? "rgba(246, 210, 122, 0.36)" : "rgba(43, 28, 12, 0.14)";
+  ctx.shadowBlur = hero ? Math.min(12, Math.max(5, h / 8)) : Math.min(8, Math.max(3, h / 12));
   ctx.shadowOffsetY = 1;
   fillRoundRect(ctx, x, y, w, h, radius, "#1f1a14", border);
   ctx.restore();
@@ -486,9 +489,9 @@ function drawCardImage(ctx, spec) {
     } else {
       ctx.drawImage(entry.img, x, y, w, h);
     }
-    ctx.fillStyle = spec.hero ? "rgba(255, 242, 170, 0.14)" : "rgba(255,255,255,0.08)";
+    ctx.fillStyle = hero ? "rgba(255, 242, 170, 0.14)" : "rgba(255,255,255,0.08)";
     ctx.fillRect(x, y, w, Math.max(4, h * 0.22));
-    if (spec.hero) {
+    if (hero) {
       ctx.fillStyle = "rgba(255, 217, 90, 0.12)";
       ctx.fillRect(x, y, w, h);
     }
@@ -497,7 +500,7 @@ function drawCardImage(ctx, spec) {
     drawGeneratedCardArt(ctx, spec, x, y, w, h);
   }
 
-  if (spec.hero) {
+  if (hero) {
     heroFrameStroke(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius, w >= 80 || h >= 100);
     if (w >= 44 && h >= 58) drawHeroCornerMarks(ctx, x, y, w, h);
   }
@@ -517,12 +520,13 @@ function drawCardImage(ctx, spec) {
 }
 
 function card(ctx, spec) {
-  const stroke = spec.hero ? "#f4b63d" : (spec.stroke || "#b98a45");
+  const hero = isHeroSpec(spec);
+  const stroke = hero ? "#f4b63d" : (spec.stroke || "#b98a45");
   ctx.save();
-  ctx.shadowColor = spec.hero ? "rgba(255, 202, 61, 0.55)" : "rgba(43, 28, 12, 0.16)";
-  ctx.shadowBlur = spec.hero ? 16 : 8;
+  ctx.shadowColor = hero ? "rgba(255, 202, 61, 0.55)" : "rgba(43, 28, 12, 0.16)";
+  ctx.shadowBlur = hero ? 16 : 8;
   ctx.shadowOffsetY = 2;
-  fillRoundRect(ctx, spec.x, spec.y, spec.w, spec.h, 11, spec.fill || (spec.hero ? "#20170d" : THEME.card), stroke);
+  fillRoundRect(ctx, spec.x, spec.y, spec.w, spec.h, 11, spec.fill || (hero ? "#20170d" : THEME.card), stroke);
   ctx.restore();
   if (spec.selectedCount > 0) {
     ctx.save();
@@ -539,7 +543,7 @@ function card(ctx, spec) {
     ctx.stroke();
     ctx.restore();
   }
-  const pad = spec.hero ? 5 : 4;
+  const pad = hero ? 5 : 4;
   const stripH = 17;
   const artX = spec.x + pad;
   const artY = spec.y + pad;
@@ -563,16 +567,16 @@ function card(ctx, spec) {
     text(ctx, label, artX + artW / 2, artY + artH / 2 + 1, 12, THEME.creamText, "center");
   }
   const nameW = spec.w - 4;
-  const nameFill = spec.hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)";
-  const nameStroke = spec.hero ? "#f4b63d" : "#e2cc9c";
-  const nameColor = spec.hero ? "#fff1a8" : "#3b2b18";
+  const nameFill = hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)";
+  const nameStroke = hero ? "#f4b63d" : "#e2cc9c";
+  const nameColor = hero ? "#fff1a8" : "#3b2b18";
   fillRoundRect(ctx, spec.x + 2, spec.y + spec.h - stripH - 1, nameW, stripH, 6, nameFill, nameStroke);
   text(ctx, short(spec.name, spec.nameMax || 4), spec.x + spec.w / 2, spec.y + spec.h - stripH / 2 - 1, 10, nameColor, "center");
   const isStrategy = isStrategyCategory(spec.category) || spec.strength === "策" || spec.strength === "局" || spec.strength === "谋";
   if (!isStrategy) {
     const bs = 22;
-    fillRoundRect(ctx, spec.x + 3, spec.y + 3, bs, bs, bs / 2, spec.hero ? "#1f2f4f" : THEME.rust, spec.hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
-    text(ctx, String(spec.strength == null ? "-" : spec.strength), spec.x + 3 + bs / 2, spec.y + 3 + bs / 2, 13, spec.hero ? "#ffe27a" : THEME.creamText, "center");
+    fillRoundRect(ctx, spec.x + 3, spec.y + 3, bs, bs, bs / 2, hero ? "#1f2f4f" : THEME.rust, hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
+    text(ctx, String(spec.strength == null ? "-" : spec.strength), spec.x + 3 + bs / 2, spec.y + 3 + bs / 2, 13, hero ? "#ffe27a" : THEME.creamText, "center");
   }
   if (spec.count > 1) {
     const label = `x${spec.count}`;
@@ -592,7 +596,7 @@ function card(ctx, spec) {
     fillRoundRect(ctx, bx, by, badgeW, badgeH, 9, "rgba(47,111,87,0.96)", "rgba(255,247,216,0.92)");
     text(ctx, label, bx + badgeW / 2, by + badgeH / 2 + 0.5, 10, THEME.creamText, "center");
   }
-  if (spec.hero) heroFrameStroke(ctx, spec.x + 1, spec.y + 1, spec.w - 2, spec.h - 2, 10, true);
+  if (hero) heroFrameStroke(ctx, spec.x + 1, spec.y + 1, spec.w - 2, spec.h - 2, 10, true);
 }
 
 function drawRemoteImage(ctx, url, x, y, w, h, options = {}) {

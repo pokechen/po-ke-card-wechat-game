@@ -151,12 +151,12 @@ function draw(ctx, view, actions, state, ui = {}) {
   button(ctx, { ...mine, label: `我方 ${short(state?.players?.[local]?.name || "玩家", 7)}`, size: 12, fill: info.playerIndex === local ? "#2f6f57" : "#8d6840", shadow: false });
   button(ctx, { ...opponent, label: `对方 ${short(state?.players?.[enemy]?.name || "玩家", 7)}`, size: 12, fill: info.playerIndex === enemy ? "#8f3c1f" : "#8d6840", shadow: false });
 
-  const normalCount = info.cards.filter(item => item.category !== "special" && item.category !== "weather").length;
-  const specialCount = info.cards.length - normalCount;
+  const normalCount = info.cards.filter(item => item.category !== "stratagem" && item.category !== "situation").length;
+  const strategyCount = info.cards.length - normalCount;
   const score = deckExpectedScore(info.cards);
   fillRoundRect(ctx, 18, info.summaryY, view.width - 36, 62, 13, "#fffaf0", "#dcc48d");
   text(ctx, `${player?.factionName || "阵营"} · 共 ${info.cards.length} 张 · ${info.groups.length} 种`, 30, info.summaryY + 18, 12, "#775c34");
-  const statsLine = `普通卡 ${normalCount} 张 · 特殊卡牌 ${specialCount} 张 ·`;
+  const statsLine = `普通卡 ${normalCount} 张 · 特殊卡牌 ${strategyCount} 张 ·`;
   text(ctx, statsLine, 30, info.summaryY + 42, 13, "#3b2b18");
   const scoreText = `总战力 ${score}`;
   const scoreW = ctx.measureText(scoreText).width;
@@ -192,16 +192,13 @@ function draw(ctx, view, actions, state, ui = {}) {
       w: info.cardW,
       h: info.cardH,
       name: displayName(item),
-      baseName: item.baseName,
-      imageUrl: item.imageUrl,
       summary: item.summary || item.abilityText,
       category: categoryLabel(item),
       faction: item.faction,
       row: item.row,
       abilities: item.abilities,
       abilityDisplayNames: item.abilityDisplayNames,
-      hero: item.hero,
-      strength: item.category === "special" || item.category === "weather" ? "策" : item.strength,
+      strength: item.category === "stratagem" || item.category === "situation" ? "策" : item.strength,
       nameMax: 4,
       count: group.count
     });

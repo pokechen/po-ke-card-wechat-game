@@ -1,5 +1,5 @@
 const { fillRoundRect, wrapText, short, drawCardImage, text } = require("../ui/canvas");
-const { cardSummary, displayName, abilityDescriptions, factionPerkSummary } = require("../core/cards");
+const { cardSummary, displayName, abilityDescriptions, factionPerkSummary, isHeroCard } = require("../core/cards");
 
 function wrappedHeight(ctx, content, maxWidth, lineHeight, maxLines, size) {
   const value = String(content || "");
@@ -44,7 +44,7 @@ function effectSections(card) {
   const leader = isLeaderCard(card);
   const effects = abilityDescriptions(card).map(cleanEffectText).filter(Boolean);
   if (!effects.length) {
-    const fallback = cleanEffectText(card?.abilityText || (leader || card?.category === "weather" || card?.category === "special" ? cardSummary(card) : ""));
+    const fallback = cleanEffectText(card?.abilityText || (leader || card?.category === "situation" || card?.category === "stratagem" ? cardSummary(card) : ""));
     if (fallback) effects.push(fallback);
   }
   const sections = [];
@@ -54,7 +54,7 @@ function effectSections(card) {
   }
   if (effects.length) {
     sections.push({
-      title: leader ? "主将技能" : (card?.category === "weather" ? "时局效果" : "特殊效果"),
+      title: leader ? "主将技能" : (card?.category === "situation" ? "时局效果" : "特殊效果"),
       content: effects.join("\n"),
       color: "#f1d58a",
       lines: 8
@@ -76,6 +76,7 @@ function drawSidePreview(ctx, sideCard, cx, y, w, h, alpha) {
 
 function drawDetail(ctx, view, actions, card, options = {}) {
   const { leftCard, rightCard, swipeOffset = 0 } = options || {};
+  const hero = isHeroCard(card);
   const panelW = Math.min(view.width - 28, 372);
   const panelX = (view.width - panelW) / 2;
 
@@ -178,11 +179,11 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     // 主卡牌外框（高亮边框）
     ctx.save();
     ctx.globalAlpha = anim ? anim.alpha : (1 - Math.abs(progress) * 0.5);
-    ctx.shadowColor = card.hero ? "rgba(255, 202, 61, 0.62)" : "rgba(43, 28, 12, 0.22)";
-    ctx.shadowBlur = card.hero ? 18 : 12;
+    ctx.shadowColor = hero ? "rgba(255, 202, 61, 0.62)" : "rgba(43, 28, 12, 0.22)";
+    ctx.shadowBlur = hero ? 18 : 12;
     ctx.shadowOffsetY = 3;
-    fillRoundRect(ctx, mcx - mainCardW/2 - 6, mcy - 6, mainCardW + 12, mainCardH + 12, 16, card.hero ? "#20170d" : "#f6ecd8", card.hero ? "#f4b63d" : "#d1ad6a");
-    if (card.hero) {
+    fillRoundRect(ctx, mcx - mainCardW/2 - 6, mcy - 6, mainCardW + 12, mainCardH + 12, 16, hero ? "#20170d" : "#f6ecd8", hero ? "#f4b63d" : "#d1ad6a");
+    if (hero) {
       ctx.strokeStyle = "#f4b63d";
       ctx.lineWidth = 4;
       ctx.strokeRect(mcx - mainCardW / 2 - 3, mcy - 3, mainCardW + 6, mainCardH + 6);
@@ -204,8 +205,8 @@ function drawDetail(ctx, view, actions, card, options = {}) {
 
     // 卡牌名称
     const nameStripH = 26;
-    fillRoundRect(ctx, mcx - mainCardW/2 + 4, mcy + mainCardH - nameStripH - 6, mainCardW - 8, nameStripH, 7, card.hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)", card.hero ? "#f4b63d" : "#e2cc9c");
-    text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, card.hero ? "#fff1a8" : "#2f2417", "center");
+    fillRoundRect(ctx, mcx - mainCardW/2 + 4, mcy + mainCardH - nameStripH - 6, mainCardW - 8, nameStripH, 7, hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)", hero ? "#f4b63d" : "#e2cc9c");
+    text(ctx, short(displayName(card), 7), mcx, mcy + mainCardH - nameStripH / 2 - 6, 13, hero ? "#fff1a8" : "#2f2417", "center");
 
     if (options.selected) {
       fillRoundRect(ctx, mcx - mainCardW / 2 - 10, mcy - 10, mainCardW + 20, mainCardH + 20, 18, "rgba(47, 111, 87, 0.16)", "#2f6f57");
@@ -240,7 +241,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
       });
     }
 
-    const isStrategy = card.category === "weather" || card.category === "special";
+    const isStrategy = card.category === "situation" || card.category === "stratagem";
     if (card.strength != null && !isStrategy && !isLeaderCard(card)) {
       const bs = 30;
       const bx = mcx - mainCardW/2 + 6;
@@ -252,10 +253,10 @@ function drawDetail(ctx, view, actions, card, options = {}) {
       ctx.shadowColor = "rgba(0,0,0,0.35)";
       ctx.shadowBlur = 4;
       ctx.shadowOffsetY = 1;
-      const badgeFill = boosted ? "#2f6f57" : (reduced ? "#c0392b" : (card.hero ? "#1f2f4f" : "#8f3c1f"));
-      fillRoundRect(ctx, bx, by, bs, bs, bs / 2, badgeFill, card.hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
+      const badgeFill = boosted ? "#2f6f57" : (reduced ? "#c0392b" : (hero ? "#1f2f4f" : "#8f3c1f"));
+      fillRoundRect(ctx, bx, by, bs, bs, bs / 2, badgeFill, hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
       ctx.restore();
-      text(ctx, String(displayStrength), bx + bs / 2, by + bs / 2, 15, card.hero ? "#ffe27a" : "#fff7d8", "center");
+      text(ctx, String(displayStrength), bx + bs / 2, by + bs / 2, 15, hero ? "#ffe27a" : "#fff7d8", "center");
     }
     ctx.restore();
     ctx.restore();

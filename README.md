@@ -36,7 +36,8 @@ node scripts/sync-pvp-core.js
 - 云函数接口：
   - `pvpRoom`：小游戏使用 `getAdminStatus` 与 `getAdminStats`；二者均需有效游戏令牌，统计接口还需 `ADMIN_OPENID` 命中配置的管理员列表。统计内容包含用户/AI 趋势、近 7 天活跃玩家对战榜和全服最近已完成对局；对局数据仅供管理员查看，展示用户头像与昵称，但不返回 OpenID、房间号或对局 ID。
   - `adminStats`：保留为事件函数，但同样强制校验微信 OpenID 白名单；未授权请求返回 `FORBIDDEN`。
-- 最近部署：`2026-07-23`，已同步 PVP 共享核心并更新 `pvpRoom` 与 `adminStats`：小游戏统计新增近 7 天活跃玩家对战榜、全服最近已完成对局，以及在线战绩可信来源保护。
+- 部署形态：客户端为微信小游戏，不是 Web 前端，因此不发布到 CloudBase 静态托管；两个后端均为事件型云函数，通过 `wx.cloud.callFunction` 调用，没有独立公开访问 URL。
+- 最近部署：`2026-07-31`，已同步 PVP 共享核心并更新 `pvpRoom` 与 `adminStats`：阵营资源及内部能力命名清理已同步到云函数共享代码和数据；两函数云端状态均为 `Active/Available`。`pvpRoom` 调用 `{ "action": "getLoginContext" }` 验证返回 `ok: true`；`adminStats` 空参数调用因管理员白名单校验返回 `FORBIDDEN`，需携带已配置的管理员身份才能读取统计数据。
 
 一键同步与部署脚本：
 

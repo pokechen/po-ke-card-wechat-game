@@ -70,7 +70,7 @@ function roundResultText(state) {
 function draw(ctx, view, actions, state) {
   clear(ctx, view.width, view.height);
   const online = state.mode === "online";
-  drawTopLeftBack(ctx, view, actions, online ? "restart" : "home");
+  drawTopLeftBack(ctx, view, actions, online ? "pvpExitRoom" : "home");
   const top = view.safeTop + 78;
   const result = resultTitle(state);
   text(ctx, result, view.width / 2, top, 30, "#2f2417", "center");
@@ -103,13 +103,10 @@ function draw(ctx, view, actions, state) {
     ? (state.rankSubmitting ? "排位结算中…" : (state.rankSubmitError || (rankDelta ? `${rankDelta.rankDeltaText || "排位已结算"} · ${rankDelta.after?.display || ""}` : "排位等待结算")))
     : "";
   text(ctx, rankLine, view.width / 2, top + 222, 11, state.rankSubmitError ? "#9f3b24" : "#775c34", "center");
-  const restart = { id: "restart", x: 46, y: top + 256, w: view.width - 92, h: 48 };
-  const cards = { id: "viewBattleCards", x: 46, y: online ? top + 256 : top + 316, w: view.width - 92, h: 48 };
-  if (!online) {
-    actions.push(restart);
-    button(ctx, { ...restart, label: "再来一局", size: 14 });
-  }
-  actions.push(cards);
+  const restart = { id: online ? "pvpContinue" : "restart", x: 46, y: top + 256, w: view.width - 92, h: 48 };
+  const cards = { id: "viewBattleCards", x: 46, y: top + 316, w: view.width - 92, h: 48 };
+  actions.push(restart, cards);
+  button(ctx, { ...restart, label: online ? "继续对战" : "再来一局", fill: online ? "#2f6f57" : undefined, stroke: online ? "#1d4f3c" : undefined, size: 14 });
   button(ctx, { ...cards, label: "查看双方卡牌", fill: "#8f3c1f", stroke: "#6d2d18", size: 14 });
 }
 

@@ -223,7 +223,7 @@ function drawSelectingScreen(ctx, view, actions, ui, pvp, settings) {
   const faction = rules.factionMode === "random" ? "random" : (factionLocked ? rules.faction : currentFaction(settings));
   const concreteFaction = faction !== "random";
   const selectedIds = concreteFaction ? getActiveCustomDeckIds(settings, faction) : [];
-  const status = concreteFaction ? deckStatus(selectedIds, faction) : { valid: false, total: 0, units: 0, specials: 0, ids: [] };
+  const status = concreteFaction ? deckStatus(selectedIds, faction) : { valid: false, total: 0, units: 0, strategies: 0, ids: [] };
   const deckMode = deckLocked ? "random" : (settings.pvpDeckMode === "custom" ? "custom" : "random");
   const useCustom = !deckLocked && concreteFaction && deckMode === "custom" && status.valid;
   const leader = selectedLeader(settings, faction);

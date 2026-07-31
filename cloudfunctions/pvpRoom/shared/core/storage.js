@@ -43,7 +43,7 @@ function normalizeGuides(raw) {
 const DEFAULT_SETTINGS = {
   mode: "ai",
   mode: "ai",
-  humanFaction: "Northern Realms",
+  humanFaction: "开国群雄",
   humanLineupMode: "selected",
   aiFaction: "random",
   humanLeaderId: "",
@@ -57,11 +57,11 @@ const DEFAULT_SETTINGS = {
   activeCustomDeckSlot: {},
   humanLeaderIds: {},
   aiLeaderIds: {},
-  pvpFaction: "Northern Realms",
+  pvpFaction: "开国群雄",
   pvpLeaderIds: {},
   pvpDeckMode: "random",
   pvpRuleFactionMode: "any",
-  pvpRuleFaction: "Northern Realms",
+  pvpRuleFaction: "开国群雄",
   pvpRuleDeckMode: "any",
   aiOpponentRemembered: false
 };
@@ -300,9 +300,9 @@ function getActiveCustomDeckIds(settings, faction) {
 function normalizeSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...settings };
   next.mode = next.mode === "hotseat" ? "hotseat" : "ai";
-  const legacyRandomLineup = next.humanFaction === "random";
-  next.humanLineupMode = legacyRandomLineup || next.humanLineupMode === "random" ? "random" : "selected";
-  if (legacyRandomLineup) next.humanFaction = "Northern Realms";
+  next.humanLineupMode = next.humanLineupMode === "random" ? "random" : "selected";
+  next.humanFaction = next.humanFaction || "开国群雄";
+  next.aiFaction = next.aiFaction === "random" ? "random" : (next.aiFaction || "草莽星火");
   next.customDeckEnabled = !!next.customDeckEnabled;
   next.customDecks = { ...safeObject(next.customDecks) };
   next.customDeckSlots = { ...safeObject(next.customDeckSlots) };
@@ -310,13 +310,13 @@ function normalizeSettings(settings) {
   next.humanLeaderIds = { ...safeObject(next.humanLeaderIds) };
   next.aiLeaderIds = { ...safeObject(next.aiLeaderIds) };
   next.pvpLeaderIds = { ...safeObject(next.pvpLeaderIds) };
-  next.pvpFaction = next.pvpFaction || next.humanFaction;
+  next.pvpFaction = next.pvpFaction === "random" ? "random" : (next.pvpFaction || next.humanFaction);
   next.pvpDeckMode = next.pvpDeckMode === "custom" ? "custom" : "random";
   next.pvpRuleFactionMode = ["fixed", "random"].includes(next.pvpRuleFactionMode) ? next.pvpRuleFactionMode : "any";
   next.pvpRuleFaction = next.pvpRuleFaction || next.pvpFaction || next.humanFaction;
   next.pvpRuleDeckMode = next.pvpRuleDeckMode === "autoOnly" ? "autoOnly" : "any";
   next.aiOpponentRemembered = !!next.aiOpponentRemembered;
-  if (!next.aiOpponentRemembered && next.aiFaction === "Monsters" && !next.aiLeaderId && !Object.keys(next.aiLeaderIds).length) {
+  if (!next.aiOpponentRemembered && next.aiFaction === "草莽星火" && !next.aiLeaderId && !Object.keys(next.aiLeaderIds).length) {
     next.aiFaction = "random";
   }
   const factions = Object.keys({ ...next.customDecks, ...next.customDeckSlots, [next.humanFaction]: true });

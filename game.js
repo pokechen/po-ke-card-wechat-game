@@ -38,7 +38,7 @@ const pvpClient = require("./js/core/pvpClient");
 const rankCore = require("./js/core/rank");
 const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, localMatchRecords, removeLocalMatchRecord, setRecordMatchCloudHook, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
 const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue, allCards } = require("./js/core/cards");
-const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex } = require("./js/core/battle");
+const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex, totalScore } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
 const ctx = view.ctx;
@@ -134,6 +134,11 @@ const app = {
     battleLogHistoryOpen: false,
     battleLogHistoryScroll: 0,
     battleRowScrolls: {},
+    passLeadHintActive: false,
+    passLeadHintActiveKey: "",
+    passLeadHintShownKey: "",
+    passLeadHintDismissedKey: "",
+    passLeadHintMatchKey: "",
     pvpShareGuideOpen: false,
     pvpShareCodeLoading: false,
     pvpShareCodePath: "",
@@ -168,6 +173,8 @@ setImageRenderHook(() => {
 
 const RECENT_PLAY_AUTO_DISMISS_MS = 2000;
 const ROUND_TRANSITION_NOTICE_MS = RECENT_PLAY_AUTO_DISMISS_MS * 2;
+const PASS_LEAD_HINT_KEY = "zhangyu.pass-lead-hint.count.v1";
+const MAX_PASS_LEAD_HINT_COUNT = 3;
 const ACTIVE_SINGLE_MATCH_KEY = "zhangyu.single-match.active.v1";
 const PENDING_RANK_RESULT_KEY = "zhangyu.rank-result.pending.v1";
 let activeSingleMatchSnapshot = "";
@@ -402,6 +409,94 @@ function visibleRecentPlaySeq() {
   const isVisibleCardPlay = isOpponentAction && (notice.actionType === "card" || notice.actionType === "leader") && notice.cardId;
   const isVisiblePass = isOpponentAction && notice.type === "pass";
   return (isVisibleCardPlay || isVisiblePass) ? (notice.seq || 0) : 0;
+}
+
+function localMatchPlayerIndex(match = app.match) {
+  return match?.mode === "online" && Number.isInteger(match.localPlayerIndex) ? match.localPlayerIndex : 0;
+}
+
+function passLeadHintStorageValue() {
+  try {
+    const api = typeof wx !== "undefined" ? wx : null;
+    const value = api && api.getStorageSync
+      ? api.getStorageSync(PASS_LEAD_HINT_KEY)
+      : (typeof globalThis !== "undefined" && globalThis.localStorage ? globalThis.localStorage.getItem(PASS_LEAD_HINT_KEY) : null);
+    const count = typeof value === "object" && value ? Number(value.count) : Number(value);
+    return Number.isFinite(count) ? Math.max(0, count) : 0;
+  } catch (err) {
+    return 0;
+  }
+}
+
+function savePassLeadHintStorageValue(count) {
+  const safeCount = Math.max(0, Math.min(MAX_PASS_LEAD_HINT_COUNT, Number(count) || 0));
+  try {
+    const api = typeof wx !== "undefined" ? wx : null;
+    if (api && api.setStorageSync) return api.setStorageSync(PASS_LEAD_HINT_KEY, safeCount);
+    if (typeof globalThis !== "undefined" && globalThis.localStorage) globalThis.localStorage.setItem(PASS_LEAD_HINT_KEY, String(safeCount));
+  } catch (err) {}
+}
+
+function passLeadHintMatchKey() {
+  if (!app.match) return "";
+  if (app.match.matchId) return `match:${app.match.matchId}`;
+  if (app.match.rankMatchId) return `rank:${app.match.rankMatchId}`;
+  if (isOnlineMatch()) return `online:${app.pvp.roomId || "room"}`;
+  if (!app.ui.passLeadHintMatchKey) app.ui.passLeadHintMatchKey = `single:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+  return app.ui.passLeadHintMatchKey;
+}
+
+function passLeadHintCandidate() {
+  const match = app.match;
+  if (app.scene !== "battle" || !match || match.over || match.roundTransition || match.pending) return null;
+  if (match.mulligan && match.mulligan.active) return null;
+  if (match.round !== 1 && match.round !== 2) return null;
+  if (visibleRecentPlaySeq()) return null;
+  if (app.ui.showCardGuide || (match.round === 1 && !app.ui.firstPlayerAnnounced)) return null;
+  if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid || app.ui.battleLogHistoryOpen || app.ui.discardPileOwner != null) return null;
+  const local = localMatchPlayerIndex(match);
+  const opponent = local === 0 ? 1 : 0;
+  const localPlayer = match.players?.[local];
+  const opponentPlayer = match.players?.[opponent];
+  if (!localPlayer || !opponentPlayer || localPlayer.passed || !opponentPlayer.passed) return null;
+  if (match.mode === "online" ? match.current !== local : match.current !== 0) return null;
+  const localScore = totalScore(localPlayer);
+  const opponentScore = totalScore(opponentPlayer);
+  if (localScore <= opponentScore) return null;
+  return { key: `${passLeadHintMatchKey()}:round:${match.round}:player:${local}`, localScore, opponentScore };
+}
+
+function preparePassLeadHint() {
+  const candidate = passLeadHintCandidate();
+  if (!candidate) {
+    app.ui.passLeadHintActive = false;
+    app.ui.passLeadHintActiveKey = "";
+    return;
+  }
+  if (app.ui.passLeadHintActive && app.ui.passLeadHintActiveKey === candidate.key) return;
+  app.ui.passLeadHintActive = false;
+  app.ui.passLeadHintActiveKey = "";
+  if (app.ui.passLeadHintDismissedKey === candidate.key) return;
+  if (app.ui.passLeadHintShownKey === candidate.key) {
+    app.ui.passLeadHintActive = true;
+    app.ui.passLeadHintActiveKey = candidate.key;
+    app.ui.passLeadHintScores = { local: candidate.localScore, opponent: candidate.opponentScore };
+    return;
+  }
+  const shownCount = passLeadHintStorageValue();
+  if (shownCount >= MAX_PASS_LEAD_HINT_COUNT) return;
+  savePassLeadHintStorageValue(shownCount + 1);
+  app.ui.passLeadHintShownKey = candidate.key;
+  app.ui.passLeadHintActive = true;
+  app.ui.passLeadHintActiveKey = candidate.key;
+  app.ui.passLeadHintScores = { local: candidate.localScore, opponent: candidate.opponentScore };
+}
+
+function dismissPassLeadHintForCurrent() {
+  if (!app.ui.passLeadHintActive && !app.ui.passLeadHintActiveKey) return;
+  app.ui.passLeadHintDismissedKey = app.ui.passLeadHintActiveKey;
+  app.ui.passLeadHintActive = false;
+  app.ui.passLeadHintActiveKey = "";
 }
 
 function scheduleRecentPlayAutoDismiss() {
@@ -769,9 +864,9 @@ function randomCardImageUrl() {
   const cards = Array.isArray(allCards) ? allCards : [];
   if (!cards.length) return "";
   const card = cards[Math.floor(Math.random() * cards.length)];
-  const baseName = card && (card.baseName || (card.imageUrl ? String(card.imageUrl).split("/").pop().replace(/\.webp$/i, "") : ""));
-  if (!baseName) return "";
-  return `${CARD_IMAGE_BASE_URL}/${encodeURIComponent(baseName)}.webp`;
+  const name = card?.name;
+  if (!name) return "";
+  return `${CARD_IMAGE_BASE_URL}/${encodeURIComponent(name)}.webp`;
 }
 
 function hasRealProfile() {
@@ -1110,6 +1205,11 @@ function startMatch(optionsPatch = {}) {
   app.ui.battleLogHistoryOpen = false;
   app.ui.battleLogHistoryScroll = 0;
   app.ui.battleRowScrolls = {};
+  app.ui.passLeadHintActive = false;
+  app.ui.passLeadHintActiveKey = "";
+  app.ui.passLeadHintShownKey = "";
+  app.ui.passLeadHintDismissedKey = "";
+  app.ui.passLeadHintMatchKey = `single:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   app.ui.dismissedRecentPlaySeq = 0;
   app.ui.dismissedLeaderRevealKey = "";
   app.ui.firstPlayerAnnounced = false;
@@ -1149,6 +1249,7 @@ function render() {
   if (app.scene === "battle") {
     app.ui.recentPlayAutoDismissMs = RECENT_PLAY_AUTO_DISMISS_MS;
     app.ui.roundTransitionNoticeMs = ROUND_TRANSITION_NOTICE_MS;
+    preparePassLeadHint();
     battleScene.draw(ctx, view, app.actions, app.match, app.ui);
   }
   if (app.scene === "result") resultScene.draw(ctx, view, app.actions, app.match);
@@ -1164,7 +1265,7 @@ function scheduleAi() {
     app.aiTimer = null;
     const acted = aiStep(app.match);
     if (!acted && !app.match.over && !app.match.pending && !app.match.roundTransition && app.match.current === 1) {
-      console.error("[battle] 系统行动执行失败，自动放弃当前回合以避免对局卡死。", app.match.strategy || "");
+      console.error("[battle] 系统行动执行失败，自动放弃当前回合以避免对局卡死。");
       pass(app.match);
     }
     persistActiveSingleMatch();
@@ -1802,14 +1903,14 @@ const POSTER_W = 750;
 const POSTER_H = 1200;
 const STATIC_CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
 const POSTER_ARTS = {
-  "Northern Realms": "assets/card-art/northern.webp",
-  "Nilfgaardian Empire": "assets/card-art/nilfgaard.webp",
-  "Scoia'tael": "assets/card-art/scoiatael.webp",
-  Monsters: "assets/card-art/monsters.webp",
-  Skellige: "assets/card-art/skellige.webp",
-  Neutral: "assets/card-art/neutral.webp",
-  special: "assets/card-art/special.webp",
-  weather: "assets/card-art/weather.webp"
+  "开国群雄": "assets/card-art/开国群雄.webp",
+  "纵横权谋": "assets/card-art/纵横权谋.webp",
+  "百家争鸣": "assets/card-art/百家争鸣.webp",
+  "草莽星火": "assets/card-art/草莽星火.webp",
+  "遗策复兴": "assets/card-art/遗策复兴.webp",
+  "天下共识": "assets/card-art/天下共识.webp",
+  stratagem: "assets/card-art/stratagem.webp",
+  situation: "assets/card-art/situation.webp"
 };
 
 function posterSeed(roomId) {
@@ -1818,7 +1919,7 @@ function posterSeed(roomId) {
 }
 
 function posterCardHash(card, seed) {
-  const textValue = `${card?.id || ""}${card?.baseName || card?.name || ""}`;
+  const textValue = `${card?.id || ""}${card?.name || ""}`;
   let value = seed || 1;
   for (let i = 0; i < textValue.length; i++) value = (value * 33 + textValue.charCodeAt(i)) % 1000003;
   return value;
@@ -1826,15 +1927,13 @@ function posterCardHash(card, seed) {
 
 function posterSortedCards(cards, seed) {
   return cards
-    .filter(card => card && card.category !== "weather" && card.category !== "special")
+    .filter(card => card && card.category !== "situation" && card.category !== "stratagem")
     .slice()
     .sort((a, b) => posterCardHash(a, seed) - posterCardHash(b, seed));
 }
 
 function posterCardUniqueKey(card) {
-  const imageFile = posterNormalizeWebpFileName(posterFileNameFromImageUrl(card?.imageUrl));
-  if (imageFile) return `image:${imageFile}`;
-  const name = String(card?.baseName || card?.name || "").trim();
+  const name = String(card?.name || "").trim();
   return name ? `name:${name}` : `id:${card?.id || ""}`;
 }
 
@@ -1855,13 +1954,6 @@ function posterPickCards(roomId, faction) {
   return picked;
 }
 
-function posterFileNameFromImageUrl(imageUrl) {
-  const value = String(imageUrl || "");
-  const cleanValue = value.split("?")[0].split("#")[0];
-  const fileName = cleanValue.split("/").filter(Boolean).pop() || "";
-  try { return decodeURIComponent(fileName); } catch (err) { return fileName; }
-}
-
 function posterCleanImageFileName(fileName) {
   return String(fileName || "")
     .trim()
@@ -1877,14 +1969,20 @@ function posterNormalizeWebpFileName(fileName) {
   return /\.[^/.]+$/.test(value) ? value.replace(/\.[^/.]+$/, ".webp") : `${value}.webp`;
 }
 
-function posterStaticCardImageUrl(card) {
-  const rawFileName = posterFileNameFromImageUrl(card?.imageUrl) || `${card?.baseName || card?.name || ""}.webp`;
-  const fileName = posterNormalizeWebpFileName(rawFileName);
-  return fileName ? encodeURI(`${STATIC_CARD_IMAGE_BASE_URL}/${fileName}`) : "";
+function posterStaticCardImageUrl(fileName) {
+  const normalizedFileName = posterNormalizeWebpFileName(fileName);
+  return normalizedFileName ? encodeURI(`${STATIC_CARD_IMAGE_BASE_URL}/${normalizedFileName}`) : "";
+}
+
+function posterCardImageFileNames(card) {
+  return [card?.name]
+    .map(posterNormalizeWebpFileName)
+    .filter((fileName, index, arr) => fileName && arr.indexOf(fileName) === index);
 }
 
 function posterCardImageSources(card) {
-  return [posterStaticCardImageUrl(card), POSTER_ARTS[card?.category], POSTER_ARTS[card?.faction], POSTER_ARTS.Neutral].filter((src, index, arr) => src && arr.indexOf(src) === index);
+  const fileNames = posterCardImageFileNames(card);
+  return [...fileNames.map(posterStaticCardImageUrl), POSTER_ARTS[card?.category], POSTER_ARTS[card?.faction], POSTER_ARTS["天下共识"]].filter((src, index, arr) => src && arr.indexOf(src) === index);
 }
 
 function posterLoadImage(api, sources) {
@@ -2211,7 +2309,8 @@ function normalizePvpRoomId(value) {
 
 function resolvePvpFaction(settings) {
   const value = settings.pvpFaction || settings.humanFaction || FACTION_KEYS[0];
-  return value === "random" || FACTION_KEYS.includes(value) ? value : FACTION_KEYS[0];
+  if (value === "random") return value;
+  return FACTION_KEYS.includes(value) ? value : FACTION_KEYS[0];
 }
 
 function resolvePvpLeaderId(settings, faction) {
@@ -2365,7 +2464,7 @@ function pvpReadyDebug(room) {
 }
 
 function cardLabel(card) {
-  return card ? (card.name || card.baseName || "主将") : "主将";
+  return card ? (card.name || "主将") : "主将";
 }
 
 function applyRecordRoundMorale(morale, winner) {
@@ -2498,7 +2597,7 @@ function applyRoomUpdate(room, playerIndex) {
   if (Number.isInteger(playerIndex)) app.pvp.playerIndex = playerIndex;
   if (room.match) {
     app.match = decorateOnlineMatch(room.match);
-    if (["revive", "leaderDiscard", "decoy"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
+    if (["revive", "leaderDiscard", "recall"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
   } else if (room.status !== "finished") app.match = null;
   app.pvp.loading = false;
   app.pvp.submitting = false;
@@ -2544,7 +2643,7 @@ function applyRoomUpdate(room, playerIndex) {
   }
   if (room.status === "finished" && app.match) {
     recordOnlineMatch(app.match);
-    if (!["result", "battleCards"].includes(app.scene)) return setScene("result");
+    if (!["result", "battleCards", "pvpRoom"].includes(app.scene)) return setScene("result");
   }
   if (room.status === "selecting") {
     app.ui.matchSetupDropdown = "";
@@ -2676,6 +2775,34 @@ function confirmDissolvePvpRoom() {
   }
   if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm("确定解散房间吗？")) return render();
   return dissolvePvpRoom();
+}
+
+function confirmExitPvpRoom() {
+  if (!app.pvp.roomId) {
+    resetPvpState();
+    app.match = null;
+    return setScene("menu");
+  }
+  const isHost = app.pvp.playerIndex === 0;
+  const api = typeof wx !== "undefined" ? wx : null;
+  const content = isHost ? "确认退出房间吗？房主退出后房间将解散。" : "确认退出房间吗？退出后将回到首页。";
+  if (api && api.showModal) {
+    api.showModal({
+      title: "退出房间？",
+      content,
+      confirmText: "退出",
+      confirmColor: "#8f3c1f",
+      cancelText: "取消",
+      success: res => {
+        if (!res.confirm) return render();
+        return isHost ? dissolvePvpRoom() : leavePvpRoom();
+      },
+      fail: () => render()
+    });
+    return;
+  }
+  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm(content)) return render();
+  return isHost ? dissolvePvpRoom() : leavePvpRoom();
 }
 
 function enterPvpSetup(roomId) {
@@ -3201,16 +3328,16 @@ function resolveLeaderDiscardChoice(cardUid) {
   return afterHumanAction();
 }
 
-function resolveDecoyChoice(cardUid) {
-  if (!app.match?.pending || app.match.pending.type !== "decoy" || !cardUid) return render();
+function resolveRecallChoice(cardUid) {
+  if (!app.match?.pending || app.match.pending.type !== "recall" || !cardUid) return render();
   closeBattleCardDetail();
   if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
   resolvePending(app.match, { uid: cardUid });
   return afterHumanAction();
 }
 
-function resolveLeaderWeatherChoice(cardUid) {
-  if (!app.match?.pending || app.match.pending.type !== "leaderWeather" || !cardUid) return render();
+function resolveLeaderSituationChoice(cardUid) {
+  if (!app.match?.pending || app.match.pending.type !== "leaderSituation" || !cardUid) return render();
   closeBattleCardDetail();
   if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
   resolvePending(app.match, { uid: cardUid });
@@ -3233,8 +3360,8 @@ function confirmLeaderDiscardChoice(cardUid) {
   if (!card) return render();
   if (selectedUids.includes(cardUid) || selectedUids.length < 1) return resolveLeaderDiscardChoice(cardUid);
   const first = (pending.candidates || []).find(item => item.uid === selectedUids[0]);
-  const firstName = first?.name || first?.baseName || "已选手牌";
-  const secondName = card.name || card.baseName || "当前手牌";
+  const firstName = first?.name || "已选手牌";
+  const secondName = card.name || "当前手牌";
   const api = typeof wx !== "undefined" ? wx : null;
   const content = `将弃置「${firstName}」和「${secondName}」，并抽 1 张牌。`;
   if (api && api.showModal) {
@@ -3306,13 +3433,25 @@ function confirmSurrenderMatch() {
   return performSurrenderMatch();
 }
 
+function hasOpponentPassed(match = app.match) {
+  if (!match || !Array.isArray(match.players)) return false;
+  const local = localMatchPlayerIndex(match);
+  const opponent = local === 0 ? 1 : 0;
+  return !!match.players[opponent]?.passed;
+}
+
 function confirmPass() {
+  const opponentPassed = hasOpponentPassed();
+  if (opponentPassed) return performPass();
+  const title = "确认放弃";
+  const content = "放弃后本小局将不再出牌，确定要放弃吗？";
+  const confirmText = "放弃";
   const api = typeof wx !== "undefined" ? wx : null;
   if (api && api.showModal) {
     api.showModal({
-      title: "确认放弃",
-      content: "放弃后本小局将不再出牌，确定要放弃吗？",
-      confirmText: "放弃",
+      title,
+      content,
+      confirmText,
       confirmColor: "#8f3c1f",
       cancelText: "再想想",
       success: res => {
@@ -3323,7 +3462,7 @@ function confirmPass() {
     });
     return;
   }
-  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm("确定要放弃吗？")) return render();
+  if (typeof globalThis !== "undefined" && typeof globalThis.confirm === "function" && !globalThis.confirm(content)) return render();
   return performPass();
 }
 
@@ -3582,8 +3721,8 @@ function addOneCardFromGroup(currentIds, groupIds, faction) {
   const card = cardById(nextId);
   if (!card) return currentIds;
   const status = deckStatus(currentIds, faction);
-  const isSpecial = card.category === "special" || card.category === "weather";
-  if (status.total >= 40 || (isSpecial && status.specials >= 10)) return currentIds;
+  const isStrategyCard = card.category === "stratagem" || card.category === "situation";
+  if (status.total >= 40 || (isStrategyCard && status.strategies >= 10)) return currentIds;
   return currentIds.concat(nextId);
 }
 
@@ -4087,6 +4226,7 @@ function returnPvpRoom() {
   app.pvp.submitting = true;
   pvpClient.returnToRoom(app.pvp.roomId).then(result => {
     applyRoomUpdate(result.room, result.playerIndex);
+    if (result.room?.status === "finished" && app.scene !== "pvpRoom") return setScene("pvpRoom");
   }).catch(err => {
     app.pvp.submitting = false;
     toast(err.message || "返回房间失败");
@@ -4150,9 +4290,7 @@ function handlePvpRoom(action) {
   if (action.id === "pvpGoSetup") return setScene("pvpSetup");
   if (action.id === "pvpReturnRoom") return returnPvpRoom();
   if (action.id === "pvpBack") {
-    if (app.pvp.roomId && app.pvp.room) {
-      return app.pvp.playerIndex === 0 ? confirmDissolvePvpRoom() : leavePvpRoom();
-    }
+    if (app.pvp.roomId && app.pvp.room) return confirmExitPvpRoom();
     resetPvpState();
     app.match = null;
     return setScene("menu");
@@ -4168,6 +4306,10 @@ function handleBattle(action) {
   }
   if (action.id === "dismissGuide") {
     app.ui.guideDismissed = true;
+    return render();
+  }
+  if (action.id === "dismissPassLeadHint") {
+    dismissPassLeadHintForCurrent();
     return render();
   }
   if (!app.match) return;
@@ -4216,7 +4358,7 @@ function handleBattle(action) {
     if (app.match.pending?.type === "revive" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return confirmSkipRevivePending();
     }
-    if (["leaderDiscard", "decoy", "leaderWeather"].includes(app.match.pending?.type) && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
+    if (["leaderDiscard", "recall", "leaderSituation"].includes(app.match.pending?.type) && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return cancelBattlePendingChoice();
     }
     app.ui.battleCardDetailId = "";
@@ -4227,8 +4369,8 @@ function handleBattle(action) {
   }
   if (action.id === "mulliganDetailSwap") return handleMulliganSwap(action.cardUid, true);
   if (action.id === "targetChoice" && app.match.pending?.type === "leaderDiscard") return confirmLeaderDiscardChoice(action.cardUid);
-  if (action.id === "targetChoice" && app.match.pending?.type === "decoy") return resolveDecoyChoice(action.cardUid);
-  if (action.id === "targetChoice" && app.match.pending?.type === "leaderWeather") return resolveLeaderWeatherChoice(action.cardUid);
+  if (action.id === "targetChoice" && app.match.pending?.type === "recall") return resolveRecallChoice(action.cardUid);
+  if (action.id === "targetChoice" && app.match.pending?.type === "leaderSituation") return resolveLeaderSituationChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "revive") {
     closeBattleCardDetail();
     if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: action.cardUid } });
@@ -4284,7 +4426,7 @@ function handleBattle(action) {
     }
     if (action.id === "leader") return submitPvpAction({ type: "leader" });
     if (action.id === "card") return submitPvpAction({ type: "card", cardUid: action.cardUid });
-    if (action.id === "pass") return confirmPass();
+    if (action.id === "pass") { dismissPassLeadHintForCurrent(); return confirmPass(); }
     return render();
   }
 
@@ -4312,7 +4454,7 @@ function handleBattle(action) {
   }
   if (action.id === "leader") { useLeader(app.match, app.match.current); markLeaderSkillPart("usedSkill"); }
   if (action.id === "card") playCard(app.match, action.cardUid);
-  if (action.id === "pass") return confirmPass();
+  if (action.id === "pass") { dismissPassLeadHintForCurrent(); return confirmPass(); }
   afterHumanAction();
 }
 
@@ -4373,14 +4515,15 @@ function handleAction(action) {
       app.ui.detailSwipe = null;
       return setScene("battleCards");
     }
+    if (action.id === "pvpContinue") return returnPvpRoom();
     if (action.id === "restart") {
       if (isOnlineMatch()) return returnPvpRoom();
       if (app.match?.ranked) return startRankMatch();
       return startMatch();
     }
+    if (action.id === "pvpExitRoom") return confirmExitPvpRoom();
     if (action.id === "home") {
-      if (isOnlineMatch() && app.pvp.playerIndex === 0) return confirmDissolvePvpRoom();
-      if (isOnlineMatch()) resetPvpState();
+      if (isOnlineMatch()) return confirmExitPvpRoom();
       app.match = null;
       setScene("menu");
     }
@@ -4399,17 +4542,17 @@ function normalizeTouch(event) {
 
 function mergeBattlePlayLogEntries(logs) {
   const entries = [];
-  let pendingMuster = "";
+  let pendingRecruit = "";
   (logs || []).forEach(item => {
     const value = String(item || "");
     if (/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)/.test(value)) {
-      pendingMuster = value.replace(/^集贤生效：/, "集贤").replace(/。$/, "");
+      pendingRecruit = value.replace(/^集贤生效：/, "集贤").replace(/。$/, "");
       return;
     }
     if (/打出|使用主将/.test(value)) {
-      const textValue = pendingMuster ? `${value.replace(/。$/, "")}；${pendingMuster}。` : value;
+      const textValue = pendingRecruit ? `${value.replace(/。$/, "")}；${pendingRecruit}。` : value;
       entries.push({ text: textValue });
-      pendingMuster = "";
+      pendingRecruit = "";
     }
   });
   return entries;
@@ -4427,7 +4570,7 @@ function summonHistoryInfo(entry) {
 
 function shouldHideSummonedBattleEntry(history, entry) {
   if (!entry || entry.actionType !== "card" || !Number.isFinite(entry.seq)) return false;
-  const name = entry.baseName || entry.name || "";
+  const name = entry.name || "";
   if (!name) return false;
   return history.some(parent => {
     if (!parent || !Number.isFinite(parent.seq) || parent.seq >= entry.seq) return false;
@@ -4988,8 +5131,8 @@ function settingDetailEntries(settings, ui) {
   const tab = ui.settingCardTab || "all";
   const cards = eligibleCards(settings.humanFaction).filter(card => {
     if (tab === "all") return true;
-    if (tab === "special") return card.category === "special" || card.category === "weather";
-    if (tab === "hero") return !!card.hero;
+    if (tab === "strategy") return card.category === "stratagem" || card.category === "situation";
+    if (tab === "hero") return isHeroCard(card);
     if (!(card.category === "unit" || card.category === "hero")) return false;
     return (card.row || []).includes(tab);
   });

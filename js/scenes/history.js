@@ -63,7 +63,7 @@ function leaderCard(id, name) {
   if (byId) return byId;
   const target = cleanName(name);
   if (!target) return null;
-  return LEADERS.find(card => displayName(card) === target || cleanName(card.baseName || card.name) === target) || null;
+  return LEADERS.find(card => displayName(card) === target || cleanName(card.name) === target) || null;
 }
 
 function applyRoundMorale(morale, winner) {

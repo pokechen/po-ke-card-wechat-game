@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, card, wrapText, drawCardImage, short } = require("../ui/canvas");
-const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility } = require("../core/cards");
-const { totalScore, rowScore, handOwnerIndex, hasActiveHalfWeatherLeader } = require("../core/battle");
+const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility, isHeroCard } = require("../core/cards");
+const { totalScore, rowScore, handOwnerIndex, hasActiveHalfSituationLeader } = require("../core/battle");
 const { loadSave } = require("../core/storage");
 const { drawDetail } = require("./cardDetail");
 
@@ -58,11 +58,11 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
 }
 
 function fieldSortOrder(card) {
-  if (hasAbility(card, "Commander's Horn")) return -10;
+  if (hasAbility(card, "鼓舞")) return -10;
   if ((card.strength || 0) <= 1) return 100;
   const abilities = card.abilities || [];
-  if (abilities.includes("Morale Boost")) return 20;
-  if (card.hero) return -5;
+  if (abilities.includes("振势")) return 20;
+  if (isHeroCard(card)) return -5;
   return 0;
 }
 
@@ -93,10 +93,10 @@ function drawFittedText(ctx, content, x, y, maxWidth, startSize, color) {
 
 function drawFieldCard(ctx, item, rect, rowH, suppressed) {
   const power = item.effective == null ? item.strength : item.effective;
-  const reduced = suppressed && !item.hero && item.effective != null && item.effective < (item.strength || 0);
+  const reduced = suppressed && !isHeroCard(item) && item.effective != null && item.effective < (item.strength || 0);
   const stripH = Math.max(9, Math.min(12, Math.floor(rect.h * 0.34)));
-  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 7, item.hero ? "#21170c" : (reduced ? "#f4d3c8" : "#f9edcf"), item.hero ? "#f4b63d" : (reduced ? "#c0392b" : "#c6954b"));
-  if (item.hero) {
+  fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 7, isHeroCard(item) ? "#21170c" : (reduced ? "#f4d3c8" : "#f9edcf"), isHeroCard(item) ? "#f4b63d" : (reduced ? "#c0392b" : "#c6954b"));
+  if (isHeroCard(item)) {
     ctx.save();
     ctx.strokeStyle = "rgba(244, 182, 61, 0.98)";
     ctx.lineWidth = 2;
@@ -117,10 +117,10 @@ function drawFieldCard(ctx, item, rect, rowH, suppressed) {
     imageW: rect.w - 6,
     imageH: rect.h - 6
   });
-  fillRoundRect(ctx, rect.x + 2, rect.y + rect.h - stripH - 1, rect.w - 4, stripH, 5, item.hero ? "rgba(31, 23, 13, 0.96)" : "rgba(255, 249, 235, 0.96)", item.hero ? "#f4b63d" : "#e2cc9c");
-  drawFittedText(ctx, item.name || item.baseName || "卡牌", rect.x + rect.w / 2, rect.y + rect.h - stripH / 2 - 1, rect.w - 4, stripH >= 11 ? 7.5 : 6.5, item.hero ? "#fff1a8" : "#3b2b18");
+  fillRoundRect(ctx, rect.x + 2, rect.y + rect.h - stripH - 1, rect.w - 4, stripH, 5, isHeroCard(item) ? "rgba(31, 23, 13, 0.96)" : "rgba(255, 249, 235, 0.96)", isHeroCard(item) ? "#f4b63d" : "#e2cc9c");
+  drawFittedText(ctx, item.name || "卡牌", rect.x + rect.w / 2, rect.y + rect.h - stripH / 2 - 1, rect.w - 4, stripH >= 11 ? 7.5 : 6.5, isHeroCard(item) ? "#fff1a8" : "#3b2b18");
   const badge = Math.min(17, Math.max(14, Math.floor(rect.h * 0.48)));
-  fillRoundRect(ctx, rect.x + 2, rect.y + 2, badge, badge, badge / 2, reduced ? "#c0392b" : (item.hero ? "#d7a026" : "rgba(143,60,31,0.92)"), item.hero ? "#fff0a8" : "rgba(255,247,216,0.88)");
+  fillRoundRect(ctx, rect.x + 2, rect.y + 2, badge, badge, badge / 2, reduced ? "#c0392b" : (isHeroCard(item) ? "#d7a026" : "rgba(143,60,31,0.92)"), isHeroCard(item) ? "#fff0a8" : "rgba(255,247,216,0.88)");
   drawFittedText(ctx, reduced ? `↓${power}` : String(power), rect.x + 2 + badge / 2, rect.y + 2 + badge / 2, badge - 3, 8, "#fff7d8");
 }
 
@@ -210,18 +210,18 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
     rowOrder.forEach((row, index) => {
       const y = baseY + index * (rowH + gap);
-      const suppressed = !!state.weather[row];
-      const halfWeather = suppressed && hasActiveHalfWeatherLeader(state, player);
+      const suppressed = !!state.situations[row];
+      const halfSituation = suppressed && hasActiveHalfSituationLeader(state, player);
       const hasHorn = rowHornActive(state, playerIndex, row);
-      fillRoundRect(ctx, 12, y, view.width - 24, rowH, 9, halfWeather ? "#e8d5a8" : (suppressed ? "#ecd6b4" : (isEnemySide ? "#efe6d2" : "#fffaf0")), halfWeather ? "#b8860b" : (suppressed ? "#c0392b" : "#d3b982"));
-      if (halfWeather) fillRoundRect(ctx, 12, y, 4, rowH, 2, "#b8860b");
+      fillRoundRect(ctx, 12, y, view.width - 24, rowH, 9, halfSituation ? "#e8d5a8" : (suppressed ? "#ecd6b4" : (isEnemySide ? "#efe6d2" : "#fffaf0")), halfSituation ? "#b8860b" : (suppressed ? "#c0392b" : "#d3b982"));
+      if (halfSituation) fillRoundRect(ctx, 12, y, 4, rowH, 2, "#b8860b");
       else if (suppressed) fillRoundRect(ctx, 12, y, 4, rowH, 2, "#c0392b");
-      text(ctx, ROW_LABELS[row], 22, y + rowH / 2 - (suppressed ? 7 : 0), rowH >= 70 ? 12 : 11, suppressed ? (halfWeather ? "#8b6914" : "#a8321f") : "#775c34");
-      const statusLabel = halfWeather ? "半损" : (suppressed ? "压1" : "");
+      text(ctx, ROW_LABELS[row], 22, y + rowH / 2 - (suppressed ? 7 : 0), rowH >= 70 ? 12 : 11, suppressed ? (halfSituation ? "#8b6914" : "#a8321f") : "#775c34");
+      const statusLabel = halfSituation ? "半损" : (suppressed ? "压1" : "");
       if (statusLabel) {
         const statusW = 34;
         const statusY = y + rowH / 2 + 3;
-        fillRoundRect(ctx, 22, statusY, statusW, 14, 7, halfWeather ? "#b8860b" : "#c0392b");
+        fillRoundRect(ctx, 22, statusY, statusW, 14, 7, halfSituation ? "#b8860b" : "#c0392b");
         text(ctx, statusLabel, 22 + statusW / 2, statusY + 7, 8.5, "#fff7d8", "center");
       }
       text(ctx, `${rowScore(player, row)}`, view.width - 24, y + rowH / 2, rowH >= 70 ? 14 : 13, "#8f3c1f", "right");
@@ -299,7 +299,7 @@ const ACTION_BUTTON_BOTTOM_GAP = 4;
 const ACTION_BUTTON_BOTTOM_OFFSET = ACTION_BUTTON_H + ACTION_BUTTON_BOTTOM_GAP;
 
 function handSortGroup(card) {
-  if (card.category === "special" || card.category === "weather") return 1;
+  if (card.category === "stratagem" || card.category === "situation") return 1;
   if (card.category === "leader") return 2;
   return 0;
 }
@@ -311,7 +311,7 @@ function handEffectKey(card) {
 }
 
 function handCardKey(card) {
-  return String(card.baseName || card.name || card.id || "");
+  return String(card.name || card.id || "");
 }
 
 function sortedHandCards(hand) {
@@ -346,7 +346,7 @@ function orderedHandCards(hand, state, ui = {}) {
 
 function cardMetaText(card) {
   const rowName = (card.row || []).map(row => ROW_LABELS[row]).join("/");
-  if (card.category === "weather" || card.category === "special") {
+  if (card.category === "situation" || card.category === "stratagem") {
     return [categoryLabel(card), rowName].filter(Boolean).join(" · ");
   }
   return `${categoryLabel(card)} · ${rowName || "无阵线"} · ${card.strength ?? ""}`;
@@ -396,16 +396,13 @@ function drawHand(ctx, view, actions, state, ui) {
       w: bounds.cardW,
       h: cardH,
       name: item.name,
-      baseName: item.baseName,
-      imageUrl: item.imageUrl,
       summary: item.summary,
       category: categoryLabel(item),
       faction: item.faction,
       row: item.row,
       abilities: item.abilities,
       abilityDisplayNames: item.abilityDisplayNames,
-      hero: item.hero,
-      strength: item.category === "weather" || item.category === "special" ? "" : item.strength,
+      strength: item.category === "situation" || item.category === "stratagem" ? "" : item.strength,
       nameMax: 4
     };
     const hitX = Math.max(bounds.left, x);
@@ -483,7 +480,7 @@ function drawPendingChoice(ctx, view, actions, state) {
     return;
   }
   if (pending.type === "revive") return;
-  if (pending.type === "leaderWeather") return;
+  if (pending.type === "leaderSituation") return;
   const candidates = (pending.candidates || []).slice(0, 3);
   const w = Math.floor((view.width - 94) / 3);
   candidates.forEach((entry, index) => {
@@ -492,8 +489,8 @@ function drawPendingChoice(ctx, view, actions, state) {
     actions.push(rect);
     button(ctx, { ...rect, label: `${item.name.slice(0, 4)} ${item.effective == null ? item.strength || "" : item.effective}`, size: 10, fill: "#7a5a95" });
   });
-  const skipId = pending.type === "decoy" ? "pendingCancel" : "pendingSkip";
-  const skipLabel = pending.type === "decoy" ? "取消" : "跳过";
+  const skipId = pending.type === "recall" ? "pendingCancel" : "pendingSkip";
+  const skipLabel = pending.type === "recall" ? "取消" : "跳过";
   const skipBtn = { id: skipId, x: view.width - 70, y: panelY + 28, w: 52, h: 28 };
   actions.push(skipBtn);
   button(ctx, { ...skipBtn, label: skipLabel, size: 10, fill: "#8d6840" });
@@ -571,7 +568,7 @@ function groupSameNameCards(cards) {
   const map = new Map();
   const order = [];
   cards.forEach(card => {
-    const key = `${card.baseName || card.id}__${card.faction || ""}`;
+    const key = `${card.name || card.id}__${card.faction || ""}`;
     const existing = map.get(key);
     if (!existing) {
       map.set(key, { ...card, stackCount: 1 });
@@ -586,19 +583,19 @@ function groupSameNameCards(cards) {
 function visiblePendingDetailCards(state) {
   if (!state.pending || state.pending.type === "row") return [];
   const cards = (state.pending.candidates || []).map(entry => entry.card || entry).filter(Boolean);
-  if (state.pending.type === "decoy") return groupSameNameCards(cards);
+  if (state.pending.type === "recall") return groupSameNameCards(cards);
   return cards;
 }
 
 function pendingDetailType(state, ui = {}) {
-  if (!state?.pending || !["revive", "leaderDiscard", "decoy", "leaderWeather"].includes(state.pending.type)) return "";
+  if (!state?.pending || !["revive", "leaderDiscard", "recall", "leaderSituation"].includes(state.pending.type)) return "";
   return visiblePendingDetailCards(state).some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))
     ? state.pending.type
     : "";
 }
 
 function ensurePendingDetail(state, ui = {}) {
-  if (!state?.pending || !["revive", "leaderDiscard", "decoy", "leaderWeather"].includes(state.pending.type) || !isLocalOnlineAction(state)) return;
+  if (!state?.pending || !["revive", "leaderDiscard", "recall", "leaderSituation"].includes(state.pending.type) || !isLocalOnlineAction(state)) return;
   if (ui.battleCardDetailId || ui.battleCardDetailUid) return;
   const selected = new Set(state.pending.selectedUids || []);
   const first = visiblePendingDetailCards(state).find(card => !selected.has(card.uid)) || visiblePendingDetailCards(state)[0];
@@ -626,15 +623,15 @@ function detailCardEntries(state, ui = {}, view = null) {
 }
 
 function leaderTextForBattle(player) {
-  return `${player?.leader?.baseName || ""} ${player?.leader?.leaderAbility || ""} ${player?.leader?.abilityText || ""}`;
+  return `${player?.leader?.name || ""} ${player?.leader?.abilityText || ""}`;
 }
 
-function hasSpyDoubleLeader(player) {
-  return /treacherous|both sides|spy.*double|出使.*翻倍|间谍翻倍/i.test(leaderTextForBattle(player));
+function hasEnvoyDoubleLeader(player) {
+  return /出使.*翻倍|间谍翻倍/i.test(leaderTextForBattle(player));
 }
 
-function spyDoubleActive(state) {
-  return state.players.some(p => p.leaderUsed && hasSpyDoubleLeader(p));
+function envoyDoubleActive(state) {
+  return state.players.some(p => p.leaderUsed && hasEnvoyDoubleLeader(p));
 }
 
 function collectBoardInstances(state, card) {
@@ -643,7 +640,7 @@ function collectBoardInstances(state, card) {
   state.players.forEach((player, pi) => {
     ROWS.forEach(row => {
       (player.board[row] || []).forEach(item => {
-        if (item.id === card.id || (card.baseName && item.baseName === card.baseName && item.faction === card.faction)) {
+        if (item.id === card.id || (card.name && item.name === card.name && item.faction === card.faction)) {
           results.push({ card: item, playerIndex: pi, row });
         }
       });
@@ -661,12 +658,12 @@ function describeBoardCardEffect(state, context) {
   const lines = [];
   const rowLabel = ROW_LABELS[row] || row;
 
-  if (card.hero) {
+  if (isHeroCard(card)) {
     const blocked = [];
-    if (state.weather[row]) blocked.push("时局");
-    if (state.rowHorn?.[playerIndex]?.[row] || rowCards.some(item => hasAbility(item, "Commander's Horn"))) blocked.push("鼓舞");
-    if (rowCards.some(item => item.uid !== card.uid && hasAbility(item, "Morale Boost"))) blocked.push("振势");
-    if (hasAbility(card, "Tight Bond") && rowCards.filter(item => hasAbility(item, "Tight Bond") && item.baseName === card.baseName).length > 1) blocked.push("同盟");
+    if (state.situations[row]) blocked.push("时局");
+    if (state.rowHorn?.[playerIndex]?.[row] || rowCards.some(item => hasAbility(item, "鼓舞"))) blocked.push("鼓舞");
+    if (rowCards.some(item => item.uid !== card.uid && hasAbility(item, "振势"))) blocked.push("振势");
+    if (hasAbility(card, "同盟") && rowCards.filter(item => hasAbility(item, "同盟") && item.name === card.name).length > 1) blocked.push("同盟");
     lines.push(`所在阵线：${rowLabel}，当前战力 ${current}（基础 ${base}）。`);
     if (blocked.length) lines.push(`传世：不受${blocked.join("、")}修正影响。`);
     else lines.push("传世：不受时局、鼓舞、振势、同盟等战力修正影响。");
@@ -679,23 +676,23 @@ function describeBoardCardEffect(state, context) {
   if (card.transformed && card.transformedFrom) {
     lines.push(`蛰伏转化：由「${card.transformedFrom}」经雪耻触发转化为当前形态。`);
   }
-  if (state.weather[row]) {
-    lines.push(hasActiveHalfWeatherLeader(state, player)
+  if (state.situations[row]) {
+    lines.push(hasActiveHalfSituationLeader(state, player)
       ? `时局：${rowLabel}受压制，主将效果使其改为半损。`
       : `时局：${rowLabel}受压制，基础战力降为 1。`);
   }
-  const bondCount = hasAbility(card, "Tight Bond")
-    ? rowCards.filter(item => hasAbility(item, "Tight Bond") && item.baseName === card.baseName).length
+  const bondCount = hasAbility(card, "同盟")
+    ? rowCards.filter(item => hasAbility(item, "同盟") && item.name === card.name).length
     : 0;
   if (bondCount > 1) lines.push(`同盟：同名同盟牌 ${bondCount} 张，战力 ×${bondCount}。`);
-  const moraleCount = rowCards.filter(item => item.uid !== card.uid && hasAbility(item, "Morale Boost")).length;
+  const moraleCount = rowCards.filter(item => item.uid !== card.uid && hasAbility(item, "振势")).length;
   if (moraleCount > 0) lines.push(`振势：同阵线 ${moraleCount} 张振势牌，战力 +${moraleCount}。`);
-  const hornCards = rowCards.filter(item => hasAbility(item, "Commander's Horn"));
+  const hornCards = rowCards.filter(item => hasAbility(item, "鼓舞"));
   if (state.rowHorn?.[playerIndex]?.[row] || hornCards.length) {
-    const hornSource = hornCards.length ? `「${short(hornCards[0].name || hornCards[0].baseName || "鼓舞", 6)}」` : "已打出的鼓舞";
+    const hornSource = hornCards.length ? `「${short(hornCards[0].name || hornCards[0].name || "鼓舞", 6)}」` : "已打出的鼓舞";
     lines.push(`鼓舞：${hornSource}影响${rowLabel}，战力翻倍。`);
   }
-  if (hasAbility(card, "Spy") && spyDoubleActive(state)) lines.push("主将：双方出使人物战力翻倍。");
+  if (hasAbility(card, "出使") && envoyDoubleActive(state)) lines.push("主将：双方出使人物战力翻倍。");
   return lines;
 }
 
@@ -710,7 +707,7 @@ function battlePowerEffectSections(state, context, fallbackCard) {
   if (!boardContexts.length) return [];
   boardContexts = boardContexts.filter(item => {
     const card = item.card;
-    if (!card || card.category === "weather" || card.category === "special") return false;
+    if (!card || card.category === "situation" || card.category === "stratagem") return false;
     const base = card.strength || 0;
     const current = card.effective == null ? base : card.effective;
     return current !== base || card.transformed;
@@ -890,9 +887,9 @@ function normalizeBattleEffectSegment(segment) {
     return `${direct[1]}：${short(direct[2].trim(), limit)}`;
   }
 
-  const muster = value.match(/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)\s*(\d+)\s*张[^：；。]*(?:：([^；。]+))?/);
-  if (muster) {
-    const result = compactEffectNames(muster[2] || "", Number(muster[1])) || `额外打出x${muster[1]}`;
+  const recruit = value.match(/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)\s*(\d+)\s*张[^：；。]*(?:：([^；。]+))?/);
+  if (recruit) {
+    const result = compactEffectNames(recruit[2] || "", Number(recruit[1])) || `额外打出x${recruit[1]}`;
     return `集贤：${result}`;
   }
   const summon = value.match(/^召唤岳家军\s*(\d+)\s*张(?:：([^；。]+))?/);
@@ -900,14 +897,14 @@ function normalizeBattleEffectSegment(segment) {
     const result = compactEffectNames(summon[2] || "岳家军", Number(summon[1])) || `岳家军x${summon[1]}`;
     return `召唤岳家军：${result}`;
   }
-  const scorch = value.match(/^奇策(?:销毁|摧毁)[:：]?(.+)/);
-  if (scorch) return `奇策：${short(scorch[1].trim(), 18)}`;
-  const berserker = value.match(/^(?:蛰伏|奋起)转化\s*(\d+)\s*张/);
-  if (berserker) return `雪耻：蛰伏x${berserker[1]}`;
-  const spy = value.match(/^出使生效：.*抽\s*(\d+)\s*张牌/);
-  if (spy && Number(spy[1]) > 0) return `出使：抽牌x${spy[1]}`;
-  const medic = value.match(/^举荐生效：.*复归「([^」]+)」/);
-  if (medic) return `济世：${short(medic[1], 12)}`;
+  const highestPowerRemoval = value.match(/^奇策(?:销毁|摧毁)[:：]?(.+)/);
+  if (highestPowerRemoval) return `奇策：${short(highestPowerRemoval[1].trim(), 18)}`;
+  const dormantUnit = value.match(/^(?:蛰伏|奋起)转化\s*(\d+)\s*张/);
+  if (dormantUnit) return `雪耻：蛰伏x${dormantUnit[1]}`;
+  const envoy = value.match(/^出使生效：.*抽\s*(\d+)\s*张牌/);
+  if (envoy && Number(envoy[1]) > 0) return `出使：抽牌x${envoy[1]}`;
+  const revival = value.match(/^举荐生效：.*复归「([^」]+)」/);
+  if (revival) return `济世：${short(revival[1], 12)}`;
   return "";
 }
 
@@ -961,7 +958,7 @@ function battlePlayEntryText(entry, state) {
     ? playerIdentityLabel(state, entry.playerIndex, entry.playerName)
     : (entry.playerName || "玩家");
   const suffix = leaderLabel && !effectText ? leaderLabel : "";
-  return `${actor}${verb}「${entry.name || entry.baseName || "未知卡牌"}」${suffix}${effectText}`;
+  return `${actor}${verb}「${entry.name || "未知卡牌"}」${suffix}${effectText}`;
 }
 
 function mergeBattlePlayLogEntries(logs) {
@@ -1004,7 +1001,7 @@ function summonHistoryInfo(entry) {
 
 function shouldHideSummonedBattleEntry(history, entry) {
   if (!entry || entry.actionType !== "card" || !Number.isFinite(entry.seq)) return false;
-  const name = entry.baseName || entry.name || "";
+  const name = entry.name || "";
   if (!name) return false;
   return history.some(parent => {
     if (!parent || !Number.isFinite(parent.seq) || parent.seq >= entry.seq) return false;
@@ -1031,13 +1028,12 @@ function discardCardGroupKey(card) {
   const row = Array.isArray(card?.row) ? card.row.join("/") : (card?.row || "");
   const abilities = Array.isArray(card?.abilities) ? card.abilities.join("/") : "";
   return [
-    card?.baseName || card?.name || card?.displayName || card?.id || "card",
+    card?.name || card?.displayName || card?.id || "card",
     card?.faction || "",
     card?.category || "",
     card?.strength ?? "",
     row,
-    abilities,
-    card?.hero ? "hero" : ""
+    abilities
   ].join("|");
 }
 
@@ -1067,7 +1063,7 @@ function discardStackCount(state, context, detail) {
 }
 
 function discardStrengthLabel(card) {
-  if (card?.category === "weather" || card?.category === "special") return "策";
+  if (card?.category === "situation" || card?.category === "stratagem") return "策";
   if (card?.category === "leader") return "将";
   return card?.effective != null ? card.effective : (card?.strength ?? "");
 }
@@ -1076,8 +1072,9 @@ function drawDiscardCardBadges(ctx, card, count, x, y, w, h) {
   const strength = discardStrengthLabel(card);
   if (strength !== "") {
     const bs = Math.max(20, Math.round(w * 0.28));
-    fillRoundRect(ctx, x + 3, y + 3, bs, bs, bs / 2, card?.hero ? "#1f2f4f" : "#8f3c1f", card?.hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
-    text(ctx, String(strength), x + 3 + bs / 2, y + 3 + bs / 2, Math.max(11, Math.round(bs * 0.58)), card?.hero ? "#ffe27a" : "#fff7d8", "center");
+    const hero = isHeroCard(card);
+    fillRoundRect(ctx, x + 3, y + 3, bs, bs, bs / 2, hero ? "#1f2f4f" : "#8f3c1f", hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
+    text(ctx, String(strength), x + 3 + bs / 2, y + 3 + bs / 2, Math.max(11, Math.round(bs * 0.58)), hero ? "#ffe27a" : "#fff7d8", "center");
   }
   if (count > 1) {
     const label = `x${count}`;
@@ -1176,7 +1173,7 @@ function drawDiscardPilePanel(ctx, view, actions, state, ui) {
     if (y + cardH + nameH < gridTop || y > gridBottom) return;
     drawCardImage(ctx, { ...item, x, y, w: cardW, h: cardH, imageFill: true, imageX: x, imageY: y, imageW: cardW, imageH: cardH });
     drawDiscardCardBadges(ctx, item, group.count, x, y, cardW, cardH);
-    text(ctx, short(item.name || item.baseName || "未知卡牌", 10), x + cardW / 2, y + cardH + nameH / 2 + 2, 12, "#5b4a2f", "center");
+    text(ctx, short(item.name || "未知卡牌", 10), x + cardW / 2, y + cardH + nameH / 2 + 2, 12, "#5b4a2f", "center");
     actions.push({ id: "battleCardDetail", cardId: item.id, cardUid: item.uid, owner, x, y, w: cardW, h: cardH + nameH });
   });
   ctx.restore();
@@ -1336,8 +1333,9 @@ function drawOpponentPassNotice(ctx, view, actions, state, ui, notice) {
 
   const actor = state.players[notice.playerIndex] || null;
   const leader = actor?.leader;
-  const leaderName = leader ? (leader.name || leader.baseName || "主将") : "主将";
+  const leaderName = leader ? (leader.name || "主将") : "主将";
 
+  actions.push({ id: "dismissRecentPlay", seq: notice.seq, x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 16, "#fbe7dd", "#d98c6a");
   fillRoundRect(ctx, panelX, panelY, 5, panelH, 3, "#c2603c", "#c2603c");
 
@@ -1350,15 +1348,12 @@ function drawOpponentPassNotice(ctx, view, actions, state, ui, notice) {
       w: cardW,
       h: cardH,
       name: leader.name,
-      baseName: leader.baseName,
-      imageUrl: leader.imageUrl,
-      summary: leader.abilityText || leader.leaderAbility || leader.summary,
+      summary: leader.abilityText || leader.summary,
       category: "主将",
       faction: leader.faction || actor?.faction,
       row: leader.row,
       abilities: leader.abilities,
       abilityDisplayNames: leader.abilityDisplayNames,
-      hero: leader.hero,
       strength: "将",
       nameMax: 6
     });
@@ -1371,7 +1366,7 @@ function drawOpponentPassNotice(ctx, view, actions, state, ui, notice) {
   text(ctx, short(leaderName, 9), textX, cardY + 36, 15, "#2f2417");
   const nextTip = state.roundTransition
     ? (state.roundTransition.matchOver ? "即将结算整局结果" : "稍后进入下一局")
-    : "本小局对方不再出牌";
+    : "对方不再出牌，可继续出牌或点「结算」";
   const desc = auto ? `手牌已打完，${nextTip}` : nextTip;
   fillRoundRect(ctx, textX - 4, cardY + 58, Math.max(92, textAreaW), 42, 8, "rgba(255,252,235,0.90)", "#e8d4a0");
   wrapText(ctx, desc, textX + 2, cardY + 73, Math.max(80, textAreaW - 12), 15, 2, 10, "#5f3a1a");
@@ -1457,20 +1452,20 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   const avatarSize = panelH - 12;
   const avatarY = panelY + 6;
   const avatarX = 32;
-  const textX = avatarX + avatarSize + 10;
-  const textW = view.width - textX - 92;
   const tagW = 38;
   const tagH = 18;
 
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 13, style.fill, style.color);
   fillRoundRect(ctx, panelX + 6, panelY + 4, 5, panelH - 8, 3, style.color);
   drawRoundLeaderAvatar(ctx, localPlayer, avatarX, avatarY, avatarSize, style.color);
+  const textX = avatarX + avatarSize + 10;
+  const textW = view.width - textX - 92;
 
   fillRoundRect(ctx, textX, panelY + 8, tagW, tagH, 9, style.tagFill);
   text(ctx, style.label, textX + tagW / 2, panelY + 17, 10, "#fff7d8", "center");
   text(ctx, `${title} · 第 ${transition.round} 局结束`, textX + tagW + 8, panelY + 18, 13, style.color);
-  wrapText(ctx, `我方 ${localPlayer?.factionName || localPlayer?.faction || "阵营"} · ${short(localPlayer?.leader?.name || localPlayer?.leader?.baseName || "主将", 8)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
-  wrapText(ctx, `敌方 ${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.baseName || "主将", 8)} · ${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
+  wrapText(ctx, `我方 ${localPlayer?.factionName || localPlayer?.faction || "阵营"} · ${short(localPlayer?.leader?.name || localPlayer?.leader?.name || "主将", 8)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
+  wrapText(ctx, `敌方 ${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.name || "主将", 8)} · ${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
   wrapText(ctx, `${roundLine} · ${moraleLine} · ${nextLine}`, textX, panelY + 80, textW, 13, 1, 10, "#6f5a3a");
   const moraleX = view.width - 58;
   text(ctx, "军心", moraleX + 8, panelY + 31, 10, "#8a6132", "center");
@@ -1535,16 +1530,14 @@ function drawRecentOpponentPlay(ctx, view, actions, state, ui) {
     w: cardW,
     h: cardH,
     name: notice.name || detail?.name,
-    baseName: notice.baseName || detail?.baseName,
-    imageUrl: notice.imageUrl || detail?.imageUrl,
+    name: notice.name || detail?.name,
     summary: notice.summary || detail?.summary,
     category: notice.category || (detail ? categoryLabel(detail) : (isLeaderAction ? "主将" : "卡牌")),
     faction: notice.faction || detail?.faction,
     row: notice.cardRow || detail?.row,
     abilities: notice.abilities || detail?.abilities,
     abilityDisplayNames: notice.abilityDisplayNames || detail?.abilityDisplayNames,
-    hero: notice.hero || detail?.hero,
-    strength: notice.strength == null ? (isLeaderAction ? "将" : (detail?.category === "weather" || detail?.category === "special" ? "策" : detail?.strength)) : notice.strength,
+    strength: notice.strength == null ? (isLeaderAction ? "将" : (detail?.category === "situation" || detail?.category === "stratagem" ? "策" : detail?.strength)) : notice.strength,
     nameMax: 6
   };
   actions.push({ id: "battleCardDetail", cardId: notice.cardId, cardUid: notice.cardUid, x: cardX, y: cardY, w: cardW, h: cardH });
@@ -1617,17 +1610,14 @@ function drawLeaderRevealPanel(ctx, view, actions, state, ui) {
     actions.push(detail);
     card(ctx, {
       ...detail,
-      name: item.name || item.baseName || "未知卡牌",
-      baseName: item.baseName,
-      imageUrl: item.imageUrl,
+      name: item.name || "未知卡牌",
       summary: item.summary || item.abilityText,
       category: categoryLabel(item),
       faction: item.faction,
       row: item.row,
       abilities: item.abilities,
       abilityDisplayNames: item.abilityDisplayNames,
-      hero: item.hero,
-      strength: item.category === "weather" || item.category === "special" ? "策" : item.strength,
+      strength: item.category === "situation" || item.category === "stratagem" ? "策" : item.strength,
       nameMax: 6
     });
   });
@@ -1666,7 +1656,7 @@ function guideStrokeRoundRect(ctx, x, y, w, h, r) {
 }
 
 // 分步指引气泡 + 指向目标的脉冲高亮环。仅作视觉引导，不拦截目标自身的点击/长按。
-function drawGuidePointer(ctx, view, actions, target, title, lines) {
+function drawGuidePointer(ctx, view, actions, target, title, lines, options = {}) {
   const cx = target.x + target.w / 2;
   const cy = target.y + target.h / 2;
   const bubbleW = Math.min(view.width - 48, 280);
@@ -1674,26 +1664,44 @@ function drawGuidePointer(ctx, view, actions, target, title, lines) {
   const bubbleX = (view.width - bubbleW) / 2;
   const bubbleY = Math.max(view.safeTop + 64, Math.round(view.height / 2 - bubbleH / 2));
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 320);
+  const rgb = options.rgb || "47,111,87";
+  const fill = options.fill || "#2f6f57";
+  const stroke = options.stroke || "#1f4d3a";
+  const textColor = options.textColor || "#eaf6ee";
   ctx.save();
-  ctx.strokeStyle = `rgba(47,111,87,${0.55 + 0.4 * pulse})`;
+  ctx.strokeStyle = `rgba(${rgb},${0.55 + 0.4 * pulse})`;
   ctx.lineWidth = 3;
   const pad = 6 + 5 * pulse;
   guideStrokeRoundRect(ctx, target.x - pad, target.y - pad, target.w + pad * 2, target.h + pad * 2, 12);
   ctx.restore();
-  fillRoundRect(ctx, bubbleX, bubbleY, bubbleW, bubbleH, 14, "#2f6f57", "#1f4d3a");
+  fillRoundRect(ctx, bubbleX, bubbleY, bubbleW, bubbleH, 14, fill, stroke);
   text(ctx, title, bubbleX + bubbleW / 2, bubbleY + 26, 15, "#fff7d8", "center");
-  lines.forEach((ln, i) => text(ctx, ln, bubbleX + bubbleW / 2, bubbleY + 52 + i * 20, 12, "#eaf6ee", "center"));
+  lines.forEach((ln, i) => text(ctx, ln, bubbleX + bubbleW / 2, bubbleY + 52 + i * 20, 12, textColor, "center"));
   ctx.save();
-  ctx.strokeStyle = "rgba(47,111,87,0.85)";
+  ctx.strokeStyle = `rgba(${rgb},0.85)`;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(bubbleX + bubbleW / 2, bubbleY + bubbleH);
   ctx.lineTo(cx, cy);
   ctx.stroke();
   ctx.restore();
-  const dismiss = { id: "dismissGuide", x: bubbleX + bubbleW - 66, y: bubbleY + 8, w: 54, h: 24 };
+  const dismiss = { id: options.dismissId || "dismissGuide", x: bubbleX + bubbleW - 66, y: bubbleY + 8, w: 54, h: 24 };
   actions.push(dismiss);
-  button(ctx, { ...dismiss, label: "稍后", size: 11, fill: "#3f7d61" });
+  button(ctx, { ...dismiss, label: "稍后", size: 11, fill: options.dismissFill || "#3f7d61" });
+}
+
+function drawPassLeadHint(ctx, view, actions, state, ui) {
+  if (!ui.passLeadHintActive || !ui.__passButton) return;
+  if (ui.showCardGuide || state.roundTransition || state.over || state.pending) return;
+  if (ui.battleCardDetailId || ui.battleCardDetailUid || ui.battleLogHistoryOpen || ui.discardPileOwner != null) return;
+  drawGuidePointer(ctx, view, actions, ui.__passButton, "优势已稳", ["对方已放弃，且我方分数领先", "建议点「结算」保留手牌"], {
+    dismissId: "dismissPassLeadHint",
+    fill: "#8f3c1f",
+    stroke: "#6d2d18",
+    rgb: "143,60,31",
+    textColor: "#fff4cf",
+    dismissFill: "#a9552b"
+  });
 }
 
 function drawFirstPlayerNotice(ctx, view, actions, state, ui) {
@@ -1736,7 +1744,7 @@ function drawFirstPlayerNotice(ctx, view, actions, state, ui) {
 
 function drawStepGuide(ctx, view, actions, state, ui) {
   const step = ui.activeGuide;
-  if (!step || ui.guideDismissed || ui.showCardGuide) return;
+  if (!step || ui.guideDismissed || ui.showCardGuide || ui.passLeadHintActive) return;
   // 二次校验：从存档重新读取当前指引的 done/count 状态，防止因存储异常、缓存不一致等导致超限指引仍被渲染
   const save = loadSave();
   const g = save.guides && save.guides[step];
@@ -1804,7 +1812,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   }
   const headerY = view.safeTop + 16;
   const isMulligan = state.mulligan && state.mulligan.active;
-  const weatherNames = ROWS.filter(row => state.weather[row]).map(row => ROW_LABELS[row]);
+  const situationNames = ROWS.filter(row => state.situations[row]).map(row => ROW_LABELS[row]);
   const local = localPlayerIndex(state);
   const actionOwner = actionOwnerIndex(state);
   const actionPlayerIndex = state.players[actionOwner] ? actionOwner : (state.current || 0);
@@ -1820,8 +1828,8 @@ function draw(ctx, view, actions, state, ui = {}) {
     : (state.over ? "对局结束" : (state.roundTransition ? "回合结算中" : `当前：${actionPlayerName}`));
   text(ctx, roundText, view.width / 2, headerY, 17, "#2f2417", "center");
   text(ctx, statusText, view.width / 2, headerY + 22, 12, "#775c34", "center");
-  if (weatherNames.length) {
-    text(ctx, `时局：${weatherNames.join("、")}`, view.width / 2, headerY + 40, 10, "#8a785f", "center");
+  if (situationNames.length) {
+    text(ctx, `时局：${situationNames.join("、")}`, view.width / 2, headerY + 40, 10, "#8a785f", "center");
   }
   const handY = view.height - view.safeBottom - HAND_BOTTOM_OFFSET;
   const logLineH = 14;
@@ -1833,7 +1841,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   const compactLog = latestFitsOneLine && logEntries.length <= 1;
   const logH = compactLog ? 28 : 34;
   const logY = handY - logH - HAND_LOG_GAP;
-  drawRows(ctx, view, actions, state, ui, weatherNames.length ? 90 : 78, logY - 10);
+  drawRows(ctx, view, actions, state, ui, situationNames.length ? 90 : 78, logY - 10);
   const logAction = { id: "battleLog", x: 12, y: logY, w: view.width - 24, h: logH };
   actions.push(logAction);
   ui.__guideLog = logAction;
@@ -1853,12 +1861,16 @@ function draw(ctx, view, actions, state, ui = {}) {
   drawPendingChoice(ctx, view, actions, state);
   drawHand(ctx, view, actions, state, ui);
   const bottom = view.height - view.safeBottom - ACTION_BUTTON_BOTTOM_OFFSET;
+  ui.__passButton = null;
   let rightButton;
   if (state.over) rightButton = ["home", "首页", "#6b6b5f"];
   else if (isMulligan) rightButton = isLocalOnlineAction(state) ? ["mulliganDone", state.mode === "online" ? "准备" : "不换开始", "#2f6f57"] : ["noop", "等待", "#b6a98e"];
   else rightButton = ["surrenderMatch", "认输", "#6b6b5f"];
+  const opponentIndex = local === 0 ? 1 : 0;
+  const localCanAct = !state.over && !state.roundTransition && !state.pending && !isMulligan && (state.mode === "online" ? isLocalOnlineAction(state) : state.current === local);
+  const passLabel = localCanAct && state.players[opponentIndex]?.passed ? "结算" : "放弃";
   const buttons = [
-    ["pass", "放弃", "#8d6840"],
+    ["pass", passLabel, "#8d6840"],
     rightButton
   ];
   const gap = 12;
@@ -1866,6 +1878,7 @@ function draw(ctx, view, actions, state, ui = {}) {
   buttons.forEach((item, index) => {
     const rect = { id: item[0], x: 10 + index * (bw + gap), y: bottom, w: bw, h: ACTION_BUTTON_H };
     actions.push(rect);
+    if (item[0] === "pass") ui.__passButton = rect;
     button(ctx, { ...rect, label: item[1], size: 12, fill: item[2] });
   });
   if (!state.roundTransition) drawRecentOpponentPlay(ctx, view, actions, state, ui);
@@ -1875,6 +1888,7 @@ function draw(ctx, view, actions, state, ui = {}) {
     drawCardGuide(ctx, view, actions);
   }
   drawStepGuide(ctx, view, actions, state, ui);
+  drawPassLeadHint(ctx, view, actions, state, ui);
   drawLeaderRevealPanel(ctx, view, actions, state, ui);
   if (detail) {
     const entries = detailCardEntries(state, ui, view);
@@ -1886,8 +1900,8 @@ function draw(ctx, view, actions, state, ui = {}) {
     const pendingType = pendingDetailType(state, ui);
     const pendingRevive = pendingType === "revive";
     const pendingLeaderDiscard = pendingType === "leaderDiscard";
-    const pendingDecoy = pendingType === "decoy";
-    const pendingLeaderWeather = pendingType === "leaderWeather";
+    const pendingRecall = pendingType === "recall";
+    const pendingLeaderSituation = pendingType === "leaderSituation";
     const selectedUids = new Set(state.pending?.selectedUids || []);
     const currentSelected = pendingLeaderDiscard && selectedUids.has(detail.uid);
     const detailCard = pendingRevive ? { ...detail, effective: detail.strength } : detail;
@@ -1906,28 +1920,28 @@ function draw(ctx, view, actions, state, ui = {}) {
       color: "#8f3c1f",
       lines: 3
     }] : []);
-    const extraSections = (pendingRevive || pendingLeaderDiscard || pendingLeaderWeather ? [] : battlePowerEffectSections(state, detailContext, detail)).concat(pendingSections);
+    const extraSections = (pendingRevive || pendingLeaderDiscard || pendingLeaderSituation ? [] : battlePowerEffectSections(state, detailContext, detail)).concat(pendingSections);
     drawDetail(ctx, view, actions, detailCard, {
       title: pendingRevive ? "济世复归" : (pendingLeaderDiscard ? `黄巢弃牌 ${selectedUids.size}/2` : (isMulligan ? "换牌阶段" : "卡牌详情")),
       closeHint: pendingRevive
         ? "点击当前卡牌复归 · 左右滑动切换"
         : (pendingLeaderDiscard
           ? "点卡牌选择/取消 · 选满后确认"
-          : (pendingLeaderWeather
+          : (pendingLeaderSituation
             ? "点击当前卡牌打出 · 左右滑动切换"
             : (isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局"))),
       leftCard,
       rightCard,
       swipeOffset,
       extraSections,
-      count: pendingDecoy ? (detail.stackCount || 1) : discardStackCount(state, detailContext, detail),
-      headerAction: pendingLeaderDiscard || pendingLeaderWeather ? { id: "closeDetail", label: "取消" } : null,
+      count: pendingRecall ? (detail.stackCount || 1) : discardStackCount(state, detailContext, detail),
+      headerAction: pendingLeaderDiscard || pendingLeaderSituation ? { id: "closeDetail", label: "取消" } : null,
       helpAction: isMulligan ? { id: "mulliganHelp" } : null,
       helpOpen: !!ui.mulliganHelpOpen,
       helpSections,
       selected: currentSelected,
       anim: ui.mulliganSwapAnim ? { alpha: ui.mulliganSwapAnim.alpha, scale: ui.mulliganSwapAnim.scale } : null,
-      cardAction: pendingRevive || pendingLeaderDiscard || pendingDecoy || pendingLeaderWeather
+      cardAction: pendingRevive || pendingLeaderDiscard || pendingRecall || pendingLeaderSituation
         ? { id: "targetChoice", cardId: detail.id, cardUid: detail.uid }
         : (isMulligan && detailContext?.zone === "hand" && isLocalOnlineAction(state)
           ? { id: "mulliganDetailSwap", cardId: detail.id, cardUid: detail.uid }
@@ -1938,4 +1952,10 @@ function draw(ctx, view, actions, state, ui = {}) {
   drawFirstPlayerNotice(ctx, view, actions, state, ui);
 }
 
-module.exports = { draw, detailCardEntries, sortedHandCards, handScrollBounds, discardPileMetrics };
+module.exports = {
+  draw,
+  detailCardEntries,
+  sortedHandCards,
+  handScrollBounds,
+  discardPileMetrics
+};

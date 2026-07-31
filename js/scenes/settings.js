@@ -1,15 +1,15 @@
-const { clear, text, button, fillRoundRect, card, drawTopLeftBack } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, card, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById, isHeroCard } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
 const CARD_TABS = [
   { value: "all", label: "全部" },
-  { value: "melee", label: ROW_LABELS.melee || "疆场" },
-  { value: "ranged", label: ROW_LABELS.ranged || "朝堂" },
-  { value: "siege", label: ROW_LABELS.siege || "文脉" },
+  { value: "疆场", label: ROW_LABELS["疆场"] || "疆场" },
+  { value: "朝堂", label: ROW_LABELS["朝堂"] || "朝堂" },
+  { value: "文脉", label: ROW_LABELS["文脉"] || "文脉" },
   { value: "hero", label: "传世" },
-  { value: "special", label: "谋略/时局" }
+  { value: "strategy", label: "谋略/时局" }
 ];
 
 const COLUMNS = 4;
@@ -32,7 +32,7 @@ function leaderSkill(card) {
 
 function canAddCard(status, card) {
   if (status.total >= 40) return false;
-  if ((card.category === "special" || card.category === "weather") && status.specials >= 10) return false;
+  if ((card.category === "stratagem" || card.category === "situation") && status.strategies >= 10) return false;
   return true;
 }
 
@@ -52,20 +52,21 @@ function pageLayout(view) {
   const top = view.safeTop + 28;
   const factionY = top + 66;
   const leaderY = top + 102;
-  const tabY = leaderY + 38;
+  const leaderH = 50;
+  const tabY = leaderY + leaderH + 8;
   const listTop = tabY + 38;
   const bottomY = view.height - view.safeBottom - 12;
   const toolY = bottomY - 36;
   const listBottom = toolY - 16;
-  return { top, factionY, leaderY, toolY, tabY, listTop, bottomY, listBottom };
+  return { top, factionY, leaderY, leaderH, toolY, tabY, listTop, bottomY, listBottom };
 }
 
 function filteredCardGroups(faction, tab) {
   const active = tab || "all";
   const cards = eligibleCards(faction).filter(card => {
     if (active === "all") return true;
-    if (active === "special") return card.category === "special" || card.category === "weather";
-    if (active === "hero") return !!card.hero;
+    if (active === "strategy") return card.category === "stratagem" || card.category === "situation";
+    if (active === "hero") return isHeroCard(card);
     if (!(card.category === "unit" || card.category === "hero")) return false;
     return (card.row || []).includes(active);
   });
@@ -130,7 +131,7 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
   if (!options.length) return;
   const selected = optionSelectedValue(settings, field);
   const isLeader = field === "humanLeader";
-  const itemH = isLeader ? 38 : 34;
+  const itemH = isLeader ? 54 : 34;
   const menuH = options.length * itemH;
   const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
   const menuY = Math.min(anchor.y + anchor.h + 5, view.height - view.safeBottom - menuH - 8);
@@ -144,6 +145,7 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
   options.forEach((option, index) => {
     const y = menuY + index * itemH;
     const active = option.value === selected;
+    const optionCard = isLeader ? cardById(option.value) : null;
     actions.push({ id: "selectSettingOption", field, value: option.value, cardId: option.value, x: menuX, y, w: anchor.w, h: itemH });
     if (active) fillRoundRect(ctx, menuX + 4, y + 3, anchor.w - 8, itemH - 6, 9, "#2f6f57");
     else if (index > 0) {
@@ -153,9 +155,15 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
       ctx.lineTo(menuX + anchor.w - 10, y);
       ctx.stroke();
     }
-    text(ctx, shortText(option.label, isLeader ? 14 : 18), menuX + anchor.w / 2, y + (isLeader ? 14 : itemH / 2), 12, active ? "#ffffff" : "#2f2417", "center");
-    if (isLeader) {
-      text(ctx, shortText(option.hint, 20), menuX + anchor.w / 2, y + 29, 8, active ? "#efe6ff" : "#775c34", "center");
+    if (isLeader && optionCard) {
+      const avatarSize = itemH - 10;
+      const avatarX = menuX + 12;
+      const avatarY = y + 5;
+      drawCardImage(ctx, { ...optionCard, imageFill: true, imageX: avatarX, imageY: avatarY, imageW: avatarSize, imageH: avatarSize });
+      text(ctx, shortText(option.label, 12), avatarX + avatarSize + 10, y + 19, 12, active ? "#ffffff" : "#2f2417", "left");
+      text(ctx, shortText(option.hint, 22), avatarX + avatarSize + 10, y + 37, 9, active ? "#efe6ff" : "#775c34", "left");
+    } else {
+      text(ctx, shortText(option.label, 18), menuX + anchor.w / 2, y + itemH / 2, 12, active ? "#ffffff" : "#2f2417", "center");
     }
   });
 }
@@ -182,7 +190,7 @@ function drawCardTabs(ctx, view, actions, activeTab, y) {
     actions.push(rect);
     const active = (activeTab || "all") === tab.value;
     fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 10, active ? "#2f6f57" : "#fffaf0", active ? "#1d4f3c" : "#dcc48d");
-    text(ctx, tab.label, rect.x + rect.w / 2, rect.y + rect.h / 2, tab.value === "special" ? 9 : 11, active ? "#ffffff" : "#775c34", "center");
+    text(ctx, tab.label, rect.x + rect.w / 2, rect.y + rect.h / 2, tab.value === "strategy" ? 9 : 11, active ? "#ffffff" : "#775c34", "center");
   });
 }
 
@@ -204,14 +212,24 @@ function draw(ctx, view, actions, ui = {}) {
   drawTopLeftBack(ctx, view, actions, "back");
   text(ctx, "我的牌组", view.width / 2, bounds.top, 24, "#2f2417", "center");
   text(ctx, `${FACTION_LABELS[faction]} · 已选 ${status.total}/40 · 总战力 ${status.score}`, view.width / 2, bounds.top + 25, 12, statusColor, "center");
-  text(ctx, `人物 ${status.units}/22 · 谋略/时局 ${status.specials}/10`, view.width / 2, bounds.top + 45, 11, "#775c34", "center");
+  text(ctx, `人物 ${status.units}/22 · 谋略/时局 ${status.strategies}/10`, view.width / 2, bounds.top + 45, 11, "#775c34", "center");
   drawFactionTabs(ctx, view, actions, faction, bounds.factionY);
 
-  const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: bounds.leaderY, w: view.width - 36, h: 30 };
+  const leaderRect = { id: "humanLeader", cardId: humanLeader ? humanLeader.id : "", x: 18, y: bounds.leaderY, w: view.width - 36, h: bounds.leaderH };
   anchors.humanLeader = leaderRect;
   actions.push(leaderRect);
-  fillRoundRect(ctx, leaderRect.x, leaderRect.y, leaderRect.w, leaderRect.h, 10, "#7a5a95", "#1d4f3c");
-  text(ctx, `领袖：${shortText(humanLeader ? displayName(humanLeader) : "未选择", 14)} ▾`, leaderRect.x + leaderRect.w / 2, leaderRect.y + 15, 12, "#ffffff", "center");
+  fillRoundRect(ctx, leaderRect.x, leaderRect.y, leaderRect.w, leaderRect.h, 12, "#7a5a95", "#1d4f3c");
+  if (humanLeader) {
+    const avatarSize = Math.min(leaderRect.h - 8, 42);
+    const avatarX = leaderRect.x + 12;
+    const avatarY = leaderRect.y + (leaderRect.h - avatarSize) / 2;
+    drawCardImage(ctx, { ...humanLeader, imageFill: true, imageX: avatarX, imageY: avatarY, imageW: avatarSize, imageH: avatarSize });
+    text(ctx, shortText(displayName(humanLeader), 10), avatarX + avatarSize + 10, leaderRect.y + 19, 13, "#ffffff", "left");
+    text(ctx, shortText(cardSummary(humanLeader), 18), avatarX + avatarSize + 10, leaderRect.y + 36, 9, "#efe6ff", "left");
+  } else {
+    text(ctx, "领袖：未选择", leaderRect.x + 18, leaderRect.y + leaderRect.h / 2, 12, "#ffffff", "left");
+  }
+  text(ctx, "▾", leaderRect.x + leaderRect.w - 24, leaderRect.y + leaderRect.h / 2, 12, "#fff7d8", "center");
 
   drawCardTabs(ctx, view, actions, cardTab, bounds.tabY);
 
@@ -251,16 +269,13 @@ function draw(ctx, view, actions, ui = {}) {
       fill: selected ? "#eff8ef" : (blocked ? "#eee7da" : "#fffaf0"),
       stroke: selected ? "#2f6f57" : (blocked ? "#c9bdac" : "#d8bd83"),
       name: displayName(item),
-      baseName: item.baseName,
-      imageUrl: item.imageUrl,
       summary: item.summary || item.abilityText,
       category: categoryLabel(item),
       faction: item.faction,
       row: item.row,
       abilities: item.abilities,
       abilityDisplayNames: item.abilityDisplayNames,
-      hero: item.hero,
-      strength: item.category === "special" || item.category === "weather" ? "策" : item.strength,
+      strength: item.category === "stratagem" || item.category === "situation" ? "策" : item.strength,
       nameMax: 4,
       count: group.cards.length,
       selectedCount: count,

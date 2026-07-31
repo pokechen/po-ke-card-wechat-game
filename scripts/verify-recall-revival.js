@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-// 验证：在卡组包含「非传世济世」（李时珍，非 Hero 的 Medic）的前提下，
-// 携带 0 / 1 / 2 / 3 张「请辞归隐」（Decoy）时的胜率区别。
+// 验证：在卡组包含「非传世济世」（李时珍，非 Hero 的 Revival）的前提下，
+// 携带 0 / 1 / 2 / 3 张「请辞归隐」（Recall）时的胜率区别。
 //
 // 设计：
-//  - 固定阵营为 Northern Realms（北方领域），使李时珍可入组。
+//  - 固定阵营为 开国群雄，使李时珍可入组。
 //  - 每个种子先生成一份基准困难卡组（作为对手与受试卡组的来源）。
 //  - 受试卡组 = 基准卡组，但确保恰好 1 张李时珍（zhangyu-0141，非传世济世），
 //    移除原有请辞，保留 7 张其它特殊牌，再补入 N 张请辞归隐。
@@ -17,9 +17,9 @@ const battle = require("../shared/core/battle");
 const { FACTION_KEYS, buildDeck, cardValue, deckStatus, cardById, categoryLabel } = require("../shared/core/cards");
 
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
-const FACTION = "Northern Realms";
-const MEDIC_ID = "zhangyu-0141"; // 李时珍：非传世济世（Medic, hero=false）
-const DECOY_IDS = ["zhangyu-0185", "zhangyu-0186", "zhangyu-0187"]; // 请辞归隐 三张
+const FACTION = "开国群雄";
+const REVIVAL_CARD_ID = "zhangyu-0141"; // 李时珍：非传世济世
+const RECALL_CARD_IDS = ["zhangyu-0185", "zhangyu-0186", "zhangyu-0187"]; // 请辞归隐 三张
 const STRATEGY = "v3.2";
 
 function parseArgs(argv) {
@@ -66,29 +66,29 @@ function withSeed(seed, fn) {
   }
 }
 
-function isSpecial(id) {
+function isStrategyCard(id) {
   const c = cardById(id);
-  return c && (c.category === "special" || c.category === "weather");
+  return c && (c.category === "stratagem" || c.category === "situation");
 }
 
-function buildSubjectIds(baseIds, decoyCount) {
-  const units = baseIds.filter(id => !isSpecial(id));
-  let specials = baseIds.filter(id => isSpecial(id) && !DECOY_IDS.includes(id));
+function buildSubjectIds(baseIds, recallCount) {
+  const units = baseIds.filter(id => !isStrategyCard(id));
+  let strategies = baseIds.filter(id => isStrategyCard(id) && !RECALL_CARD_IDS.includes(id));
   // 保留 7 张其它特殊牌（不足则全保留），保持各 N 之间唯一变量为请辞数量
-  const keptSpecials = specials.slice(0, 7);
-  const decoys = DECOY_IDS.slice(0, decoyCount);
+  const keptStratagems = strategies.slice(0, 7);
+  const recalls = RECALL_CARD_IDS.slice(0, recallCount);
   const units2 = units.slice();
-  if (!units2.includes(MEDIC_ID)) units2.push(MEDIC_ID); // 确保恰好 1 张非传世济世
-  return [...units2, ...keptSpecials, ...decoys];
+  if (!units2.includes(REVIVAL_CARD_ID)) units2.push(REVIVAL_CARD_ID); // 确保恰好 1 张非传世济世
+  return [...units2, ...keptStratagems, ...recalls];
 }
 
 function deckInfo(ids) {
-  const medics = ids.filter(id => {
+  const revivals = ids.filter(id => {
     const c = cardById(id);
-    return c && (c.abilities || []).includes("Medic");
+    return c && (c.abilities || []).includes("济世");
   }).length;
-  const decoys = ids.filter(id => DECOY_IDS.includes(id)).length;
-  return { total: ids.length, medics, decoys, valid: deckStatus(ids, FACTION).valid };
+  const recalls = ids.filter(id => RECALL_CARD_IDS.includes(id)).length;
+  return { total: ids.length, revivals, recalls, valid: deckStatus(ids, FACTION).valid };
 }
 
 function resolveAutoPending(state) {
@@ -101,7 +101,7 @@ function resolveAutoPending(state) {
     const best = (pending.candidates || []).slice().sort((a, b) => cardValue(b) - cardValue(a))[0];
     return battle.resolvePending(state, best ? { uid: best.uid } : { skip: true });
   }
-  if (pending.type === "decoy") {
+  if (pending.type === "recall") {
     const best = (pending.candidates || []).slice().sort((a, b) => cardValue(b.card) - cardValue(a.card))[0];
     return battle.resolvePending(state, best ? { uid: best.card.uid } : { skip: true });
   }
@@ -184,7 +184,7 @@ function main() {
   const lines = [];
   lines.push(`验证「非传世济世(李时珍) + N 张请辞归隐」胜率区别`);
   lines.push(`阵营=${FACTION}  策略=${STRATEGY}  simDepth=${args.simDepth} branchCap=${args.branchCap}  种子=${args.seed}  种子数=${args.matches}`);
-  lines.push(`基准卡组样例(首个种子)：总数=${firstSeedInfo.total} 济世数=${firstSeedInfo.medics} 请辞数=${firstSeedInfo.decoys} 合法=${firstSeedInfo.valid}`);
+  lines.push(`基准卡组样例(首个种子)：总数=${firstSeedInfo.total} 济世数=${firstSeedInfo.revivals} 请辞数=${firstSeedInfo.recalls} 合法=${firstSeedInfo.valid}`);
   lines.push("");
   lines.push(`请辞数 | 受试胜场 | 平局 | 总场数 | 受试胜率 | 非平局胜率`);
   lines.push(`--------|----------|------|--------|----------|------------`);

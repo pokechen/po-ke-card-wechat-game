@@ -197,13 +197,14 @@ function createRoomId() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-function safeFaction(value, fallback = "Northern Realms") {
-  return FACTION_KEYS.includes(value) ? value : fallback;
+function safeFaction(value, fallback = "开国群雄") {
+  const validFallback = FACTION_KEYS.includes(fallback) ? fallback : FACTION_KEYS[0];
+  return FACTION_KEYS.includes(value) ? value : validFallback;
 }
 
 function safeRules(input = {}, previous = null) {
   const source = input && typeof input === "object" ? input : {};
-  const fallbackFaction = safeFaction(previous?.faction || "Northern Realms");
+  const fallbackFaction = safeFaction(previous?.faction || "开国群雄");
   const factionMode = ["fixed", "random"].includes(source.factionMode) ? source.factionMode : "any";
   const deckMode = source.deckMode === "autoOnly" ? "autoOnly" : "any";
   const versionSource = previous && previous.version != null ? previous.version : source.version;
@@ -219,7 +220,7 @@ function safeRules(input = {}, previous = null) {
 function safeSetup(input = {}, rules = null) {
   const setup = input && typeof input === "object" ? input : {};
   const activeRules = safeRules(rules || {});
-  const requestedFaction = String(setup.faction || "Northern Realms");
+  const requestedFaction = String(setup.faction || "开国群雄");
   const faction = activeRules.factionMode === "random"
     ? "random"
     : (activeRules.factionMode === "fixed"
@@ -250,12 +251,13 @@ function makePlayer(openid, index, setup, rules) {
     customDeckIds: safe.customDeckIds,
     ready: false,
     setupReady: false,
+    rematchReady: false,
     lastSeenAt: time
   };
 }
 
 function resetPlayerFlags(players = []) {
-  return players.map(player => ({ ...player, ready: false, setupReady: false }));
+  return players.map(player => ({ ...player, ready: false, setupReady: false, rematchReady: false }));
 }
 
 function readyPlayersOf(players = []) {
@@ -536,25 +538,20 @@ async function listMatchHistory(event, openid) {
   const result = { history, total, hasMore };
   if (skip === 0) {
     try {
-      const $ = db.command.aggregate;
-      const aggRes = await db.collection(MATCH_HISTORY).aggregate()
-        .match({ openid })
-        .group({
-          _id: null,
-          wins: $.sum($.cond([$.eq(['$record.winner', 0]), 1, 0])),
-          draws: $.sum($.cond([$.eq(['$record.winner', null]), 1, 0]))
-        })
-        .end();
-      const aggRow = safeArray(aggRes.data)[0] || {};
-      const wins = aggRow.wins || 0;
-      const draws = aggRow.draws || 0;
+      // 统计字段已在写入时冗余到顶层，使用 count 查询避免聚合表达式在嵌套 record.winner 上兼容性异常导致胜场恒为 0。
+      const [winsRes, drawsRes] = await Promise.all([
+        db.collection(MATCH_HISTORY).where({ openid, winner: 0 }).count(),
+        db.collection(MATCH_HISTORY).where({ openid, winner: null }).count()
+      ]);
+      const wins = Math.max(0, safeNumber(winsRes.total, 0));
+      const draws = Math.max(0, safeNumber(drawsRes.total, 0));
       const losses = Math.max(0, total - wins - draws);
       result.wins = wins;
       result.losses = losses;
       result.draws = draws;
       result.winRate = total ? Math.round(wins * 100 / total) : 0;
-    } catch (aggErr) {
-      console.warn("[listMatchHistory] aggregate stats failed", aggErr?.message || aggErr);
+    } catch (statsErr) {
+      console.warn("[listMatchHistory] count stats failed", statsErr?.message || statsErr);
     }
   }
   return ok(result);
@@ -1633,10 +1630,25 @@ async function returnToRoom(event, openid) {
   if (!room) return fail("房间不存在", "NOT_FOUND");
   const playerIndex = playerIndexOf(room, openid);
   if (playerIndex < 0) return fail("你不在这个房间", "FORBIDDEN");
+  if (event.readOnly) return ok({ roomId, playerIndex, room: publicRoom(room, playerIndex) });
   if (room.status !== "finished") return ok({ roomId, playerIndex, room: publicRoom(room, playerIndex) });
-  const players = resetPlayerFlags(room.players || []);
+
+  const updatedAt = now();
+  const markedPlayers = safeArray(room.players).map((player, index) => index === playerIndex
+    ? { ...player, rematchReady: true, lastSeenAt: updatedAt }
+    : player);
+  const bothReady = markedPlayers.length >= 2 && markedPlayers.slice(0, 2).every(player => player?.rematchReady);
+  if (!bothReady) {
+    const nextRoom = { ...room, players: markedPlayers, turnSeq: (room.turnSeq || 0) + 1, updatedAt };
+    await db.collection(ROOMS).doc(roomId).update({
+      data: { players: markedPlayers, turnSeq: nextRoom.turnSeq, updatedAt }
+    });
+    return ok({ roomId, playerIndex, room: publicRoom(nextRoom, playerIndex) });
+  }
+
+  const players = resetPlayerFlags(markedPlayers);
   const readyPlayers = readyPlayersOf(players);
-  const nextRoom = { ...room, status: "waiting", players, readyPlayers, readySeq: (room.readySeq || 0) + 1, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt: now() };
+  const nextRoom = { ...room, status: "waiting", players, readyPlayers, readySeq: (room.readySeq || 0) + 1, match: null, turnSeq: (room.turnSeq || 0) + 1, updatedAt };
   await db.collection(ROOMS).doc(roomId).update({ data: { status: "waiting", players, readyPlayers, readySeq: nextRoom.readySeq, match: null, turnSeq: nextRoom.turnSeq, updatedAt: nextRoom.updatedAt } });
   return ok({ roomId, playerIndex, room: publicRoom(nextRoom, playerIndex) });
 }
