@@ -596,7 +596,7 @@ const DATA = {
       "factionDisplayName": "开国群雄",
       "category": "unit",
       "rowDisplayName": "疆场",
-      "strength": 1,
+      "strength": 2,
       "abilityDisplayNames": [],
       "abilityText": "无"
     },
@@ -702,14 +702,13 @@ const DATA = {
       "id": "zhangyu-0145",
       "name": "华佗",
       "factionDisplayName": "开国群雄",
-      "category": "hero",
+      "category": "unit",
       "rowDisplayName": "文脉",
-      "strength": 7,
+      "strength": 5,
       "abilityDisplayNames": [
-        "传世",
         "济世"
       ],
-      "abilityText": "传世、济世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0225",
@@ -737,11 +736,9 @@ const DATA = {
       "factionDisplayName": "开国群雄",
       "category": "unit",
       "rowDisplayName": "文脉",
-      "strength": 5,
-      "abilityDisplayNames": [
-        "济世"
-      ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "strength": 6,
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0153",
@@ -1088,9 +1085,9 @@ const DATA = {
       "strength": 10,
       "abilityDisplayNames": [
         "传世",
-        "振势"
+        "济世"
       ],
-      "abilityText": "传世、振势：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "传世、济世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后可从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0247",
@@ -1614,10 +1611,8 @@ const DATA = {
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 5,
-      "abilityDisplayNames": [
-        "集贤"
-      ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0276",
@@ -1626,10 +1621,8 @@ const DATA = {
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 5,
-      "abilityDisplayNames": [
-        "集贤"
-      ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0277",
@@ -1638,10 +1631,8 @@ const DATA = {
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 5,
-      "abilityDisplayNames": [
-        "集贤"
-      ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0278",
@@ -1650,10 +1641,8 @@ const DATA = {
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 5,
-      "abilityDisplayNames": [
-        "集贤"
-      ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0279",
@@ -1662,10 +1651,8 @@ const DATA = {
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 5,
-      "abilityDisplayNames": [
-        "集贤"
-      ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityDisplayNames": [],
+      "abilityText": "无"
     },
     {
       "id": "zhangyu-0100",
@@ -2757,7 +2744,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "己方文脉线战力翻倍。"
+      "abilityText": "使己方文脉线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
     },
     {
       "id": "zhangyu-0004",
@@ -2767,7 +2754,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "摧毁对方文脉线最强人物。"
+      "abilityText": "若对方文脉线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
     },
     {
       "id": "zhangyu-0332",
@@ -2777,7 +2764,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "摧毁对方朝堂线最强人物。"
+      "abilityText": "若对方朝堂线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
     },
     {
       "id": "zhangyu-0006",
@@ -2817,7 +2804,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从对手弃牌堆取回 1 张人物到手牌。"
+      "abilityText": "从对手弃牌堆选择 1 张卡牌加入己方手牌。"
     },
     {
       "id": "zhangyu-0008",
@@ -2867,7 +2854,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "摧毁对方疆场线最强人物。"
+      "abilityText": "若对方疆场线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
     },
     {
       "id": "zhangyu-0336",
@@ -2877,7 +2864,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "己方朝堂线战力翻倍。"
+      "abilityText": "使己方朝堂线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
     },
     {
       "id": "zhangyu-0337",
@@ -2897,7 +2884,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从己方弃牌堆取回 1 张人物到手牌。"
+      "abilityText": "从己方弃牌堆选择 1 张卡牌加入手牌。"
     },
     {
       "id": "zhangyu-0339",
@@ -2907,7 +2894,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "己方疆场线战力翻倍。"
+      "abilityText": "使己方疆场线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
     },
     {
       "id": "zhangyu-0016",
@@ -2917,7 +2904,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "弃置 2 张手牌并抽 1 张牌。"
+      "abilityText": "弃置 2 张手牌，然后从牌库选择 1 张卡牌加入手牌。"
     },
     {
       "id": "zhangyu-0340",

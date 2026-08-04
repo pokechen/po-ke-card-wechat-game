@@ -129,7 +129,8 @@ function drawSetupDropdown(ctx, view, actions, settings, field, anchors, closeId
   options.forEach((option, index) => {
     const y = menuY + index * itemH;
     const active = option.value === selected;
-    actions.push({ id: "selectMatchSetupOption", field, value: option.value, cardId: isLeader && option.value !== "random" ? option.value : "", x: menuX, y, w: menuW, h: itemH });
+    const optionCard = isLeader && option.value !== "random" ? cardById(option.value) : null;
+    actions.push({ id: "selectMatchSetupOption", field, value: option.value, cardId: optionCard?.id || "", x: menuX, y, w: menuW, h: itemH });
     if (active) fillRoundRect(ctx, menuX + 4, y + 3, menuW - 8, itemH - 6, 9, "#2f6f57");
     else if (index > 0) {
       ctx.strokeStyle = "rgba(119, 92, 52, 0.2)";
@@ -139,8 +140,18 @@ function drawSetupDropdown(ctx, view, actions, settings, field, anchors, closeId
       ctx.stroke();
     }
     if (showHint) {
-      text(ctx, shortText(option.label, 18), menuX + 16, y + 20, 13, active ? "#ffffff" : "#2f2417");
-      wrapText(ctx, option.hint || "", menuX + 16, y + 40, menuW - 32, 14, 2, 10, active ? "#efe6ff" : "#775c34");
+      let textX = menuX + 16;
+      let textW = menuW - 32;
+      if (optionCard) {
+        const avatarSize = Math.min(48, itemH - 12);
+        const avatarX = menuX + 10;
+        const avatarY = y + (itemH - avatarSize) / 2;
+        drawCardImage(ctx, { ...optionCard, imageFill: true, imageX: avatarX, imageY: avatarY, imageW: avatarSize, imageH: avatarSize });
+        textX = avatarX + avatarSize + 10;
+        textW = menuX + menuW - 14 - textX;
+      }
+      text(ctx, shortText(option.label, optionCard ? 12 : 18), textX, y + 20, 13, active ? "#ffffff" : "#2f2417");
+      wrapText(ctx, option.hint || "", textX, y + 40, textW, 14, 2, 10, active ? "#efe6ff" : "#775c34");
     } else {
       text(ctx, shortText(option.label, 18), menuX + menuW / 2, y + itemH / 2, 13, active ? "#ffffff" : "#2f2417", "center");
     }

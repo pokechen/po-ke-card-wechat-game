@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-// 验证：在卡组包含「非传世济世」（李时珍，非 Hero 的 Revival）的前提下，
+// 验证：在卡组包含「非传世济世」（华佗，非 Hero 的 Revival）的前提下，
 // 携带 0 / 1 / 2 / 3 张「请辞归隐」（Recall）时的胜率区别。
 //
 // 设计：
-//  - 固定阵营为 开国群雄，使李时珍可入组。
+//  - 固定阵营为 开国群雄，使华佗可入组。
 //  - 每个种子先生成一份基准困难卡组（作为对手与受试卡组的来源）。
-//  - 受试卡组 = 基准卡组，但确保恰好 1 张李时珍（zhangyu-0141，非传世济世），
+//  - 受试卡组 = 基准卡组，但确保恰好 1 张华佗（zhangyu-0145，非传世济世），
 //    移除原有请辞，保留 7 张其它特殊牌，再补入 N 张请辞归隐。
 //    => 各 N 之间唯一变量是请辞数量。
 //  - 对手始终使用同一份基准卡组。对每种 N 同时跑「受试为玩家0」与「受试为玩家1」，
@@ -18,7 +18,7 @@ const { FACTION_KEYS, buildDeck, cardValue, deckStatus, cardById, categoryLabel 
 
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
 const FACTION = "开国群雄";
-const REVIVAL_CARD_ID = "zhangyu-0141"; // 李时珍：非传世济世
+const REVIVAL_CARD_ID = "zhangyu-0145"; // 华佗：非传世济世
 const RECALL_CARD_IDS = ["zhangyu-0185", "zhangyu-0186", "zhangyu-0187"]; // 请辞归隐 三张
 const STRATEGY = "v3.2";
 
@@ -182,7 +182,7 @@ function main() {
 
   process.stdout.write(`\n[分片 start=${args.start} count=${args.matches}] 完成 ${args.matches} 种子\n`);
   const lines = [];
-  lines.push(`验证「非传世济世(李时珍) + N 张请辞归隐」胜率区别`);
+  lines.push(`验证「非传世济世(华佗) + N 张请辞归隐」胜率区别`);
   lines.push(`阵营=${FACTION}  策略=${STRATEGY}  simDepth=${args.simDepth} branchCap=${args.branchCap}  种子=${args.seed}  种子数=${args.matches}`);
   lines.push(`基准卡组样例(首个种子)：总数=${firstSeedInfo.total} 济世数=${firstSeedInfo.revivals} 请辞数=${firstSeedInfo.recalls} 合法=${firstSeedInfo.valid}`);
   lines.push("");

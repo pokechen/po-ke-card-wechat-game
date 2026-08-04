@@ -495,12 +495,12 @@ function playLeaderSituationCard(state, playerIndex, uid) {
   return true;
 }
 
-function takeBestDiscardToHand(state, fromIndex, toIndex, targetUid) {
+function takeDiscardToHand(state, fromIndex, toIndex, targetUid) {
   const from = state.players[fromIndex];
   const to = state.players[toIndex];
-  const candidates = from.discard.filter(card => card.category === "unit" || card.category === "hero");
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => cardValue(b) - cardValue(a));
+  const candidates = (from?.discard || []).slice();
+  if (!from || !to || !candidates.length) return null;
+  candidates.sort((a, b) => futureCardValue(state, toIndex, b) - futureCardValue(state, toIndex, a));
   const card = candidates.find(item => item.uid === targetUid) || candidates[0];
   from.discard = from.discard.filter(item => item.uid !== card.uid);
   card.owner = toIndex;
@@ -509,15 +509,32 @@ function takeBestDiscardToHand(state, fromIndex, toIndex, targetUid) {
   card.boardRow = null;
   card.playedBy = toIndex;
   to.hand.push(card);
-  addLog(state, `${to.name}从弃牌堆取回「${cardLabel(card)}」。`);
+  addLog(state, `${to.name}从${fromIndex === toIndex ? "己方" : "对手"}弃牌堆取回「${cardLabel(card)}」。`);
   return card;
 }
 
-function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
+function takeDeckCardToHand(state, playerIndex, targetUid) {
+  const player = state.players[playerIndex];
+  if (!player?.deck?.length) return null;
+  const candidates = player.deck.slice().sort((a, b) => futureCardValue(state, playerIndex, b) - futureCardValue(state, playerIndex, a));
+  const card = candidates.find(item => item.uid === targetUid) || candidates[0];
+  const index = player.deck.findIndex(item => item.uid === card.uid);
+  if (index < 0) return null;
+  player.deck.splice(index, 1);
+  card.owner = playerIndex;
+  card.controller = playerIndex;
+  card.zone = "hand";
+  card.boardRow = null;
+  card.playedBy = playerIndex;
+  player.hand.push(card);
+  return card;
+}
+
+function discardTwoCards(state, playerIndex, selectedUids = null) {
   const player = state.players[playerIndex];
   const picks = Array.isArray(selectedUids)
     ? selectedUids.map(uid => player.hand.find(card => card.uid === uid)).filter(Boolean)
-    : player.hand.slice().sort((a, b) => cardValue(a) - cardValue(b)).slice(0, 2);
+    : player.hand.slice().sort((a, b) => futureCardValue(state, playerIndex, a) - futureCardValue(state, playerIndex, b)).slice(0, 2);
   if (picks.length !== 2 || new Set(picks.map(card => card.uid)).size !== 2) return false;
   const picked = new Set(picks.map(card => card.uid));
   player.hand = player.hand.filter(card => !picked.has(card.uid));
@@ -528,11 +545,20 @@ function discardTwoDrawOne(state, playerIndex, selectedUids = null) {
     card.boardRow = null;
   });
   player.discard.push(...picks);
-  const before = player.hand.length;
-  draw(player, 1);
-  const drawn = player.hand.length - before;
-  addLog(state, `${player.name}弃置「${picks.map(cardLabel).join("」、「")}」并抽 ${drawn} 张牌。`);
-  return { picks, drawn };
+  addLog(state, `${player.name}弃置「${picks.map(cardLabel).join("」、「")}」。`);
+  return { picks };
+}
+
+function finishDiscardAndDeckChoice(state, playerIndex, picks, targetUid) {
+  const player = state.players[playerIndex];
+  const chosen = takeDeckCardToHand(state, playerIndex, targetUid);
+  if (!player || !chosen) return false;
+  player.leaderUsed = true;
+  const discardedNames = (picks || []).map(cardLabel).join("、");
+  markLeaderUsed(state, playerIndex, `弃牌：${discardedNames}；选牌：${cardLabel(chosen)}`);
+  addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」，弃置「${(picks || []).map(cardLabel).join("」、「")}」并从牌库选择「${cardLabel(chosen)}」加入手牌。`);
+  afterPlay(state);
+  return true;
 }
 
 function optimizeMultiRowRows(state, playerIndex) {
@@ -859,7 +885,24 @@ function useLeader(state, playerIndex, actionOptions = {}) {
   if (!player || state.current !== playerIndex || player.passed || player.leaderUsed || !player.leader) return false;
   const text = leaderText(player);
   const discardsTwo = /弃置\s*2\s*张手牌/.test(text);
-  if (discardsTwo && player.hand.length < 2) return false;
+  const takesOpponentDiscard = /opponent.*discard|对手.*弃牌/.test(text);
+  const takesOwnDiscard = /己方.*弃牌堆.*手牌|弃牌堆.*选择.*手牌|弃牌堆.*取回.*手牌/.test(text);
+  const discardSourceIndex = takesOpponentDiscard ? otherIndex(playerIndex) : playerIndex;
+  if (discardsTwo && (player.hand.length < 2 || !player.deck.length)) return false;
+  if ((takesOpponentDiscard || takesOwnDiscard) && !state.players[discardSourceIndex]?.discard?.length) return false;
+
+  if ((takesOpponentDiscard || takesOwnDiscard) && isHumanControlled(state, playerIndex) && !actionOptions.leaderTargetUid) {
+    const sourceName = takesOpponentDiscard ? "对手" : "己方";
+    state.pending = {
+      type: "leaderDiscardChoice",
+      playerIndex,
+      sourcePlayerIndex: discardSourceIndex,
+      candidates: state.players[discardSourceIndex].discard.slice(),
+      title: `${cardLabel(player.leader)}：从${sourceName}弃牌堆选择 1 张卡牌`
+    };
+    addLog(state, `${player.name}正在为主将「${cardLabel(player.leader)}」选择弃牌堆卡牌。`);
+    return true;
+  }
 
   // 朱温：从牌组选择任意 1 张时局牌并立即打出（需要玩家选择具体牌）
   const picksDeckSituation = /从牌组选择.*时局牌/.test(text);
@@ -903,6 +946,11 @@ function useLeader(state, playerIndex, actionOptions = {}) {
     addLog(state, `${player.name}正在为主将「${cardLabel(player.leader)}」选择 2 张弃牌。`);
     return true;
   }
+  if (discardsTwo) {
+    const result = discardTwoCards(state, playerIndex, actionOptions.leaderDiscardUids);
+    if (!result) return false;
+    return finishDiscardAndDeckChoice(state, playerIndex, result.picks, actionOptions.leaderCardUid);
+  }
   player.leaderUsed = true;
   const locksOpponentLeader = /封锁.*主将|取消.*主将/.test(text);
   markLeaderUsed(state, playerIndex, locksOpponentLeader ? "封锁：对手主将技能" : "主将技能");
@@ -923,34 +971,16 @@ function useLeader(state, playerIndex, actionOptions = {}) {
       const result = cards.length ? `手牌x${cards.length}` : "无手牌";
       addLog(state, `侦察完成：查看对手 ${cards.length} 张手牌。`);
       appendLastBattleActionEffect(state, "侦察", result);
-    } else if (/opponent.*discard|对手.*弃牌/.test(text)) {
-      const taken = takeBestDiscardToHand(state, otherIndex(playerIndex), playerIndex, actionOptions.leaderTargetUid);
+    } else if (takesOpponentDiscard) {
+      const taken = takeDiscardToHand(state, otherIndex(playerIndex), playerIndex, actionOptions.leaderTargetUid);
       if (taken) appendLastBattleActionEffect(state, "取回", cardLabel(taken));
-      else {
-        const before = player.hand.length;
-        draw(player, 1);
-        const drawn = player.hand.length - before;
-        if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
-      }
     } else if (/济世.*随机|随机目标/.test(text)) {
       state.randomRestore = true;
       addLog(state, `${player.name}启用随机济世：双方济世复归目标改为随机。`);
       appendLastBattleActionEffect(state, "济世", "随机目标");
-    } else if (/己方.*弃牌堆.*手牌|弃牌堆.*取回.*手牌/.test(text)) {
-      const taken = takeBestDiscardToHand(state, playerIndex, playerIndex, actionOptions.leaderTargetUid);
+    } else if (takesOwnDiscard) {
+      const taken = takeDiscardToHand(state, playerIndex, playerIndex, actionOptions.leaderTargetUid);
       if (taken) appendLastBattleActionEffect(state, "取回", cardLabel(taken));
-      else {
-        const before = player.hand.length;
-        draw(player, 1);
-        const drawn = player.hand.length - before;
-        if (drawn > 0) appendLastBattleActionEffect(state, "抽牌", `手牌x${drawn}`);
-      }
-    } else if (/弃置\s*2\s*张手牌/.test(text)) {
-      const result = discardTwoDrawOne(state, playerIndex, actionOptions.leaderDiscardUids);
-      if (result) {
-        const drawResult = result.drawn > 0 ? `，抽牌x${result.drawn}` : "";
-        appendLastBattleActionEffect(state, "弃牌", `${result.picks.map(cardLabel).join("、")}${drawResult}`);
-      }
     } else if (/双方弃牌堆.*洗回.*牌库/.test(text)) {
       const count = state.players.reduce((sum, item) => sum + item.discard.length, 0);
       state.players.forEach(item => {
@@ -1973,8 +2003,12 @@ function canUseLeaderAction(state, playerIndex) {
   const player = state.players[playerIndex];
   if (!player || player.passed || player.leaderUsed || !player.leader || state.current !== playerIndex) return false;
   const text = leaderText(player);
-  if (/弃置\s*2\s*张手牌/.test(text) && player.hand.length < 2) return false;
+  if (/弃置\s*2\s*张手牌/.test(text) && (player.hand.length < 2 || !player.deck.length)) return false;
   if (/从牌组选择.*时局牌/.test(text) && !player.deck.some(card => card.category === "situation")) return false;
+  if (/opponent.*discard|对手.*弃牌/.test(text) && !state.players[otherIndex(playerIndex)].discard.length) return false;
+  if ((/己方.*弃牌堆.*手牌|弃牌堆.*选择.*手牌|弃牌堆.*取回.*手牌/.test(text))
+    && !(/opponent.*discard|对手.*弃牌/.test(text))
+    && !player.discard.length) return false;
   return true;
 }
 
@@ -2213,19 +2247,21 @@ function leaderActionsDocumentV2(state, playerIndex) {
   const text = leaderText(player);
   if (/弃置\s*2\s*张手牌/.test(text)) {
     const cards = player.hand.slice().sort((a, b) => futureCardValue(state, playerIndex, a) - futureCardValue(state, playerIndex, b));
+    const bestDeckCard = player.deck.slice().sort((a, b) => futureCardValue(state, playerIndex, b) - futureCardValue(state, playerIndex, a))[0];
+    if (!bestDeckCard) return [];
     const actions = [];
     for (let i = 0; i < cards.length; i++) {
-      for (let j = i + 1; j < cards.length; j++) actions.push({ action: "leader", leaderDiscardUids: [cards[i].uid, cards[j].uid] });
+      for (let j = i + 1; j < cards.length; j++) {
+        actions.push({ action: "leader", leaderDiscardUids: [cards[i].uid, cards[j].uid], leaderCardUid: bestDeckCard.uid });
+      }
     }
     return actions.slice(0, ADVANCED_AI.maxActionsPerNode);
   }
   if (/opponent.*discard|对手.*弃牌/.test(text)) {
-    return opponent.discard.filter(card => card.category === "unit" || card.category === "hero")
-      .map(card => ({ action: "leader", leaderTargetUid: card.uid }));
+    return opponent.discard.map(card => ({ action: "leader", leaderTargetUid: card.uid }));
   }
-  if (/己方.*弃牌堆.*手牌|弃牌堆.*取回.*手牌/.test(text)) {
-    return player.discard.filter(card => card.category === "unit" || card.category === "hero")
-      .map(card => ({ action: "leader", leaderTargetUid: card.uid }));
+  if (/己方.*弃牌堆.*手牌|弃牌堆.*选择.*手牌|弃牌堆.*取回.*手牌/.test(text)) {
+    return player.discard.map(card => ({ action: "leader", leaderTargetUid: card.uid }));
   }
   if (/清除|拨云/.test(text)) return Object.keys(state.situations).length ? [{ action: "leader" }] : [];
   if (/双方弃牌堆.*洗回.*牌库/.test(text)) return state.players.some(item => item.discard.length) ? [{ action: "leader" }] : [];
@@ -2622,15 +2658,43 @@ function resolvePending(state, choice = {}) {
     }
     const pickedCards = selectedUids.map(selectedUid => player.hand.find(card => card.uid === selectedUid));
     if (pickedCards.some(card => !card)) return false;
+    const result = discardTwoCards(state, playerIndex, selectedUids);
+    if (!result || !player.deck.length) return false;
+    state.pending = {
+      type: "leaderDeckChoice",
+      playerIndex,
+      candidates: player.deck.slice(),
+      discardedCards: result.picks,
+      title: "黄巢：从牌库选择 1 张卡牌"
+    };
+    addLog(state, `${player.name}已弃置 2 张手牌，正在从牌库选择 1 张卡牌。`);
+    return true;
+  }
+  if (pending.type === "leaderDiscardChoice") {
+    const uid = String(choice.uid || "");
+    const sourceIndex = pending.sourcePlayerIndex;
+    const source = state.players[sourceIndex];
+    const isCandidate = pending.candidates.some(card => card.uid === uid)
+      && source?.discard?.some(card => card.uid === uid);
+    if (!uid || !isCandidate) return false;
     state.pending = null;
-    const result = discardTwoDrawOne(state, playerIndex, selectedUids);
-    if (!result) return false;
+    const taken = takeDiscardToHand(state, sourceIndex, playerIndex, uid);
+    if (!taken) return false;
+    const player = state.players[playerIndex];
     player.leaderUsed = true;
-    const drawResult = result.drawn > 0 ? `，并抽${result.drawn}张牌` : "";
-    markLeaderUsed(state, playerIndex, `弃牌：${pickedCards.map(cardLabel).join("、")}${drawResult}`);
+    markLeaderUsed(state, playerIndex, `取回：${cardLabel(taken)}`);
     addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」。`);
     afterPlay(state);
     return true;
+  }
+  if (pending.type === "leaderDeckChoice") {
+    const uid = String(choice.uid || "");
+    const player = state.players[playerIndex];
+    const isCandidate = pending.candidates.some(card => card.uid === uid)
+      && player?.deck?.some(card => card.uid === uid);
+    if (!uid || !isCandidate) return false;
+    state.pending = null;
+    return finishDiscardAndDeckChoice(state, playerIndex, pending.discardedCards || [], uid);
   }
   if (pending.type === "leaderSituation") {
     const uid = String(choice.uid || "");
@@ -2710,6 +2774,13 @@ function cancelPending(state) {
     addLog(state, `${player.name}取消了主将「${cardLabel(player.leader)}」的时局选牌，请重新行动。`);
     return true;
   }
+  if (state.pending.type === "leaderDiscardChoice") {
+    const player = state.players[state.pending.playerIndex];
+    state.pending = null;
+    addLog(state, `${player.name}取消了主将「${cardLabel(player.leader)}」的弃牌堆选牌，请重新行动。`);
+    return true;
+  }
+  if (state.pending.type === "leaderDeckChoice") return false;
   if (state.pending.type === "recall") return resolvePending(state, { cancel: true });
   return resolvePending(state, { skip: true });
 }

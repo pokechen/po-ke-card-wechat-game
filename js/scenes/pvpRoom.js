@@ -23,9 +23,8 @@ function ruleText(room) {
 
 function readyOf(room, index) {
   if (!Number.isInteger(index) || index < 0) return false;
-  const players = room?.players || [];
   const readyPlayers = Array.isArray(room?.readyPlayers) ? room.readyPlayers : [];
-  return !!(players[index]?.ready || readyPlayers[index]);
+  return !!readyPlayers[index];
 }
 
 function rematchReadyOf(room, index) {

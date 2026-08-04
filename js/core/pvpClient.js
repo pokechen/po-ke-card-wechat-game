@@ -1,5 +1,5 @@
 const HTTP_API_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.ap-shanghai.app.tcloudbase.com/pvpRoom";
-const PVP_READY_DEBUG_VERSION = "20260720-ready-debug-v1";
+const PVP_READY_DEBUG_VERSION = "20260803-ready-atomic-v2";
 
 let roomWatcher = null;
 let roomPollTimer = null;
@@ -90,9 +90,9 @@ function roomReadyDebug(room) {
   return {
     status: room?.status || "",
     turnSeq: Number(room?.turnSeq || 0),
-    readySeq: Number(room?.readySeq || 0),
+    ruleVersion: Number(room?.rules?.version || 0),
+    selectionRuleVersion: Number(room?.selectionRuleVersion || 0),
     playerCount: players.length,
-    playerReady: players.map(player => !!player?.ready),
     readyPlayers: Array.isArray(room?.readyPlayers) ? room.readyPlayers.map(Boolean) : []
   };
 }
@@ -169,63 +169,83 @@ function getRoomCode(roomId, force = false) {
   }));
 }
 
-function updateRules(roomId, rules) {
-  return callRoom("updateRules", { roomId, rules });
+function updateRules(roomId, rules, expectedRuleVersion) {
+  return callRoom("updateRules", { roomId, rules, expectedRuleVersion });
 }
 
-function setReady(roomId, ready, traceId = "") {
-  return callRoom("setReady", { roomId, ready, traceId });
+function setReady(roomId, ready, expectedRuleVersion, traceId = "") {
+  return callRoom("setReady", { roomId, ready, expectedRuleVersion, traceId });
 }
 
 function readyAt(room, index) {
-  const players = room?.players || [];
   const readyPlayers = Array.isArray(room?.readyPlayers) ? room.readyPlayers : [];
-  return !!(players[index]?.ready || readyPlayers[index]);
+  return !!readyPlayers[index];
 }
 
-async function setReadyConfirmed(roomId, ready) {
+function readyResultConfirmed(room, playerIndex, ready, expectedRuleVersion) {
+  if (!room || !Number.isInteger(playerIndex)) return false;
+  if (Number(room.rules?.version || 0) !== Number(expectedRuleVersion || 0)) return false;
+  if (ready && room.status === "selecting") {
+    return Number(room.selectionRuleVersion || 0) === Number(expectedRuleVersion || 0);
+  }
+  return room.status === "waiting" && readyAt(room, playerIndex) === !!ready;
+}
+
+async function setReadyConfirmed(roomId, ready, expectedRuleVersion) {
   const traceId = `ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   let lastError = null;
-  let playerIndex = 1;
-  console.log("[pvp-ready-debug] setReadyConfirmed begin", { version: PVP_READY_DEBUG_VERSION, traceId, roomId, ready: !!ready });
-  for (let attempt = 0; attempt < 4; attempt++) {
+  let playerIndex = null;
+  console.log("[pvp-ready-debug] setReadyConfirmed begin", { version: PVP_READY_DEBUG_VERSION, traceId, roomId, ready: !!ready, expectedRuleVersion });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let requestError = null;
     try {
-      console.log("[pvp-ready-debug] setReady request", { traceId, attempt: attempt + 1, roomId, ready: !!ready });
-      const result = await setReady(roomId, ready, traceId);
+      console.log("[pvp-ready-debug] setReady request", { traceId, attempt: attempt + 1, roomId, ready: !!ready, expectedRuleVersion });
+      const result = await setReady(roomId, ready, expectedRuleVersion, traceId);
       playerIndex = Number.isInteger(result.playerIndex) ? result.playerIndex : playerIndex;
-      const confirmed = readyAt(result.room, playerIndex) === !!ready;
-      console.log("[pvp-ready-debug] setReady response", { traceId, attempt: attempt + 1, playerIndex, confirmed, room: roomReadyDebug(result.room) });
+      const confirmed = result.readyAccepted === true && readyResultConfirmed(result.room, playerIndex, ready, expectedRuleVersion);
+      console.log("[pvp-ready-debug] setReady response", { traceId, attempt: attempt + 1, playerIndex, confirmed, transitioned: !!result.transitioned, room: roomReadyDebug(result.room) });
       if (confirmed) return result;
+      requestError = new Error("准备状态尚未确认");
+      requestError.code = "READY_NOT_CONFIRMED";
+      lastError = requestError;
     } catch (err) {
+      requestError = err;
       lastError = err;
       console.warn("[pvp-ready-debug] setReady error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
-      if (!["PLAYER_SYNCING", "READY_NOT_CONFIRMED", "FORBIDDEN"].includes(err?.code) && attempt > 0) throw err;
+      if (["STALE_RULES", "FORBIDDEN", "NOT_FOUND"].includes(err?.code)) throw err;
     }
+
     await wait(180 * (attempt + 1));
     try {
       const latest = await fetchRoom(roomId);
-      const confirmed = readyAt(latest.room, playerIndex) === !!ready;
+      playerIndex = Number.isInteger(latest.playerIndex) ? latest.playerIndex : playerIndex;
+      const confirmed = readyResultConfirmed(latest.room, playerIndex, ready, expectedRuleVersion);
       console.log("[pvp-ready-debug] setReady verify fetch", { traceId, attempt: attempt + 1, playerIndex, confirmed, room: roomReadyDebug(latest.room) });
-      if (confirmed) return { ...latest, playerIndex };
+      if (confirmed) return { ...latest, playerIndex, readyAccepted: true, transitioned: latest.room?.status === "selecting", traceId };
+      if (Number(latest.room?.rules?.version || 0) !== Number(expectedRuleVersion || 0)) {
+        const staleError = new Error("房间规则已修改，请确认新规则后重新准备");
+        staleError.code = "STALE_RULES";
+        throw staleError;
+      }
     } catch (err) {
       lastError = err;
-      console.warn("[pvp-ready-debug] setReady verify error", { traceId, attempt: attempt + 1, message: err?.message || String(err) });
+      console.warn("[pvp-ready-debug] setReady verify error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
+      if (err?.code === "STALE_RULES") throw err;
     }
+
+    const retryable = !requestError?.code || ["PLAYER_SYNCING", "READY_NOT_CONFIRMED", "ROOM_BUSY", "SERVER_ERROR", "SERVICE_FAILED", "HTTP_FAILED"].includes(requestError.code);
+    if (!retryable) throw requestError;
   }
-  console.error("[pvp-ready-debug] setReadyConfirmed failed", { traceId, roomId, ready: !!ready, message: lastError?.message || "unknown" });
+  console.error("[pvp-ready-debug] setReadyConfirmed failed", { traceId, roomId, ready: !!ready, expectedRuleVersion, message: lastError?.message || "unknown" });
   throw lastError || new Error("准备状态同步失败，请重试");
 }
 
-function startSelection(roomId) {
-  return callRoom("startSelection", { roomId });
+function submitSetup(roomId, setup, selectionRuleVersion) {
+  return callRoom("submitSetup", { roomId, setup, selectionRuleVersion });
 }
 
-function submitSetup(roomId, setup) {
-  return callRoom("submitSetup", { roomId, setup });
-}
-
-function returnToRoom(roomId) {
-  return callRoom("returnToRoom", { roomId });
+function returnToRoom(roomId, matchId) {
+  return callRoom("returnToRoom", { roomId, matchId });
 }
 
 function submitAction(roomId, turnSeq, battleAction) {
@@ -324,7 +344,7 @@ function closeRoomWatch() {
 function roomUpdateKey(room) {
   if (!room) return "";
   const readyPlayers = Array.isArray(room.readyPlayers) ? room.readyPlayers.map(Boolean).join("") : "";
-  return [room.roomId || room._id || "", room.status || "", room.turnSeq || 0, room.updatedAt || 0, room.readySeq || 0, readyPlayers].join(":");
+  return [room.roomId || room._id || "", room.status || "", room.turnSeq || 0, room.updatedAt || 0, room.rules?.version || 0, room.selectionRuleVersion || 0, readyPlayers].join(":");
 }
 
 function watchRoom(roomId, onChange, onError) {
@@ -407,7 +427,6 @@ module.exports = {
   updateRules,
   setReady,
   setReadyConfirmed,
-  startSelection,
   submitSetup,
   returnToRoom,
   submitAction,

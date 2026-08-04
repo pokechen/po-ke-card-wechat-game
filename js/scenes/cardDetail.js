@@ -279,6 +279,17 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     detailY += boxH + 8;
   });
 
+  if (Number(options.progressTotal) > 1) {
+    const total = Math.max(2, Number(options.progressTotal));
+    const index = Math.max(0, Math.min(total - 1, Number(options.progressIndex) || 0));
+    const trackW = Math.min(132, panelW * 0.42);
+    const trackX = panelX + (panelW - trackW) / 2;
+    const trackY = footerY - 13;
+    const thumbW = Math.max(18, trackW / total);
+    const thumbX = trackX + (trackW - thumbW) * (index / (total - 1));
+    fillRoundRect(ctx, trackX, trackY, trackW, 3, 1.5, "rgba(119,92,52,0.18)");
+    fillRoundRect(ctx, thumbX, trackY - 1, thumbW, 5, 2.5, "rgba(47,111,87,0.72)");
+  }
   const footerHint = leftCard || rightCard ? `左右滑动切换 · ${options.closeHint || "点击空白处返回"}` : (options.closeHint || "点击空白处返回");
   text(ctx, footerHint, panelX + panelW / 2, footerY, 11, "#8a785f", "center");
 

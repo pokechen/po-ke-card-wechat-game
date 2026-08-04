@@ -315,7 +315,6 @@ function recruitBonus(card, context) {
   const name = cleanCardName(card.name);
   if (card.recruitGroupDisplayName === "桃园三杰") return 10;
   if (card.recruitGroupDisplayName === "星火五雄") return 10;
-  if (name === "曾子") return 12;
   if (name === "孟尝君") return 5;
   if (name === "鬼谷子") return 7;
   if (name === "李密") return 8;

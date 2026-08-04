@@ -78,10 +78,10 @@ const app = {
     error: "",
     recordedResultKey: "",
     lastSeenRuleVersion: 0,
-    readyRuleVersion: 0,
-    autoStartReadySeq: 0,
     rulePromptOpen: false,
     pendingRulePrompt: null,
+    queuedReadyRuleVersion: 0,
+    queueReadyAfterRuleUpdate: false,
     dissolvedNoticeRoomId: ""
   },
   ui: {
@@ -2516,7 +2516,11 @@ function finishPvpRulePrompt(confirmed, roomId, shownVersion) {
     return promptPvpRuleChanged(pending.previousRules, pending.nextRules, pending.roomId);
   }
   if (confirmed && roomId === currentRoomId && currentVersion === shownVersion && app.pvp.room?.status === "waiting") {
-    return setPvpReady(true);
+    if (app.pvp.submitting) {
+      app.pvp.queuedReadyRuleVersion = shownVersion;
+      return render();
+    }
+    return setPvpReady(true, shownVersion);
   }
   render();
 }
@@ -2565,9 +2569,8 @@ function decorateOnlineMatch(match) {
 
 function pvpPlayerReady(room, index) {
   if (!Number.isInteger(index) || index < 0) return false;
-  const players = room?.players || [];
   const readyPlayers = Array.isArray(room?.readyPlayers) ? room.readyPlayers : [];
-  return !!(players[index]?.ready || readyPlayers[index]);
+  return !!readyPlayers[index];
 }
 
 function pvpReadyDebug(room) {
@@ -2575,9 +2578,9 @@ function pvpReadyDebug(room) {
   return {
     status: room?.status || "",
     turnSeq: Number(room?.turnSeq || 0),
-    readySeq: Number(room?.readySeq || 0),
+    ruleVersion: Number(room?.rules?.version || 0),
+    selectionRuleVersion: Number(room?.selectionRuleVersion || 0),
     playerCount: players.length,
-    playerReady: players.map(player => !!player?.ready),
     readyPlayers: Array.isArray(room?.readyPlayers) ? room.readyPlayers.map(Boolean) : []
   };
 }
@@ -2672,9 +2675,27 @@ function recordOnlineMatch(match) {
   app.pvp.recordedResultKey = recordKey;
 }
 
-function applyRoomUpdate(room, playerIndex) {
+function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
   if (!room) return;
   const roomId = normalizePvpRoomId(room.roomId || room._id || app.pvp.roomId);
+  const currentRoomId = normalizePvpRoomId(app.pvp.roomId);
+  if (currentRoomId && roomId && currentRoomId !== roomId) {
+    console.warn("[pvp-ready-debug] ignore room response from previous session", { currentRoomId, roomId });
+    return;
+  }
+  if (completeSubmission) {
+    app.pvp.submitting = false;
+    const queuedReadyRuleVersion = Number(app.pvp.queuedReadyRuleVersion || 0) || 0;
+    app.pvp.queuedReadyRuleVersion = 0;
+    if (queuedReadyRuleVersion) {
+      setTimeout(() => {
+        const currentVersion = Number(app.pvp.room?.rules?.version || 0) || 0;
+        if (!app.pvp.submitting && app.pvp.room?.status === "waiting" && currentVersion === queuedReadyRuleVersion) {
+          setPvpReady(true, queuedReadyRuleVersion);
+        }
+      }, 0);
+    }
+  }
   console.log("[pvp-ready-debug] applyRoomUpdate", {
     roomId,
     incomingPlayerIndex: playerIndex,
@@ -2719,11 +2740,9 @@ function applyRoomUpdate(room, playerIndex) {
     if (["revive", "leaderDiscard", "recall"].includes(previousPendingType) && app.match.pending?.type !== previousPendingType) closeBattleCardDetail();
   } else if (room.status !== "finished") app.match = null;
   app.pvp.loading = false;
-  app.pvp.submitting = false;
   app.pvp.error = "";
   app.pvp.lastSeenRuleVersion = Math.max(seenVersion, nextVersion);
   if (shouldPromptRuleChange) {
-    app.pvp.readyRuleVersion = 0;
     console.log("[pvp] 玩家2检测到规则变更，加入提示队列:", seenVersion, "->", nextVersion);
     queuePvpRuleChanged(previousRoom?.rules || {}, room.rules, roomId);
   }
@@ -2735,14 +2754,6 @@ function applyRoomUpdate(room, playerIndex) {
   if (previousRoom && (!prevSelfReady && nextSelfReady || !prevFriendReady && nextFriendReady)) playPvpReadyAnim();
   if (nextPlayerIndex === 0 && previousRoom && !prevFriendReady && nextFriendReady) {
     toast("好友已准备");
-  }
-  const bothReady = room.status === "waiting" && (room.players?.length || 0) >= 2 && pvpPlayerReady(room, 0) && pvpPlayerReady(room, 1);
-  const readySeq = Number(room.readySeq || 0) || 0;
-  if (nextPlayerIndex === 0 && bothReady && app.pvp.autoStartReadySeq !== readySeq) {
-    app.pvp.autoStartReadySeq = readySeq;
-    setTimeout(() => {
-      if (app.pvp.roomId === roomId && app.pvp.room?.status === "waiting" && pvpPlayerReady(app.pvp.room, 0) && pvpPlayerReady(app.pvp.room, 1)) startPvpSelection();
-    }, 520);
   }
   const prevCount = previousRoom ? (previousRoom.players?.length || 0) : 0;
   const nextCount = room.players?.length || 0;
@@ -2818,7 +2829,7 @@ function resetPvpState() {
   app.ui.pvpReadyAnimUntil = 0;
   clearPendingPvpMulliganSwap();
   clearRoundTransitionTimer();
-  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0, readyRuleVersion: 0, autoStartReadySeq: 0, rulePromptOpen: false, pendingRulePrompt: null, dissolvedNoticeRoomId: "" };
+  app.pvp = { roomId: "", pendingRoomId: "", room: null, playerIndex: 0, loading: false, submitting: false, error: "", recordedResultKey: "", lastSeenRuleVersion: 0, rulePromptOpen: false, pendingRulePrompt: null, queuedReadyRuleVersion: 0, queueReadyAfterRuleUpdate: false, dissolvedNoticeRoomId: "" };
 }
 
 function showPvpRoomDissolvedNotice(roomId) {
@@ -3371,7 +3382,7 @@ function submitPvpAction(battleAction) {
   }
   app.pvp.submitting = true;
   pvpClient.submitAction(app.pvp.roomId, app.pvp.room?.turnSeq || 0, battleAction).then(result => {
-    applyRoomUpdate(result.room, result.playerIndex);
+    applyRoomUpdate(result.room, result.playerIndex, true);
   }).catch(err => {
     console.warn("[pvp] action failed", err);
     if (battleAction.type === "mulliganSwap") clearPendingPvpMulliganSwap();
@@ -3465,6 +3476,15 @@ function resolveLeaderSituationChoice(cardUid) {
   return afterHumanAction();
 }
 
+function resolveLeaderCardChoice(cardUid) {
+  const type = app.match?.pending?.type;
+  if (!["leaderDiscardChoice", "leaderDeckChoice"].includes(type) || !cardUid) return render();
+  closeBattleCardDetail();
+  if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: cardUid } });
+  resolvePending(app.match, { uid: cardUid });
+  return afterHumanAction();
+}
+
 function cancelBattlePendingChoice() {
   if (!app.match?.pending) return render();
   closeBattleCardDetail();
@@ -3484,7 +3504,7 @@ function confirmLeaderDiscardChoice(cardUid) {
   const firstName = first?.name || "已选手牌";
   const secondName = card.name || "当前手牌";
   const api = typeof wx !== "undefined" ? wx : null;
-  const content = `将弃置「${firstName}」和「${secondName}」，并抽 1 张牌。`;
+  const content = `将弃置「${firstName}」和「${secondName}」，然后从牌库选择 1 张卡牌。`;
   if (api && api.showModal) {
     api.showModal({
       title: "确认弃置？",
@@ -4253,77 +4273,67 @@ function handleRankLeaderboard(action) {
 
 function updatePvpRoomRules(patch) {
   if (!app.pvp.roomId || app.pvp.submitting) return;
+  const expectedRuleVersion = Number(app.pvp.room?.rules?.version || 0) || 0;
   const rules = normalizePvpRules({ ...(app.pvp.room?.rules || currentRulesFromSettings()), ...patch });
   rememberPvpRules(rules);
   app.pvp.submitting = true;
-  pvpClient.updateRules(app.pvp.roomId, rules).then(result => {
-    applyRoomUpdate(result.room, result.playerIndex);
+  app.pvp.queueReadyAfterRuleUpdate = false;
+  pvpClient.updateRules(app.pvp.roomId, rules, expectedRuleVersion).then(result => {
+    if (app.pvp.queueReadyAfterRuleUpdate) {
+      app.pvp.queuedReadyRuleVersion = Number(result.room?.rules?.version || 0) || 0;
+      app.pvp.queueReadyAfterRuleUpdate = false;
+    }
+    applyRoomUpdate(result.room, result.playerIndex, true);
   }).catch(err => {
     app.pvp.submitting = false;
+    app.pvp.queueReadyAfterRuleUpdate = false;
     toast(err.message || "修改规则失败");
     render();
   });
 }
 
-function setPvpReady(ready) {
+function setPvpReady(ready, expectedRuleVersion = Number(app.pvp.room?.rules?.version || 0) || 0) {
+  const roomId = app.pvp.roomId;
   console.log("[pvp-ready-debug] setPvpReady click", {
-    roomId: app.pvp.roomId,
+    roomId,
     playerIndex: app.pvp.playerIndex,
     ready: !!ready,
+    expectedRuleVersion,
     submitting: app.pvp.submitting,
     room: pvpReadyDebug(app.pvp.room)
   });
-  if (!app.pvp.roomId || app.pvp.submitting) {
-    console.warn("[pvp-ready-debug] setPvpReady skipped", { roomId: app.pvp.roomId, submitting: app.pvp.submitting });
+  if (!roomId) {
+    console.warn("[pvp-ready-debug] setPvpReady skipped", { roomId, submitting: app.pvp.submitting });
+    return;
+  }
+  if (app.pvp.submitting) {
+    if (ready && app.pvp.playerIndex === 0 && app.pvp.room?.status === "waiting") {
+      app.pvp.queueReadyAfterRuleUpdate = true;
+    }
+    console.warn("[pvp-ready-debug] setPvpReady queued or skipped", { roomId, ready: !!ready, queueReadyAfterRuleUpdate: app.pvp.queueReadyAfterRuleUpdate });
     return;
   }
   app.pvp.submitting = true;
-  pvpClient.setReadyConfirmed(app.pvp.roomId, ready).then(result => {
-    const readyVersion = Number(result.room?.rules?.version || app.pvp.room?.rules?.version || 0) || 0;
-    app.pvp.readyRuleVersion = ready ? readyVersion : 0;
-    console.log("[pvp-ready-debug] setPvpReady success", { playerIndex: result.playerIndex, readyVersion, room: pvpReadyDebug(result.room) });
-    applyRoomUpdate(result.room, result.playerIndex);
+  pvpClient.setReadyConfirmed(roomId, ready, expectedRuleVersion).then(result => {
+    console.log("[pvp-ready-debug] setPvpReady success", { playerIndex: result.playerIndex, transitioned: !!result.transitioned, room: pvpReadyDebug(result.room) });
+    applyRoomUpdate(result.room, result.playerIndex, true);
   }).catch(err => {
     console.error("[pvp-ready-debug] setPvpReady failed", { code: err?.code || "", message: err?.message || String(err), room: pvpReadyDebug(app.pvp.room) });
+    if (err?.code === "STALE_RULES") {
+      return pvpClient.fetchRoom(roomId).then(result => {
+        const latestVersion = Number(result.room?.rules?.version || 0) || 0;
+        applyRoomUpdate(result.room, result.playerIndex, true);
+        if (ready && result.room?.status === "waiting" && latestVersion === expectedRuleVersion) {
+          return setPvpReady(true, latestVersion);
+        }
+      }).catch(refreshError => {
+        app.pvp.submitting = false;
+        toast(refreshError.message || "刷新房间失败");
+        render();
+      });
+    }
     app.pvp.submitting = false;
     toast(err.message || "准备失败");
-    render();
-  });
-}
-
-function startPvpSelection() {
-  console.log("[pvp-ready-debug] startPvpSelection click", {
-    roomId: app.pvp.roomId,
-    playerIndex: app.pvp.playerIndex,
-    submitting: app.pvp.submitting,
-    opponentReady: pvpPlayerReady(app.pvp.room, 1),
-    room: pvpReadyDebug(app.pvp.room)
-  });
-  if (!app.pvp.roomId || app.pvp.submitting) {
-    console.warn("[pvp-ready-debug] startPvpSelection skipped", { roomId: app.pvp.roomId, submitting: app.pvp.submitting });
-    return;
-  }
-  if (app.pvp.playerIndex === 0 && app.pvp.room?.status === "waiting" && !pvpPlayerReady(app.pvp.room, 1)) {
-    app.pvp.submitting = true;
-    return pvpClient.fetchRoom(app.pvp.roomId).then(result => {
-      applyRoomUpdate(result.room, result.playerIndex);
-      if (pvpPlayerReady(app.pvp.room, 1)) return startPvpSelection();
-      toast("等待好友准备");
-      render();
-    }).catch(err => {
-      app.pvp.submitting = false;
-      toast(err.message || "刷新房间失败");
-      render();
-    });
-  }
-  console.log("[pvp] startPvpSelection, roomId=", app.pvp.roomId);
-  app.pvp.submitting = true;
-  pvpClient.startSelection(app.pvp.roomId).then(result => {
-    console.log("[pvp] startSelection 成功, room.status=", result.room?.status);
-    applyRoomUpdate(result.room, result.playerIndex);
-  }).catch(err => {
-    app.pvp.submitting = false;
-    toast(err.message || "开始失败");
     render();
   });
 }
@@ -4331,8 +4341,8 @@ function startPvpSelection() {
 function submitPvpSetup() {
   if (!app.pvp.roomId || app.pvp.submitting) return;
   app.pvp.submitting = true;
-  pvpClient.submitSetup(app.pvp.roomId, currentPlayerSetup(app.pvp.room?.rules)).then(result => {
-    applyRoomUpdate(result.room, result.playerIndex);
+  pvpClient.submitSetup(app.pvp.roomId, currentPlayerSetup(app.pvp.room?.rules), app.pvp.room?.selectionRuleVersion).then(result => {
+    applyRoomUpdate(result.room, result.playerIndex, true);
   }).catch(err => {
     app.pvp.submitting = false;
     toast(err.message || "确认配置失败");
@@ -4345,8 +4355,8 @@ function returnPvpRoom() {
   if (app.pvp.room?.status !== "finished") return setScene("pvpRoom");
   if (app.pvp.submitting) return;
   app.pvp.submitting = true;
-  pvpClient.returnToRoom(app.pvp.roomId).then(result => {
-    applyRoomUpdate(result.room, result.playerIndex);
+  pvpClient.returnToRoom(app.pvp.roomId, app.pvp.room?.match?.matchId || "").then(result => {
+    applyRoomUpdate(result.room, result.playerIndex, true);
     if (result.room?.status === "finished" && app.scene !== "pvpRoom") return setScene("pvpRoom");
   }).catch(err => {
     app.pvp.submitting = false;
@@ -4407,7 +4417,6 @@ function handlePvpRoom(action) {
     return updatePvpRoomRules({ deckMode: current.deckMode === "autoOnly" ? "any" : "autoOnly" });
   }
   if (action.id === "pvpReady") return setPvpReady(!pvpPlayerReady(app.pvp.room, app.pvp.playerIndex));
-  if (action.id === "pvpStartSelection") return startPvpSelection();
   if (action.id === "pvpGoSetup") return setScene("pvpSetup");
   if (action.id === "pvpReturnRoom") return returnPvpRoom();
   if (action.id === "pvpBack") {
@@ -4479,7 +4488,7 @@ function handleBattle(action) {
     if (app.match.pending?.type === "revive" && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return confirmSkipRevivePending();
     }
-    if (["leaderDiscard", "recall", "leaderSituation"].includes(app.match.pending?.type) && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
+    if (["leaderDiscard", "leaderDiscardChoice", "recall", "leaderSituation"].includes(app.match.pending?.type) && (app.ui.battleCardDetailId || app.ui.battleCardDetailUid)) {
       return cancelBattlePendingChoice();
     }
     app.ui.battleCardDetailId = "";
@@ -4492,6 +4501,7 @@ function handleBattle(action) {
   if (action.id === "targetChoice" && app.match.pending?.type === "leaderDiscard") return confirmLeaderDiscardChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "recall") return resolveRecallChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "leaderSituation") return resolveLeaderSituationChoice(action.cardUid);
+  if (action.id === "targetChoice" && ["leaderDiscardChoice", "leaderDeckChoice"].includes(app.match.pending?.type)) return resolveLeaderCardChoice(action.cardUid);
   if (action.id === "targetChoice" && app.match.pending?.type === "revive") {
     closeBattleCardDetail();
     if (isOnlineMatch()) return submitPvpAction({ type: "resolvePending", choice: { uid: action.cardUid } });

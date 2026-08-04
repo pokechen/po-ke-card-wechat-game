@@ -479,8 +479,7 @@ function drawPendingChoice(ctx, view, actions, state) {
     button(ctx, { ...cancel, label: "取消", size: 10, fill: "#8d6840" });
     return;
   }
-  if (pending.type === "revive") return;
-  if (pending.type === "leaderSituation") return;
+  if (["revive", "leaderSituation", "leaderDiscardChoice", "leaderDeckChoice"].includes(pending.type)) return;
   const candidates = (pending.candidates || []).slice(0, 3);
   const w = Math.floor((view.width - 94) / 3);
   candidates.forEach((entry, index) => {
@@ -587,18 +586,22 @@ function visiblePendingDetailCards(state) {
   return cards;
 }
 
+const PENDING_DETAIL_TYPES = ["revive", "leaderDiscard", "leaderDiscardChoice", "leaderDeckChoice", "recall", "leaderSituation"];
+
 function pendingDetailType(state, ui = {}) {
-  if (!state?.pending || !["revive", "leaderDiscard", "recall", "leaderSituation"].includes(state.pending.type)) return "";
+  if (!state?.pending || !PENDING_DETAIL_TYPES.includes(state.pending.type)) return "";
   return visiblePendingDetailCards(state).some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid))
     ? state.pending.type
     : "";
 }
 
 function ensurePendingDetail(state, ui = {}) {
-  if (!state?.pending || !["revive", "leaderDiscard", "recall", "leaderSituation"].includes(state.pending.type) || !isLocalOnlineAction(state)) return;
-  if (ui.battleCardDetailId || ui.battleCardDetailUid) return;
+  if (!state?.pending || !PENDING_DETAIL_TYPES.includes(state.pending.type) || !isLocalOnlineAction(state)) return;
+  const cards = visiblePendingDetailCards(state);
+  const currentVisible = cards.some(card => battleCardMatch(card, ui.battleCardDetailId, ui.battleCardDetailUid));
+  if (currentVisible) return;
   const selected = new Set(state.pending.selectedUids || []);
-  const first = visiblePendingDetailCards(state).find(card => !selected.has(card.uid)) || visiblePendingDetailCards(state)[0];
+  const first = cards.find(card => !selected.has(card.uid)) || cards[0];
   if (!first) return;
   ui.battleCardDetailId = first.id || "";
   ui.battleCardDetailUid = first.uid || "";
@@ -1900,6 +1903,8 @@ function draw(ctx, view, actions, state, ui = {}) {
     const pendingType = pendingDetailType(state, ui);
     const pendingRevive = pendingType === "revive";
     const pendingLeaderDiscard = pendingType === "leaderDiscard";
+    const pendingDiscardChoice = pendingType === "leaderDiscardChoice";
+    const pendingDeckChoice = pendingType === "leaderDeckChoice";
     const pendingRecall = pendingType === "recall";
     const pendingLeaderSituation = pendingType === "leaderSituation";
     const selectedUids = new Set(state.pending?.selectedUids || []);
@@ -1919,29 +1924,52 @@ function draw(ctx, view, actions, state, ui = {}) {
           : "点击当前卡牌选择第 1 张弃牌；左右滑动切换手牌；点击空白处取消。"),
       color: "#8f3c1f",
       lines: 3
-    }] : []);
-    const extraSections = (pendingRevive || pendingLeaderDiscard || pendingLeaderSituation ? [] : battlePowerEffectSections(state, detailContext, detail)).concat(pendingSections);
+    }] : (pendingDiscardChoice ? [{
+      title: "弃牌堆选牌",
+      content: "点击当前卡牌加入手牌；左右滑动查看其它弃牌；点击取消可放弃使用本次主将技能。",
+      color: "#8f3c1f",
+      lines: 3
+    }] : (pendingDeckChoice ? [{
+      title: "牌库选牌",
+      content: "已弃置 2 张手牌。点击当前卡牌加入手牌；左右滑动查看牌库中的其它卡牌。",
+      color: "#8f3c1f",
+      lines: 3
+    }] : [])));
+    const pendingCardChoice = pendingRevive || pendingLeaderDiscard || pendingDiscardChoice || pendingDeckChoice || pendingLeaderSituation;
+    const extraSections = (pendingCardChoice ? [] : battlePowerEffectSections(state, detailContext, detail)).concat(pendingSections);
     drawDetail(ctx, view, actions, detailCard, {
-      title: pendingRevive ? "济世复归" : (pendingLeaderDiscard ? `黄巢弃牌 ${selectedUids.size}/2` : (isMulligan ? "换牌阶段" : "卡牌详情")),
+      title: pendingRevive
+        ? "济世复归"
+        : (pendingLeaderDiscard
+          ? `黄巢弃牌 ${selectedUids.size}/2`
+          : (pendingDiscardChoice
+            ? "弃牌堆选牌"
+            : (pendingDeckChoice ? "黄巢牌库选牌" : (isMulligan ? "换牌阶段" : "卡牌详情")))),
       closeHint: pendingRevive
         ? "点击当前卡牌复归 · 左右滑动切换"
         : (pendingLeaderDiscard
           ? "点卡牌选择/取消 · 选满后确认"
-          : (pendingLeaderSituation
-            ? "点击当前卡牌打出 · 左右滑动切换"
-            : (isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局"))),
+          : (pendingDiscardChoice
+            ? "点击当前卡牌加入手牌 · 左右滑动切换"
+            : (pendingDeckChoice
+              ? "点击当前卡牌加入手牌 · 左右滑动切换"
+              : (pendingLeaderSituation
+                ? "点击当前卡牌打出 · 左右滑动切换"
+                : (isMulligan ? "点击当前卡牌换掉 · 空白处返回" : "点击空白处返回对局"))))),
       leftCard,
       rightCard,
       swipeOffset,
+      progressIndex: currentIdx,
+      progressTotal: entries.length,
       extraSections,
       count: pendingRecall ? (detail.stackCount || 1) : discardStackCount(state, detailContext, detail),
-      headerAction: pendingLeaderDiscard || pendingLeaderSituation ? { id: "closeDetail", label: "取消" } : null,
+      headerAction: pendingLeaderDiscard || pendingLeaderSituation || pendingDiscardChoice ? { id: "closeDetail", label: "取消" } : null,
       helpAction: isMulligan ? { id: "mulliganHelp" } : null,
       helpOpen: !!ui.mulliganHelpOpen,
       helpSections,
       selected: currentSelected,
       anim: ui.mulliganSwapAnim ? { alpha: ui.mulliganSwapAnim.alpha, scale: ui.mulliganSwapAnim.scale } : null,
-      cardAction: pendingRevive || pendingLeaderDiscard || pendingRecall || pendingLeaderSituation
+      cardAction: pendingRevive || pendingLeaderDiscard || pendingDiscardChoice || pendingDeckChoice || pendingRecall || pendingLeaderSituation
         ? { id: "targetChoice", cardId: detail.id, cardUid: detail.uid }
         : (isMulligan && detailContext?.zone === "hand" && isLocalOnlineAction(state)
           ? { id: "mulliganDetailSwap", cardId: detail.id, cardUid: detail.uid }

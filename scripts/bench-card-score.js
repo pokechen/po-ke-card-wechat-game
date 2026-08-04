@@ -78,7 +78,6 @@ function baselineRecruitBonus(card, pool) {
   const related = recruitRelated(card, pool);
   if (related.length <= 1) return 0;
   if (card.recruitGroupDisplayName === "桃园三杰" || card.recruitGroupDisplayName === "星火五雄") return 10;
-  if (card.name === "曾子") return 12;
   if (card.name === "孟尝君") return 5;
   if (card.name === "鬼谷子") return 7;
   if (card.name === "李密") return 8;
