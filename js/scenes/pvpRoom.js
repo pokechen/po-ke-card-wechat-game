@@ -1,5 +1,5 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawAssetImage, drawRemoteImage, drawTopLeftBack } = require("../ui/canvas");
-const { FACTION_KEYS, FACTION_LABELS, displayName, cardSummary, leadersFor, factionPerkSummary } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, displayName, cardSummary, leadersFor, factionPerkSummary, isPassiveLeaderCard } = require("../core/cards");
 
 const ERROR_PREVIEW_LINES = 5;
 
@@ -83,7 +83,9 @@ function playerLeaderSkillText(player, room) {
   if (!player) return "";
   const setup = playerSetup(player, room);
   if (setup.faction === "random") return "主将技能：开局时随机确定";
-  return setup.leader ? `主将技能：${cardSummary(setup.leader)}` : "主将技能：进入出战配置后选择";
+  if (!setup.leader) return "主将技能：进入出战配置后选择";
+  // 被动主将无需发动，标注「被动」区分主动技能。
+  return `${isPassiveLeaderCard(setup.leader) ? "主将被动技能" : "主将技能"}：${cardSummary(setup.leader)}`;
 }
 
 function factionSkillText(room) {
@@ -349,7 +351,6 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
     fillRoundRect(ctx, roomCard.x, roomCard.y, roomCard.w, roomCard.h, 18, "rgba(143,60,31,0.08)", "rgba(143,60,31,0.18)");
     text(ctx, "房间号", view.width / 2, panel.y + 22, 13, "#775c34", "center");
     text(ctx, roomId, view.width / 2, roomCard.y + roomCard.h / 2 + 1, roomId ? 34 : 24, "#8f3c1f", "center");
-    actions.push({ id: "pvpCopy", x: roomCard.x, y: roomCard.y, w: roomCard.w, h: roomCard.h });
   } else {
     text(ctx, "联网对战", view.width / 2, panel.y + 25, 13, "#775c34", "center");
     text(ctx, "准备开始", view.width / 2, panel.y + 64, 24, "#8f3c1f", "center");
@@ -414,11 +415,8 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
 
   if (!hasRoom) {
     const retry = { id: "pvpRetryJoin", x: 46, y: y0, w: view.width - 92, h: 42 };
-    const copy = { id: "pvpCopy", x: 46, y: y0 + 52, w: view.width - 92, h: 38 };
-    actions.push(copy);
     if (hasError) actions.push(retry);
     button(ctx, { ...retry, label: hasError ? "重新加入房间" : "正在加入房间...", fill: hasError ? "#2f6f57" : "#b6a98e", stroke: hasError ? "#1d4f3c" : "#a89a80", size: 13 });
-    button(ctx, { ...copy, label: "复制房间号", fill: "#b5892f", stroke: "#8f6b20", size: 12 });
     return;
   }
 
@@ -452,7 +450,7 @@ function draw(ctx, view, actions, pvp = {}, ui = {}) {
   button(ctx, { ...invite, label: "邀请好友", fill: canInvite ? "#4aa35f" : "#b6a98e", stroke: canInvite ? "#2e7d46" : "#a89a80", size: 14 });
   button(ctx, { ...ready, label: readyLabel, fill: readyFill, stroke: readyStroke, size: 14 });
   if (y0 + 62 < view.height - view.safeBottom - 4) {
-    text(ctx, players.length >= 2 ? "双方准备完成后自动进入游戏" : "点击邀请好友，或复制房间号发给好友", view.width / 2, y0 + 62, 11, "#775c34", "center");
+    text(ctx, players.length >= 2 ? "双方准备完成后自动进入游戏" : "点击邀请好友，通过右上角「···」转发给好友", view.width / 2, y0 + 62, 11, "#775c34", "center");
   }
 
   if (ui.matchSetupDropdown === "pvpRoomRuleFaction") drawFactionRuleDropdown(ctx, view, actions, factionRuleAnchor, factionRuleDropdownRules || rulesOf(pvp.room));

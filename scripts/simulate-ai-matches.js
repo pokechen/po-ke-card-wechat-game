@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const battle = require("../shared/core/battle");
-const { FACTION_KEYS, buildDeck, cardValue } = require("../shared/core/cards");
+const { FACTION_KEYS, buildDeck, cardValue, makeCardValue, hasAbility, isHeroCard, STRATEGY_CARD_BONUS, STRATEGY_CARD_BONUS_BASELINE } = require("../shared/core/cards");
 
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
 
@@ -54,10 +54,29 @@ function draw(player, count) {
   }
 }
 
-function resetHardRandomDeck(player, index) {
+// 组牌实验：deckOption支持 { deckProfile: {...}, valueBonus: "tuned"|"baseline"|{...} }
+// 不传时完全等于线上 hard 组牌规则。
+function resolveDeckBuildOptions(deckOption = {}) {
+  const options = {};
+  if (deckOption.deckProfile) options.deckProfile = deckOption.deckProfile;
+  let base = null;
+  if (deckOption.valueBonus === "tuned") base = makeCardValue(STRATEGY_CARD_BONUS);
+  else if (deckOption.valueBonus && typeof deckOption.valueBonus === "object") base = makeCardValue({ ...STRATEGY_CARD_BONUS_BASELINE, ...deckOption.valueBonus });
+  // revivalBonus：给「非传世济世人物」额外加权。牌组里有非传世济世时请辞才允许带 3 张，
+  // 因此提高济世人物入组概率可以解锁「请辞×3 + 济世」的复用组合。
+  if (typeof deckOption.revivalBonus === "number") {
+    const inner = base || cardValue;
+    base = (card, context) => inner(card, context)
+    + (!isHeroCard(card) && hasAbility(card, "济世") ? deckOption.revivalBonus : 0);
+  }
+  if (base) options.valueFn = base;
+  return options;
+}
+
+function resetHardRandomDeck(player, index, deckOption) {
   player.difficulty = "hard";
   player.deckMode = "random";
-  player.deck = buildDeck(index, { faction: player.faction, difficulty: "hard" });
+  player.deck = buildDeck(index, { faction: player.faction, difficulty: "hard", ...resolveDeckBuildOptions(deckOption) });
   player.battleCardIds = player.deck.map(card => card.id);
   player.hand = [];
   player.board = { "疆场": [], "朝堂": [], "文脉": [] };
@@ -67,7 +86,7 @@ function resetHardRandomDeck(player, index) {
   player.roundsWon = 0;
   player.retained = [];
   player.leaderUsed = false;
-  player.halfSituationRound = null;
+  player.leaderDisabled = false;
   draw(player, 10);
 }
 
@@ -93,15 +112,21 @@ function resolveAutoPending(state) {
   return battle.cancelPending(state);
 }
 
-function createMatch() {
+function createMatch(options = {}) {
   const state = battle.createMatch({ mode: "ai", humanFaction: randomFaction(), aiFaction: randomFaction(), difficulty: "hard" });
   state.autoControlAll = true;
   state.suppressRecording = true;
   state.logs = [];
   state.players[0].name = "系统一";
   state.players[1].name = "系统二";
-  state.players.forEach(resetHardRandomDeck);
+  const deckOptions = options.deckOptions || [{}, {}];
+  state.players.forEach((player, index) => resetHardRandomDeck(player, index, deckOptions[index]));
   battle.recalcScores(state);
+  // withMulligan：保留换牌阶段，让 runPreparedMatch 按各自策略执行真实 AI 换牌
+  if (options.withMulligan) {
+    state.mulligan = { active: true, current: 0, used: [0, 0], done: [false, false], max: 2, simultaneous: true };
+    return state;
+  }
   battle.finishMulligan(state, 0);
   while (state.pending && resolveAutoPending(state)) {}
   return state;
@@ -117,6 +142,13 @@ function runPreparedMatch(seed, maxSteps = 1200, initialState, playerConfigs = [
     state.autoControlAll = true;
     state.suppressRecording = true;
     state.logs = [];
+    // 换牌阶段：双方都走线上换牌规则（换牌估值不支持按座位分化，实验结论见 battle.js 注释）
+    if (state.mulligan && state.mulligan.active) {
+      state.players.forEach((_, index) => battle.aiMulliganFor(state, index));
+      battle.finishMulligan(state, 0);
+      battle.finishMulligan(state, 1);
+      while (state.pending && resolveAutoPending(state)) {}
+    }
     let steps = 0;
     while (!state.over && steps < maxSteps) {
       steps += 1;
@@ -154,8 +186,8 @@ function runPreparedMatch(seed, maxSteps = 1200, initialState, playerConfigs = [
   });
 }
 
-function createSeededInitialState(seed) {
-  return withSeed(seed, createMatch);
+function createSeededInitialState(seed, options = {}) {
+  return withSeed(seed, () => createMatch(options));
 }
 
 function runMatch(seed, maxSteps = 1200, playerConfigs = [{}, {}]) {
@@ -185,16 +217,20 @@ function runConfigComparison(options) {
   let draws = 0;
   for (let i = 0; i < options.matches; i++) {
     const pairSeed = options.seed + Math.floor(i / 2) * 9973;
-    const initialState = createSeededInitialState(pairSeed);
     const candidateAsPlayer0 = i % 2 === 0;
     const configs = candidateAsPlayer0
       ? [options.candidateConfig || {}, options.baselineConfig || {}]
       : [options.baselineConfig || {}, options.candidateConfig || {}];
+    // 组牌配置按座位分配：同一 pairSeed 下双方阵营相同，交替座位保证公平
+    const deckOptions = configs.map(config => (config && config.deck) || {});
+    const initialState = createSeededInitialState(pairSeed, { withMulligan: !!options.withMulligan, deckOptions });
     const result = runPreparedMatch(pairSeed + 1000003, options.maxSteps || 1200, initialState, configs);
-    results.push(result);
+    const candidateWon = result.winner != null && result.winner === (candidateAsPlayer0 ? 0 : 1);
+    // 记录座位归属，便于按阵营/子集做归因统计（例如某项改动只影响部分阵营时剥离稀释效应）
+    results.push({ ...result, candidateAsPlayer0, candidateWon, candidateFaction: result.factions[candidateAsPlayer0 ? 0 : 1], baselineFaction: result.factions[candidateAsPlayer0 ? 1 : 0] });
     if (result.winner == null) {
       draws += 1;
-    } else if (result.winner === (candidateAsPlayer0 ? 0 : 1)) {
+    } else if (candidateWon) {
       candidateWins += 1;
     } else {
       baselineWins += 1;

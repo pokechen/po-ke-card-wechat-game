@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, wrapText, short, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById, factionPerkSummary } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName, cardSummary, cardById, factionPerkSummary, isPassiveLeaderCard } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
 function selectedLeader(settings, side, faction) {
@@ -16,7 +16,9 @@ function shortText(value, max) {
 }
 
 function leaderSkill(card) {
-  return card ? `技能：${cardSummary(card)}` : "暂无技能";
+  if (!card) return "暂无技能";
+  // 被动主将无需发动，标注「被动技能」区分主动技能。
+  return `${isPassiveLeaderCard(card) ? "被动技能" : "技能"}：${cardSummary(card)}`;
 }
 
 function currentHumanFaction(settings) {

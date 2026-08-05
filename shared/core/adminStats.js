@@ -227,7 +227,8 @@ function rankAnomalyStats(rankMatches = [], usersByOpenid = new Map()) {
         tier: safeText(item.tierBefore || item.tierAfter, 12),
         validationStatus: safeText(item.validationStatus, 20),
         riskFlags: Array.isArray(item.riskFlags) ? item.riskFlags.slice(0, 6).map(flag => safeText(flag, 40)) : [],
-        settled: item.validationStatus === "valid" && item.status === "finished"
+        // 异常提交也会按弃局判负计入排位，因此 finished 与 abandoned 都算已结算。
+        settled: item.status === "finished" || item.status === "abandoned"
       }))
   };
 }

@@ -1,6 +1,6 @@
-const { clear, text, button, fillRoundRect, card, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, card, wrapText, drawCardImage, drawTopLeftBack } = require("../ui/canvas");
 const { loadSettings, getActiveCustomDeckIds } = require("../core/storage");
-const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById, isHeroCard } = require("../core/cards");
+const { FACTION_KEYS, FACTION_LABELS, ROW_LABELS, deckStatus, leadersFor, eligibleCards, groupCards, cardValue, categoryLabel, displayName, cardSummary, cardById, isHeroCard, isPassiveLeaderCard } = require("../core/cards");
 const { drawDetail } = require("./cardDetail");
 
 const CARD_TABS = [
@@ -27,7 +27,9 @@ function shortText(value, max) {
 }
 
 function leaderSkill(card) {
-  return card ? `技能：${cardSummary(card)}` : "暂无技能";
+  if (!card) return "暂无技能";
+  // 被动主将无需发动，标注「被动技能」区分主动技能。
+  return `${isPassiveLeaderCard(card) ? "被动技能" : "技能"}：${cardSummary(card)}`;
 }
 
 function canAddCard(status, card) {
@@ -131,7 +133,7 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
   if (!options.length) return;
   const selected = optionSelectedValue(settings, field);
   const isLeader = field === "humanLeader";
-  const itemH = isLeader ? 54 : 34;
+  const itemH = isLeader ? 60 : 34;
   const menuH = options.length * itemH;
   const menuX = Math.max(8, Math.min(anchor.x, view.width - anchor.w - 8));
   const menuY = Math.min(anchor.y + anchor.h + 5, view.height - view.safeBottom - menuH - 8);
@@ -156,12 +158,13 @@ function drawSettingDropdown(ctx, view, actions, settings, field, anchors) {
       ctx.stroke();
     }
     if (isLeader && optionCard) {
-      const avatarSize = itemH - 10;
+      const avatarSize = Math.min(itemH - 10, 44);
       const avatarX = menuX + 12;
-      const avatarY = y + 5;
+      const avatarY = y + (itemH - avatarSize) / 2;
       drawCardImage(ctx, { ...optionCard, imageFill: true, imageX: avatarX, imageY: avatarY, imageW: avatarSize, imageH: avatarSize });
-      text(ctx, shortText(option.label, 12), avatarX + avatarSize + 10, y + 19, 12, active ? "#ffffff" : "#2f2417", "left");
-      text(ctx, shortText(option.hint, 22), avatarX + avatarSize + 10, y + 37, 9, active ? "#efe6ff" : "#775c34", "left");
+      const hintX = avatarX + avatarSize + 10;
+      text(ctx, shortText(option.label, 12), hintX, y + 19, 12, active ? "#ffffff" : "#2f2417", "left");
+      wrapText(ctx, option.hint || "", hintX, y + 35, Math.max(40, menuX + anchor.w - 12 - hintX), 13, 2, 9, active ? "#efe6ff" : "#775c34");
     } else {
       text(ctx, shortText(option.label, 18), menuX + anchor.w / 2, y + itemH / 2, 12, active ? "#ffffff" : "#2f2417", "center");
     }
@@ -225,7 +228,8 @@ function draw(ctx, view, actions, ui = {}) {
     const avatarY = leaderRect.y + (leaderRect.h - avatarSize) / 2;
     drawCardImage(ctx, { ...humanLeader, imageFill: true, imageX: avatarX, imageY: avatarY, imageW: avatarSize, imageH: avatarSize });
     text(ctx, shortText(displayName(humanLeader), 10), avatarX + avatarSize + 10, leaderRect.y + 19, 13, "#ffffff", "left");
-    text(ctx, shortText(cardSummary(humanLeader), 18), avatarX + avatarSize + 10, leaderRect.y + 36, 9, "#efe6ff", "left");
+    const summaryX = avatarX + avatarSize + 10;
+    wrapText(ctx, cardSummary(humanLeader), summaryX, leaderRect.y + 36, Math.max(40, leaderRect.x + leaderRect.w - 26 - summaryX), 12, 1, 9, "#efe6ff");
   } else {
     text(ctx, "领袖：未选择", leaderRect.x + 18, leaderRect.y + leaderRect.h / 2, 12, "#ffffff", "left");
   }

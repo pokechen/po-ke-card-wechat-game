@@ -193,7 +193,7 @@ test("用例6 时局按双方净损失估值", () => {
 
 test("用例7 济世优先复归出使", () => {
   const state = blankState();
-  const revival = catalogCard("华佗", 0);
+  const revival = catalogCard("张仲景", 0);
   const envoy = fakeUnit("弃牌出使", 1, 0, { abilities: ["出使"] });
   toDiscard(state, 0, envoy, fakeUnit("十点白板", 10, 0));
   toDeck(state, 0, fakeUnit("抽牌甲", 5, 0), fakeUnit("抽牌乙", 5, 0));
@@ -279,7 +279,7 @@ test("用例14 普通集贤只从已验证牌库来源拉取", () => {
 
 test("用例15 济世连锁与空牌库抽牌", () => {
   const state = blankState();
-  const first = catalogCard("华佗", 0);
+  const first = catalogCard("张仲景", 0);
   const second = catalogCard("淳于意", 0);
   const envoy = fakeUnit("一牌库出使", 1, 0, { abilities: ["出使"] });
   const drawCard = fakeUnit("唯一抽牌", 3, 0);
@@ -419,7 +419,7 @@ test("用例26 请辞归隐在含非传世济世时最多带3张，无济世时�
 
 test("用例27 济世可复归集贤人物", () => {
   const state = blankState();
-  const revival = catalogCard("华佗", 0);
+  const revival = catalogCard("张仲景", 0);
   const mengchang = catalogCard("孟尝君", 0);
   const plain = fakeUnit("弃牌高点", 10, 0);
   toHand(state, 0, revival);
@@ -428,12 +428,12 @@ test("用例27 济世可复归集贤人物", () => {
   assert.ok(cand.includes(mengchang), "复归候选应包含孟尝君等集贤人物");
   assert.ok(cand.includes(plain), "复归候选应包含普通弃牌单位");
   assert.equal(battle.playCard(state, revival.uid, "文脉", { revivalTargetUid: mengchang.uid }), true);
-  assert.ok(state.players[0].board["朝堂"].some(card => card.uid === mengchang.uid), "华佗应可复归孟尝君到朝堂");
+  assert.ok(state.players[0].board["朝堂"].some(card => card.uid === mengchang.uid), "张仲景应可复归孟尝君到朝堂");
 });
 
-test("用例28 秦昭襄王启用随机济世", () => {
+test("用例28 秦昭襄王被动生效：随机济世且不可主动发动", () => {
   const state = blankState(["纵横权谋", "草莽星火"]);
-  const revival = catalogCard("华佗", 0);
+  const revival = catalogCard("张仲景", 0);
   const high = fakeUnit("高点弃牌", 10, 0, { row: "疆场" });
   const low = fakeUnit("低点弃牌", 1, 0, { row: "文脉" });
   state.players[0].leader = {
@@ -443,10 +443,11 @@ test("用例28 秦昭襄王启用随机济世", () => {
     abilityText: "双方济世复归改为随机目标。"
   };
   state.players[0].leaderUsed = false;
+  state.players[0].leaderDisabled = false;
   toHand(state, 0, revival);
   toDiscard(state, 0, high, low);
-  battle.useLeader(state, 0);
-  assert.equal(state.randomRestore, true);
+  assert.equal(battle.useLeader(state, 0), false, "被动主将不能主动发动");
+  assert.equal(battle.randomRestoreActive(state), true, "被动主将开局即让济世复归随机");
   state.current = 0;
   const originalRandom = Math.random;
   try {

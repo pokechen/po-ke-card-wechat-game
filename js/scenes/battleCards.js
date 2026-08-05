@@ -20,7 +20,7 @@ function fallbackBattleCards(state, playerIndex) {
   const seen = new Set();
   const cards = [];
   const add = item => {
-    if (!item || item.category === "leader") return;
+    if (!item || item.hidden || item.category === "leader") return;
     const key = item.uid || item.id;
     if (!key || seen.has(key)) return;
     const owner = Number.isInteger(item.owner) ? item.owner : playerIndex;

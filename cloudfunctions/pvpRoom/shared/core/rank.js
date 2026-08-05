@@ -1,6 +1,9 @@
 const SEASON_ID = "s1";
 const PRESTIGE_CAP = 200;
 const PRESTIGE_PROTECT_COST = 100;
+// 排位局创建后进入宽限期，期间未结算视为客户端重复创建 / 尚未开打，作废而不判负。
+// 客户端HTTP 超时 10s，30s 足以覆盖重试；同时与 DURATION_TOO_SHORT 阈值保持一致。
+const ABANDON_GRACE_MS = 30000;
 
 const RANK_TIERS = [
   { id: "commoner", name: "平民", minPower: 0, maxPower: 2, powerSlots: 3, band: "low", aiDifficulty: "easy", lossProtected: true, prestigeEnabled: false, forcePlayerRandom: false, allowCustomDeck: true },
@@ -141,6 +144,40 @@ function settleRankProfile(profile = {}, summary = {}) {
   return { before, after, result, powerDelta, prestigeDelta, protectionUsed };
 }
 
+// 中途退出 / 超时 / 数据校验失败统一按 0:2 判负结算。
+// 这些路径一旦"不结算"，玩家看到要输就杀进程或提交垃圾数据即可免罚刷分，排位就失去意义。
+// progress 是客户端每打完一小局上报的比分，仅作为 disconnectSnapshot 用于展示说明；
+// 绝不能拿它去折算胜负，否则会出现"赢下第一小局就跑"比打完更划算的套利。
+function abandonSummary(endReason = "abandon", progress = null) {
+  return {
+    result: "loss",
+    winner: 1,
+    roundsWon: 0,
+    roundsLost: 2,
+    rounds: [0, 2],
+    roundResults: [],
+    scores: [0, 0],
+    morale: [0, 2],
+    disconnectSnapshot: normalizeProgressSnapshot(progress),
+    endReason: String(endReason || "abandon")
+  };
+}
+
+function numberPair(input) {
+  const list = Array.isArray(input) ? input : [];
+  return [Number(list[0]) || 0, Number(list[1]) || 0];
+}
+
+function normalizeProgressSnapshot(progress) {
+  if (!progress || typeof progress !== "object") return null;
+  const roundResults = (Array.isArray(progress.roundResults) ? progress.roundResults : []).slice(0, 3).map(item => ({
+    round: Number(item?.round) || 0,
+    scores: numberPair(item?.scores),
+    winner: item?.winner == null ? null : (Number(item.winner) || 0)
+  }));
+  return { rounds: numberPair(progress.rounds), scores: numberPair(progress.scores), roundResults };
+}
+
 function publicProfile(profile = {}) {
   const view = profileView(profile);
   return {
@@ -169,6 +206,7 @@ module.exports = {
   SEASON_ID,
   PRESTIGE_CAP,
   PRESTIGE_PROTECT_COST,
+  ABANDON_GRACE_MS,
   RANK_TIERS,
   tierForPower,
   nextTierForPower,
@@ -180,5 +218,6 @@ module.exports = {
   winningRoundDiff,
   prestigeGainForWin,
   settleRankProfile,
+  abandonSummary,
   publicProfile
 };

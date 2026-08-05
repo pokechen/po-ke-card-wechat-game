@@ -20,7 +20,7 @@ function resetProfiledDeck(player, index, profile) {
   player.battleCardIds = player.deck.map(card => card.id);
   player.hand = []; player.board = { "疆场": [], "朝堂": [], "文脉": [] };
   player.discard = []; player.passed = false; player.autoPassed = false; player.roundsWon = 0;
-  player.retained = []; player.leaderUsed = false; player.halfSituationRound = null;
+  player.retained = []; player.leaderUsed = false; player.leaderDisabled = false;
   draw(player, 10);
 }
 function createProfiledMatch(profileA, profileB) {

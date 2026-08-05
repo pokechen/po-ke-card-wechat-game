@@ -1,6 +1,6 @@
 const { clear, text, button, fillRoundRect, card, wrapText, drawCardImage, short } = require("../ui/canvas");
 const { ROWS, ROW_LABELS, categoryLabel, cardById, cardValue, hasAbility, isHeroCard } = require("../core/cards");
-const { totalScore, rowScore, handOwnerIndex, hasActiveHalfSituationLeader } = require("../core/battle");
+const { totalScore, rowScore, handOwnerIndex, hasActiveHalfSituationLeader, isPassiveLeader, envoyDoubleActive } = require("../core/battle");
 const { loadSave } = require("../core/storage");
 const { drawDetail } = require("./cardDetail");
 
@@ -35,24 +35,31 @@ function drawLeaderHeader(ctx, view, actions, state, player, playerIndex, center
   const panelW = Math.max(118, Math.min(maxPanelW, avatar + 18 + textW));
   const panel = { x: x - 3, y: y - 2, w: panelW, h: avatar + 4 };
   fillRoundRect(ctx, panel.x, panel.y, panel.w, panel.h, 10, active ? "#fff8e5" : "#f2ead8", active ? "#2f6f57" : "#d3b982");
+  const passiveLeader = isPassiveLeader(player);
+  const leaderBlocked = !!player.leaderDisabled;
+  const leaderSpent = leaderBlocked || (!passiveLeader && player.leaderUsed);
   if (leader) {
     const action = { id: "leaderAvatar", playerIndex, cardId: leader.id, x, y, w: avatar, h: avatar };
     actions.push(action);
     drawCardImage(ctx, { ...leader, imageFill: true, imageX: x, imageY: y, imageW: avatar, imageH: avatar });
     if (playerIndex === local) ui.__guideLeader = { x, y, w: avatar, h: avatar };
-    if (player.leaderUsed) {
+    if (leaderSpent) {
       ctx.save();
       ctx.fillStyle = "rgba(38, 28, 18, 0.48)";
       ctx.fillRect(x, y, avatar, avatar);
       ctx.restore();
-      text(ctx, "已用", x + avatar / 2, y + avatar / 2, 9, "#fff7d8", "center");
+      text(ctx, leaderBlocked ? "封锁" : "已用", x + avatar / 2, y + avatar / 2, 9, "#fff7d8", "center");
+    } else if (passiveLeader) {
+      // 被动主将：开局即生效并持续整场，无需点击发动。
+      fillRoundRect(ctx, x, y + avatar - 11, avatar, 11, 4, "rgba(47, 111, 87, 0.86)", "");
+      text(ctx, "被动", x + avatar / 2, y + avatar - 5, 8, "#fdf6e3", "center");
     }
   } else {
     fillRoundRect(ctx, x, y, avatar, avatar, 10, "#efe6d2", "#d3b982");
     text(ctx, "将", x + avatar / 2, y + avatar / 2, 13, "#8f3c1f", "center");
   }
   text(ctx, identity, x + avatar + 6, centerY - 7, 11, isLocal ? "#2f6f57" : "#8f3c1f");
-  text(ctx, subline, x + avatar + 6, centerY + 8, 10, player.leaderUsed ? "#9a8a73" : "#775c34");
+  text(ctx, subline, x + avatar + 6, centerY + 8, 10, leaderSpent ? "#9a8a73" : "#775c34");
   text(ctx, `${totalScore(player)} 分`, view.width - 14, centerY, 12, "#8f3c1f", "right");
   return panel;
 }
@@ -625,18 +632,6 @@ function detailCardEntries(state, ui = {}, view = null) {
   return [];
 }
 
-function leaderTextForBattle(player) {
-  return `${player?.leader?.name || ""} ${player?.leader?.abilityText || ""}`;
-}
-
-function hasEnvoyDoubleLeader(player) {
-  return /出使.*翻倍|间谍翻倍/i.test(leaderTextForBattle(player));
-}
-
-function envoyDoubleActive(state) {
-  return state.players.some(p => p.leaderUsed && hasEnvoyDoubleLeader(p));
-}
-
 function collectBoardInstances(state, card) {
   const results = [];
   if (!state || !card) return results;
@@ -652,12 +647,30 @@ function collectBoardInstances(state, card) {
   return results;
 }
 
+function transformOriginStrength(card) {
+  return card?.transformed && Number.isFinite(card.transformedFromStrength) ? card.transformedFromStrength : null;
+}
+
+// 战力链：转化前战力 → 转化后战力 → 当前战力，重复值自动合并。
+function powerChainLine(origin, cardStrength, current) {
+  const parts = [origin == null ? cardStrength : origin];
+  if (origin != null && cardStrength !== origin) parts.push(cardStrength);
+  if (current !== parts[parts.length - 1]) parts.push(current);
+  return `战力：${parts.join(" → ")}`;
+}
+
+function transformLine(card) {
+  if (!card?.transformed || !card.transformedFrom) return "";
+  return `蛰伏：由「${card.transformedFrom}」经雪耻转化为「${card.displayName || card.name}」。`;
+}
+
 function describeBoardCardEffect(state, context) {
   const { card, playerIndex, row } = context;
   const player = state.players[playerIndex];
   const rowCards = player?.board?.[row] || [];
-  const base = card.strength || 0;
-  const current = card.effective == null ? base : card.effective;
+  const cardStrength = card.strength || 0;
+  const origin = transformOriginStrength(card);
+  const current = card.effective == null ? cardStrength : card.effective;
   const lines = [];
   const rowLabel = ROW_LABELS[row] || row;
 
@@ -667,18 +680,24 @@ function describeBoardCardEffect(state, context) {
     if (state.rowHorn?.[playerIndex]?.[row] || rowCards.some(item => hasAbility(item, "鼓舞"))) blocked.push("鼓舞");
     if (rowCards.some(item => item.uid !== card.uid && hasAbility(item, "振势"))) blocked.push("振势");
     if (hasAbility(card, "同盟") && rowCards.filter(item => hasAbility(item, "同盟") && item.name === card.name).length > 1) blocked.push("同盟");
-    lines.push(`所在阵线：${rowLabel}，当前战力 ${current}（基础 ${base}）。`);
+    lines.push(powerChainLine(origin, cardStrength, current));
+    const transformed = transformLine(card);
+    if (transformed) lines.push(transformed);
     if (blocked.length) lines.push(`传世：不受${blocked.join("、")}修正影响。`);
     else lines.push("传世：不受时局、鼓舞、振势、同盟等战力修正影响。");
+    if (hasAbility(card, "振势")) {
+      const boosted = rowCards.filter(item => item.uid !== card.uid && !isHeroCard(item)).length;
+      const moraleText = boosted > 0
+        ? `振势：为同阵线 ${boosted} 张非传世人物各加 1 点战力。`
+        : "振势：为同一阵线其他非传世人物各加 1 点战力。";
+      lines.push(moraleText);
+    }
     return lines;
   }
 
-  lines.push(current !== base
-    ? `战力：${base} → ${current}`
-    : `战力：${current}`);
-  if (card.transformed && card.transformedFrom) {
-    lines.push(`蛰伏转化：由「${card.transformedFrom}」经雪耻触发转化为当前形态。`);
-  }
+  lines.push(powerChainLine(origin, cardStrength, current));
+  const transformed = transformLine(card);
+  if (transformed) lines.push(transformed);
   if (state.situations[row]) {
     lines.push(hasActiveHalfSituationLeader(state, player)
       ? `时局：${rowLabel}受压制，主将效果使其改为半损。`
@@ -713,7 +732,8 @@ function battlePowerEffectSections(state, context, fallbackCard) {
     if (!card || card.category === "situation" || card.category === "stratagem") return false;
     const base = card.strength || 0;
     const current = card.effective == null ? base : card.effective;
-    return current !== base || card.transformed;
+    // 转化后的越王勾践/越相文种与其他人物一致：只有战力真的被修正时才展示战力影响。
+    return current !== base;
   });
   if (!boardContexts.length) return [];
 
@@ -884,7 +904,7 @@ function compactEffectNames(namesText, count) {
 function normalizeBattleEffectSegment(segment) {
   const value = String(segment || "").replace(/^\s+|\s+$/g, "").replace(/。$/, "");
   if (!value) return "";
-  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|时局|奇策|侦察|取回|洗牌|调度|封锁|抽牌|半损|召唤岳家军|雪耻|破釜|请辞|弃牌|主将技能)：(.+)/);
+  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|时局|奇策|侦察|取回|洗牌|调度|封锁|抽牌|召唤岳家军|雪耻|破釜|请辞|弃牌|主将技能)：(.+)/);
   if (direct) {
     const limit = direct[1] === "主将技能" ? 24 : (direct[1] === "奇策" ? 18 : (direct[1] === "弃牌" ? 24 : 16));
     return `${direct[1]}：${short(direct[2].trim(), limit)}`;
@@ -948,7 +968,7 @@ function battlePlayEntryText(entry, state) {
   if (entry.text) {
     const value = String(entry.text)
       .replace(/^第\s*\d+\s*回合\s*[·：:]\s*/, "")
-      .replace(/；?(集贤|召唤岳家军|召唤|奇策|雪耻|破釜|蛰伏转化|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察|取回|洗牌|调度|封锁|抽牌|半损|主将技能)[^；。]*。?/g, "")
+      .replace(/；?(集贤|召唤岳家军|召唤|奇策|雪耻|破釜|蛰伏转化|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察|取回|洗牌|调度|封锁|抽牌|主将技能)[^；。]*。?/g, "")
       .replace(/到(?:己方|对方)(?:疆场|朝堂|文脉)/g, "")
       .replace(/\s*(?:→|->)\s*[^；。]*/g, "")
       .replace(/。$/, "")
@@ -1467,8 +1487,8 @@ function drawRoundTransitionNotice(ctx, view, actions, state, ui) {
   fillRoundRect(ctx, textX, panelY + 8, tagW, tagH, 9, style.tagFill);
   text(ctx, style.label, textX + tagW / 2, panelY + 17, 10, "#fff7d8", "center");
   text(ctx, `${title} · 第 ${transition.round} 局结束`, textX + tagW + 8, panelY + 18, 13, style.color);
-  wrapText(ctx, `我方 ${localPlayer?.factionName || localPlayer?.faction || "阵营"} · ${short(localPlayer?.leader?.name || localPlayer?.leader?.name || "主将", 8)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
-  wrapText(ctx, `敌方 ${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"} · ${short(opponentPlayer?.leader?.name || opponentPlayer?.leader?.name || "主将", 8)} · ${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
+  wrapText(ctx, `我方·${localPlayer?.factionName || localPlayer?.faction || "阵营"}·${short(localPlayer?.leader?.name || "主将", 6)}`, textX, panelY + 40, textW, 14, 1, 11, "#3b2b18");
+  wrapText(ctx, `敌方·${opponentPlayer?.factionName || opponentPlayer?.faction || "阵营"}·${short(opponentPlayer?.leader?.name || "主将", 6)}·${actorName}放弃`, textX, panelY + 61, textW, 14, 1, 10, "#775c34");
   wrapText(ctx, `${roundLine} · ${moraleLine} · ${nextLine}`, textX, panelY + 80, textW, 13, 1, 10, "#6f5a3a");
   const moraleX = view.width - 58;
   text(ctx, "军心", moraleX + 8, panelY + 31, 10, "#8a6132", "center");
@@ -1638,7 +1658,7 @@ function drawCardGuide(ctx, view, actions) {
   fillRoundRect(ctx, 8, handY - 6, view.width - 16, 92, 12, "rgba(255, 247, 216, 0.18)", "#ffd76a");
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#ffd76a");
   text(ctx, "卡牌使用指引", panelX + 18, panelY + 24, 18, "#2f2417");
-  const guide = "点击手牌即可打出，长按手牌、场上卡牌或弃牌堆卡牌查看详情；点击当前方主将头像使用技能，长按双方头像可查看主将技能。";
+  const guide = "点击手牌即可打出，长按手牌、场上卡牌或弃牌堆卡牌查看详情；点击当前方主将头像使用技能，标记「被动」的主将开局即生效并持续整场、无需点击，长按双方头像可查看主将技能。";
   wrapText(ctx, guide, panelX + 18, panelY + 58, panelW - 36, 20, 4, 12, "#5f4727");
   text(ctx, "点任意位置关闭，之后不再提示", panelX + 18, panelY + 130, 11, "#8f3c1f");
   const close = { id: "closeCardGuide", x: panelX + panelW - 106, y: panelY + panelH - 44, w: 84, h: 30 };
@@ -1690,7 +1710,7 @@ function drawGuidePointer(ctx, view, actions, target, title, lines, options = {}
   ctx.restore();
   const dismiss = { id: options.dismissId || "dismissGuide", x: bubbleX + bubbleW - 66, y: bubbleY + 8, w: 54, h: 24 };
   actions.push(dismiss);
-  button(ctx, { ...dismiss, label: "稍后", size: 11, fill: options.dismissFill || "#3f7d61" });
+  button(ctx, { ...dismiss, label: options.dismissLabel || "稍后", size: 11, fill: options.dismissFill || "#3f7d61" });
 }
 
 function drawPassLeadHint(ctx, view, actions, state, ui) {
@@ -1699,6 +1719,7 @@ function drawPassLeadHint(ctx, view, actions, state, ui) {
   if (ui.battleCardDetailId || ui.battleCardDetailUid || ui.battleLogHistoryOpen || ui.discardPileOwner != null) return;
   drawGuidePointer(ctx, view, actions, ui.__passButton, "优势已稳", ["对方已放弃，且我方分数领先", "建议点「结算」保留手牌"], {
     dismissId: "dismissPassLeadHint",
+    dismissLabel: "知道了",
     fill: "#8f3c1f",
     stroke: "#6d2d18",
     rgb: "143,60,31",
@@ -1772,7 +1793,11 @@ function drawStepGuide(ctx, view, actions, state, ui) {
   } else if (step === "leaderSkill") {
     target = ui.__guideLeader;
     const g = loadSave().guides.leaderSkill;
-    if (g && g.longPressed && !g.done) {
+    if (isPassiveLeader(state.players[local])) {
+      // 被动主将无需发动，只引导长按查看技能说明。
+      title = "看主将技能";
+      lines = ["长按主将头像查看技能", "该主将为被动技能，整场生效"];
+    } else if (g && g.longPressed && !g.done) {
       title = "使用主将技能";
       lines = ["已查看主将技能", "点击主将头像使用技能"];
     } else {

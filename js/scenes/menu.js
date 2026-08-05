@@ -247,12 +247,8 @@ function draw(ctx, view, actions, ui = {}) {
   const nickName = user.nickName || "章鱼隐士";
   const nickX = avatarX + avatarSize + 8;
   text(ctx, nickName, nickX, avatarY + avatarSize / 2 + 1, 13, "#4a3826", "left", "middle");
-  if (ui.profileAuthGuide) {
-    fillRoundRect(ctx, avatarX + 2, avatarY + avatarSize + 6, 140, 26, 13, "#fff7e8", "#d9c39a");
-    text(ctx, "点击头像授权", avatarX + 72, avatarY + avatarSize + 19, 12, "#4a3826", "center", "middle");
-  }
-  // 点击头像/昵称区域：首次触发授权，之后打开资料编辑
-  actions.push({ id: "openProfile", x: avatarX, y: avatarY, w: avatarSize + 160, h: ui.profileAuthGuide ? avatarSize + 36 : avatarSize + 4 });
+  // 点击头像/昵称区域：打开资料编辑
+  actions.push({ id: "openProfile", x: avatarX, y: avatarY, w: avatarSize + 160, h: avatarSize + 4 });
   if (ui.isAdmin) {
     ctx.save();
     ctx.font = `13px ${FONT_STACK}`;

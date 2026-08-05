@@ -251,7 +251,6 @@ function recordMatch(result) {
     guideCursor: current.guideCursor,
     pendingHistory
   });
-  console.log("[storage] recordMatch queued locally until cloud sync, recordKey:", record.recordKey, "hookSet:", !!recordMatchCloudHook);
   if (recordMatchCloudHook) {
     Promise.resolve(recordMatchCloudHook(record)).catch(err => {
       console.error("[storage] recordMatchCloudHook error:", err?.message || err);

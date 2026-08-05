@@ -172,7 +172,7 @@ function resetPlayer(player, index, valueFn) {
   player.roundsWon = 0;
   player.retained = [];
   player.leaderUsed = false;
-  player.halfSituationRound = null;
+  player.leaderDisabled = false;
   draw(player, 10);
 }
 

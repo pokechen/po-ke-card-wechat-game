@@ -8,9 +8,10 @@
 const { runConfigComparison } = require("./simulate-ai-matches");
 
 function parseArgs(argv) {
-  const args = { matches: 100, seed: 20260731, maxSteps: 1200, candidate: {}, baseline: {}, sanity: false, label: "candidate", seeds: null };
+  const args = { matches: 100, seed: 20260731, maxSteps: 1200, candidate: {}, baseline: {}, sanity: false, label: "candidate", seeds: null, withMulligan: false };
   argv.forEach(arg => {
     if (arg === "--sanity") args.sanity = true;
+    else if (arg === "--mulligan") args.withMulligan = true;
     else if (arg.startsWith("--matches=")) args.matches = Math.max(1, Number(arg.slice(10)) || args.matches);
     else if (arg.startsWith("--seeds=")) args.seeds = arg.slice(8).split(",").map(Number).filter(n => !Number.isNaN(n));
     else if (arg.startsWith("--seed=")) args.seed = Number(arg.slice(7)) || args.seed;
@@ -30,7 +31,7 @@ function main() {
   let totCand = 0, totBase = 0, totDraw = 0, totMatch = 0;
   console.log(`[${args.label}] candidate=${JSON.stringify(candidateConfig)} baseline=${JSON.stringify(baselineConfig)}`);
   seeds.forEach(seed => {
-    const s = runConfigComparison({ matches: args.matches, seed, maxSteps: args.maxSteps, candidateConfig, baselineConfig });
+    const s = runConfigComparison({ matches: args.matches, seed, maxSteps: args.maxSteps, candidateConfig, baselineConfig, withMulligan: args.withMulligan });
     totCand += s.candidateWins; totBase += s.baselineWins; totDraw += s.draws; totMatch += s.matches;
     console.log(`  seed=${seed}: 新胜:${s.candidateWins} 旧胜:${s.baselineWins} 平:${s.draws} 胜率:${(s.candidateWins / s.matches * 100).toFixed(1)}%`);
   });

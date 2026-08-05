@@ -1,3 +1,5 @@
+const { debugLog, debugWarn } = require("./js/core/logger");
+
 const EARLY_SHARE_VERSION = "S0718-join-fallback-v1";
 let earlySharePayload = {
   title: "来盘章鱼牌吧",
@@ -6,16 +8,36 @@ let earlySharePayload = {
 let earlyShareRegistered = false;
 
 function earlyGameShareHandler() {
-  const record = { time: Date.now(), version: EARLY_SHARE_VERSION, payload: earlySharePayload };
-  console.warn("[share-early] 最早期 onShareAppMessage 回调被触发:", JSON.stringify(record));
-  try { wx.setStorageSync("zhangyu.share.early.debug.v1", record); } catch (err) {}
+  debugWarn("[share-early] 最早期 onShareAppMessage 回调被触发:", JSON.stringify({ time: Date.now(), version: EARLY_SHARE_VERSION, payload: earlySharePayload }));
   return earlySharePayload;
 }
 
 if (typeof wx !== "undefined" && typeof wx.onShareAppMessage === "function") {
   wx.onShareAppMessage(earlyGameShareHandler);
   earlyShareRegistered = true;
-  console.log(`[share-early] 已在加载任何模块前注册，版本=${EARLY_SHARE_VERSION}`);
+  debugLog(`[share-early] 已在加载任何模块前注册，版本=${EARLY_SHARE_VERSION}`);
+}
+
+// 全局异常兜底：小游戏没有页面栈，未捕获异常会直接黑屏且无任何提示。
+// 这里统一记录并给用户一次可感知的提示，避免玩家面对静默卡死。
+let lastGlobalErrorAt = 0;
+function reportGlobalError(scope, detail) {
+  console.error(`[global-error] ${scope}:`, detail);
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.showToast) return;
+  const time = Date.now();
+  if (time - lastGlobalErrorAt < 5000) return;
+  lastGlobalErrorAt = time;
+  try { api.showToast({ title: "出现异常，请重启小游戏", icon: "none", duration: 2500 }); } catch (err) {}
+}
+
+if (typeof wx !== "undefined") {
+  if (typeof wx.onError === "function") {
+    wx.onError(err => reportGlobalError("uncaught", err?.message || err?.errMsg || err));
+  }
+  if (typeof wx.onUnhandledRejection === "function") {
+    wx.onUnhandledRejection(res => reportGlobalError("unhandledRejection", res?.reason?.message || res?.reason || res));
+  }
 }
 
 const { createCanvasAdapter, hit, setImageRenderHook, drawRemoteImage, fillRoundRect, text, wrapText, button } = require("./js/ui/canvas");
@@ -38,7 +60,7 @@ const pvpClient = require("./js/core/pvpClient");
 const rankCore = require("./js/core/rank");
 const { loadSave, loadSettings, saveSettings, saveProgress, recordMatch, localMatchRecords, removeLocalMatchRecord, setRecordMatchCloudHook, getCustomDeckSlots, getActiveCustomDeckSlotIndex, getActiveCustomDeckIds } = require("./js/core/storage");
 const { cardById, displayName, factionPerkSummary, deckStatus, recommendedDeckIds, leadersFor, FACTION_KEYS, FACTION_LABELS, eligibleCards, groupCards, cardValue, allCards } = require("./js/core/cards");
-const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex, totalScore } = require("./js/core/battle");
+const { createMatch, playCard, pass, useLeader, mulliganSwap, finishMulligan, continueRoundTransition, aiStep, resolvePending, cancelPending, surrender, handOwnerIndex, totalScore, isPassiveLeader } = require("./js/core/battle");
 
 const view = createCanvasAdapter();
 const ctx = view.ctx;
@@ -111,6 +133,8 @@ const app = {
     deckSlotDropdown: "",
     historyScroll: 0,
     historyLeaderDetailId: "",
+    historyRecordDetailKey: "",
+    historyRecordScroll: 0,
     cloudHistoryRecords: [],
     cloudHistoryLoaded: false,
     cloudHistoryLoading: false,
@@ -136,7 +160,6 @@ const app = {
     battleRowScrolls: {},
     passLeadHintActive: false,
     passLeadHintActiveKey: "",
-    passLeadHintShownKey: "",
     passLeadHintDismissedKey: "",
     passLeadHintMatchKey: "",
     pvpShareGuideOpen: false,
@@ -173,11 +196,12 @@ setImageRenderHook(() => {
 
 const RECENT_PLAY_AUTO_DISMISS_MS = 2000;
 const ROUND_TRANSITION_NOTICE_MS = RECENT_PLAY_AUTO_DISMISS_MS * 2;
-const PASS_LEAD_HINT_KEY = "zhangyu.pass-lead-hint.count.v1";
-const MAX_PASS_LEAD_HINT_COUNT = 3;
 const ACTIVE_SINGLE_MATCH_KEY = "zhangyu.single-match.active.v1";
+const ACTIVE_ONLINE_MATCH_KEY = "zhangyu.online-match.active.v1";
 const PENDING_RANK_RESULT_KEY = "zhangyu.rank-result.pending.v1";
+const ACTIVE_MATCH_SNAPSHOT_VERSION = 3;
 let activeSingleMatchSnapshot = "";
+let activeOnlineMatchSnapshot = "";
 const PAGE_TRANSITION_MS = 180;
 const DETAIL_SWIPE_MS = 220;
 const BATTLE_HAND_CARD_H = 96;
@@ -202,41 +226,172 @@ function playPvpReadyAnim(duration = 900) {
   requestFrame(tick);
 }
 
+function storageApi() {
+  return typeof wx !== "undefined" ? wx : null;
+}
+
 function activeSingleMatch() {
   return app.match && app.match.mode === "ai" && !app.match.over ? app.match : null;
 }
 
+function activeOnlineMatch() {
+  if (!app.match || app.match.mode !== "online" || app.match.over) return null;
+  return normalizePvpRoomId(app.pvp?.roomId) ? app.match : null;
+}
+
 function clearActiveSingleMatchSnapshot() {
   activeSingleMatchSnapshot = "";
-  const api = typeof wx !== "undefined" ? wx : null;
+  const api = storageApi();
   if (!api?.removeStorageSync) return;
   try { api.removeStorageSync(ACTIVE_SINGLE_MATCH_KEY); } catch (err) {
     console.warn("[single-match] 清理未完成对局快照失败", err?.message || err);
   }
 }
 
+function clearActiveOnlineMatchSnapshot() {
+  activeOnlineMatchSnapshot = "";
+  const api = storageApi();
+  if (!api?.removeStorageSync) return;
+  try { api.removeStorageSync(ACTIVE_ONLINE_MATCH_KEY); } catch (err) {
+    console.warn("[online-match] 清理未完成对局快照失败", err?.message || err);
+  }
+}
+
+// 单机/排位对局的本地快照：单机局靠它在重新启动后恢复继续打，
+// 排位局靠它拿到掉线判负时的真实比分。不再记录切后台时间。
 function persistActiveSingleMatch() {
   const match = activeSingleMatch();
   if (!match) {
     if (app.match?.mode === "ai" && app.match.over) clearActiveSingleMatchSnapshot();
     return false;
   }
-  const api = typeof wx !== "undefined" ? wx : null;
+  const api = storageApi();
   if (!api?.setStorageSync) return false;
   try {
     const serialized = JSON.stringify(match);
     if (serialized === activeSingleMatchSnapshot) return true;
     api.setStorageSync(ACTIVE_SINGLE_MATCH_KEY, {
-      version: 1,
+      version: ACTIVE_MATCH_SNAPSHOT_VERSION,
       savedAt: Date.now(),
       match: JSON.parse(serialized)
     });
     activeSingleMatchSnapshot = serialized;
+    reportRankProgress(match);
     return true;
   } catch (err) {
     console.warn("[single-match] 保存未完成对局快照失败", err?.message || err);
     return false;
   }
+}
+
+// 联机对局以云端房间为权威来源，本地只落盘房间号与对局号作为重新进入的恢复入口
+function persistActiveOnlineMatch() {
+  const match = activeOnlineMatch();
+  if (!match) {
+    clearActiveOnlineMatchSnapshot();
+    return false;
+  }
+  const api = storageApi();
+  if (!api?.setStorageSync) return false;
+  const payload = {
+    version: ACTIVE_MATCH_SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    roomId: normalizePvpRoomId(app.pvp.roomId),
+    matchId: String(match.matchId || "")
+  };
+  const key = `${payload.roomId}:${payload.matchId}`;
+  if (key === activeOnlineMatchSnapshot) return true;
+  try {
+    api.setStorageSync(ACTIVE_ONLINE_MATCH_KEY, payload);
+    activeOnlineMatchSnapshot = key;
+    return true;
+  } catch (err) {
+    console.warn("[online-match] 保存未完成对局快照失败", err?.message || err);
+    return false;
+  }
+}
+
+// 排位局开局先上报一次实际出场信息（随机阵营/主将只有客户端知道），
+// 之后每打完一小局再上报比分。这样本地快照丢失（删小程序/清缓存）时，
+// 服务端补判负的弃局战绩也能展示阵营、主将与掉线时比分。
+// 全部只做展示用，不参与结算，因此上报失败不阻断对局。
+function reportRankProgress(match) {
+  if (!match?.ranked || !match.rankMatchId) return;
+  const finished = Array.isArray(match.roundResults) ? match.roundResults.length : 0;
+  const reported = app.rank.reportedProgress || {};
+  const last = reported[match.rankMatchId];
+  const first = last == null;
+  if (!first && Number(last) >= finished) return;
+  reported[match.rankMatchId] = finished;
+  app.rank.reportedProgress = reported;
+  const payload = { progress: matchProgressSnapshot(match) };
+  if (first) payload.setup = rankMatchSetupInfo(match);
+  pvpClient.reportRankProgress(match.rankMatchId, payload).catch(err => {
+    if (first) delete reported[match.rankMatchId];
+    else reported[match.rankMatchId] = Math.max(0, finished - 1);
+    debugWarn("[rank] 上报排位对局信息失败", err?.message || err);
+  });
+}
+
+// 实际出场的阵营、主将、牌组与难度；随机项只有客户端 createMatch 后才能确定
+function rankMatchSetupInfo(match) {
+  const me = match?.players?.[0] || {};
+  const ai = match?.players?.[1] || {};
+  return {
+    humanFaction: me.factionName || me.faction || "",
+    humanLeader: me.leader ? cardLabel(me.leader) : "",
+    humanLeaderId: me.leader?.id || "",
+    humanDeckMode: me.deckMode || "auto",
+    aiFaction: ai.factionName || ai.faction || "",
+    aiLeader: ai.leader ? cardLabel(ai.leader) : "",
+    aiLeaderId: ai.leader?.id || "",
+    aiDeckMode: ai.deckMode || "auto",
+    difficulty: ai.difficulty || ""
+  };
+}
+
+// 对局结束后取 finalScores，对局中实时算场上总分
+function progressScore(match, players, index) {
+  const finalScore = match?.finalScores?.[index];
+  if (Number.isFinite(finalScore)) return finalScore;
+  const player = players[index];
+  if (!player) return 0;
+  try { return totalScore(player) || 0; } catch (err) { return 0; }
+}
+
+// 当前对局的比分快照（本方视角），用于进度上报与掉线说明
+function matchProgressSnapshot(match, meIdx = 0) {
+  const oppIdx = 1 - meIdx;
+  const players = Array.isArray(match?.players) ? match.players : [];
+  return {
+    rounds: [players[meIdx]?.roundsWon || 0, players[oppIdx]?.roundsWon || 0],
+    scores: [progressScore(match, players, meIdx), progressScore(match, players, oppIdx)],
+    roundResults: (match?.roundResults || []).map(item => ({
+      round: item.round,
+      scores: [item.scores?.[meIdx] || 0, item.scores?.[oppIdx] || 0],
+      winner: item.winner == null ? null : (item.winner === meIdx ? 0 : 1)
+    }))
+  };
+}
+
+function readActiveMatchSnapshot(key) {
+  const api = storageApi();
+  if (!api?.getStorageSync) return null;
+  try {
+    const snapshot = api.getStorageSync(key) || null;
+    return snapshot?.version === ACTIVE_MATCH_SNAPSHOT_VERSION ? snapshot : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function showHomeMatchNotice(title, content, fallback) {
+  const api = storageApi();
+  if (api?.showModal) {
+    api.showModal({ title, content, showCancel: false, confirmText: "知道了" });
+    return;
+  }
+  toast(fallback || title);
 }
 
 function savePendingRankResult(match, durationMs) {
@@ -279,6 +434,13 @@ function clearPendingRankResult(rankMatchId = "") {
   try { api.removeStorageSync(PENDING_RANK_RESULT_KEY); } catch (err) {}
 }
 
+// 服务端已给出终局裁决（已结算 / 已判负 / 已作废）的错误码，客户端必须停止重试并清掉待提交缓存。
+const RANK_TERMINAL_CODES = ["RANK_ALREADY_FINISHED", "RANK_MATCH_ABANDONED", "RANK_MATCH_VOIDED", "RANK_MATCH_NOT_FOUND"];
+
+function isRankTerminalError(err) {
+  return RANK_TERMINAL_CODES.includes(String(err?.code || ""));
+}
+
 function retryPendingRankResult(source = "retry") {
   const pending = readPendingRankResult();
   if (!pending || app.rank.retryingPendingRankResult) return false;
@@ -299,62 +461,81 @@ function retryPendingRankResult(source = "retry") {
     render();
   }).catch(err => {
     app.rank.retryingPendingRankResult = false;
-    if (err?.code === "RANK_ALREADY_FINISHED") {
+    if (isRankTerminalError(err)) {
       clearPendingRankResult(pending.rankMatchId);
       loadRankProfile(true);
       return;
     }
-    console.warn("[rank] 待同步排位结算重试失败", source, err?.message || err);
+    debugWarn("[rank] 待同步排位结算重试失败", source, err?.message || err);
   });
   return true;
 }
 
-function restoreInterruptedSingleMatch() {
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api?.getStorageSync) return false;
-  let snapshot = null;
-  try { snapshot = api.getStorageSync(ACTIVE_SINGLE_MATCH_KEY) || null; } catch (err) {}
-  if (!snapshot || snapshot.version !== 1) return false;
+// 排位局被掉线打断：统一在首页判负结算并提示，并带上掉线时的真实比分用于说明。
+// 结算结果恒为失败，不按已打完的小局折算，避免“赢一局就跑”的套利。
+function settleDisconnectedRankMatch(source = "disconnect") {
+  const match = app.match;
+  if (!match || match.mode !== "ai" || !match.ranked || match.over) return false;
+  surrender(match, 0, "disconnect");
   clearActiveSingleMatchSnapshot();
+  savePendingRankResult(match, Math.max(0, Date.now() - (match.rankStartedAt || Date.now())));
+  setScene("menu");
+  setTimeout(submitRankResultIfNeeded, 0);
+  debugLog("[rank] 排位局掉线已判负结算", source);
+  showHomeMatchNotice("上一局已判负", `上一局排位中途掉线，已判负并结算。${disconnectScoreText(match)}`, "上一局排位已判负");
+  return true;
+}
+
+// 掉线时的比分说明（只用于展示，不参与结算）
+function disconnectScoreText(match) {
+  const snapshot = disconnectSnapshotOf(match);
+  if (!snapshot) return "";
+  const rounds = snapshot.rounds || [0, 0];
+  const scores = snapshot.scores || [0, 0];
+  return `掉线时：小局 ${rounds[0]}:${rounds[1]} · 终分 ${scores[0]}:${scores[1]}。`;
+}
+
+// 掉线判负时额外带上的比分快照，只用于展示说明
+function disconnectSnapshotOf(match, meIdx = 0) {
+  if (!match || match.endReason !== "disconnect") return null;
+  return matchProgressSnapshot(match, meIdx);
+}
+
+// 重新启动时处理本地未完成的单机/排位对局：
+// 单机局不做掉线处理，直接恢复接着打；排位局按掉线判负。
+function restoreInterruptedSingleMatch() {
+  const snapshot = readActiveMatchSnapshot(ACTIVE_SINGLE_MATCH_KEY);
+  if (!snapshot) return false;
   const source = snapshot.match;
-  if (!source || source.mode !== "ai" || source.over || source.historyRecorded || !Array.isArray(source.players) || source.players.length !== 2) return false;
+  if (!source || source.mode !== "ai" || source.over || source.historyRecorded || !Array.isArray(source.players) || source.players.length !== 2) {
+    clearActiveSingleMatchSnapshot();
+    return false;
+  }
   try {
     app.match = JSON.parse(JSON.stringify(source));
-    surrender(app.match, 0, "disconnect");
-    app.scene = "result";
-    if (app.match.ranked) {
-      const durationMs = Math.max(0, Date.now() - (app.match.rankStartedAt || Date.now()));
-      savePendingRankResult(app.match, durationMs);
-      setTimeout(submitRankResultIfNeeded, 0);
-    }
-    console.log("[single-match] 检测到重新进入前未完成的单机对局，已判负结算");
-    return true;
   } catch (err) {
-    console.warn("[single-match] 结算未完成单机对局失败", err?.message || err);
+    console.warn("[single-match] 读取未完成单机对局失败", err?.message || err);
+    clearActiveSingleMatchSnapshot();
     app.match = null;
     return false;
   }
-}
-
-function resumeSuspendedSingleMatch() {
-  if (app.scene !== "battle" || !activeSingleMatch()) return false;
-  // 排位对局若中断超过 60 秒，视为掉线判负而非恢复
-  if (app.match.ranked) {
-    const api = typeof wx !== "undefined" ? wx : null;
-    let snap = null;
-    try { snap = api?.getStorageSync?.(ACTIVE_SINGLE_MATCH_KEY) || null; } catch (err) {}
-    const savedAt = snap && typeof snap.savedAt === "number" ? snap.savedAt : 0;
-    if (savedAt && (Date.now() - savedAt > 60000)) {
-      clearActiveSingleMatchSnapshot();
-      performDisconnectLoss("suspend-timeout");
-      return true;
-    }
-  }
-  render();
+  if (app.match.ranked) return settleDisconnectedRankMatch("restart");
+  app.scene = "battle";
+  persistActiveSingleMatch();
+  debugLog("[single-match] 已恢复上次未打完的单机对局");
   if (!app.match.pending) scheduleAi();
   return true;
 }
 
+// 切回前台：不管离开多久，只要对局还在内存里就直接接着打
+function resumeSuspendedSingleMatch() {
+  if (!activeSingleMatch()) return false;
+  persistActiveSingleMatch();
+  if (app.scene !== "battle") return false;
+  render();
+  if (!app.match.pending) scheduleAi();
+  return true;
+}
 function startPageTransition(scene, axis, fromOffset) {
   const start = Date.now();
   app.ui.pageTransition = { scene, axis, offset: fromOffset };
@@ -415,28 +596,6 @@ function localMatchPlayerIndex(match = app.match) {
   return match?.mode === "online" && Number.isInteger(match.localPlayerIndex) ? match.localPlayerIndex : 0;
 }
 
-function passLeadHintStorageValue() {
-  try {
-    const api = typeof wx !== "undefined" ? wx : null;
-    const value = api && api.getStorageSync
-      ? api.getStorageSync(PASS_LEAD_HINT_KEY)
-      : (typeof globalThis !== "undefined" && globalThis.localStorage ? globalThis.localStorage.getItem(PASS_LEAD_HINT_KEY) : null);
-    const count = typeof value === "object" && value ? Number(value.count) : Number(value);
-    return Number.isFinite(count) ? Math.max(0, count) : 0;
-  } catch (err) {
-    return 0;
-  }
-}
-
-function savePassLeadHintStorageValue(count) {
-  const safeCount = Math.max(0, Math.min(MAX_PASS_LEAD_HINT_COUNT, Number(count) || 0));
-  try {
-    const api = typeof wx !== "undefined" ? wx : null;
-    if (api && api.setStorageSync) return api.setStorageSync(PASS_LEAD_HINT_KEY, safeCount);
-    if (typeof globalThis !== "undefined" && globalThis.localStorage) globalThis.localStorage.setItem(PASS_LEAD_HINT_KEY, String(safeCount));
-  } catch (err) {}
-}
-
 function passLeadHintMatchKey() {
   if (!app.match) return "";
   if (app.match.matchId) return `match:${app.match.matchId}`;
@@ -463,33 +622,19 @@ function passLeadHintCandidate() {
   const localScore = totalScore(localPlayer);
   const opponentScore = totalScore(opponentPlayer);
   if (localScore <= opponentScore) return null;
-  return { key: `${passLeadHintMatchKey()}:round:${match.round}:player:${local}`, localScore, opponentScore };
+  return { key: `${passLeadHintMatchKey()}:round:${match.round}:player:${local}` };
 }
 
+// 局势提示：常驻可触发，不做终身次数上限。节流由「每对局+每小局最多一次 + 用户可关闭」保证。
 function preparePassLeadHint() {
   const candidate = passLeadHintCandidate();
-  if (!candidate) {
+  if (!candidate || app.ui.passLeadHintDismissedKey === candidate.key) {
     app.ui.passLeadHintActive = false;
     app.ui.passLeadHintActiveKey = "";
     return;
   }
-  if (app.ui.passLeadHintActive && app.ui.passLeadHintActiveKey === candidate.key) return;
-  app.ui.passLeadHintActive = false;
-  app.ui.passLeadHintActiveKey = "";
-  if (app.ui.passLeadHintDismissedKey === candidate.key) return;
-  if (app.ui.passLeadHintShownKey === candidate.key) {
-    app.ui.passLeadHintActive = true;
-    app.ui.passLeadHintActiveKey = candidate.key;
-    app.ui.passLeadHintScores = { local: candidate.localScore, opponent: candidate.opponentScore };
-    return;
-  }
-  const shownCount = passLeadHintStorageValue();
-  if (shownCount >= MAX_PASS_LEAD_HINT_COUNT) return;
-  savePassLeadHintStorageValue(shownCount + 1);
-  app.ui.passLeadHintShownKey = candidate.key;
   app.ui.passLeadHintActive = true;
   app.ui.passLeadHintActiveKey = candidate.key;
-  app.ui.passLeadHintScores = { local: candidate.localScore, opponent: candidate.opponentScore };
 }
 
 function dismissPassLeadHintForCurrent() {
@@ -857,7 +1002,6 @@ function startMulliganSwapSequence(firstUid) {
 const PROFILE_DEFAULT_NAME = "章鱼隐士";
 const CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
 let profileAuthButton = null;
-let profileAuthButtonMode = "";
 let profileUpdating = false;
 let profileSaving = false;
 let profileAvatarUploading = false;
@@ -883,7 +1027,6 @@ function destroyProfileAuthButton() {
     try { profileAuthButton.destroy(); } catch (err) {}
   }
   profileAuthButton = null;
-  profileAuthButtonMode = "";
 }
 
 function applyProfile(userInfo) {
@@ -971,6 +1114,17 @@ function pickProfileImage(api) {
   });
 }
 
+// 服务端fail() 返回的 message 都是面向用户的中文提示（违规、频控、图片过大等），
+// 默认直接透出，让用户知道到底为什么失败；只有网络层/未知异常才回退到通用文案。
+const GENERIC_ERROR_CODES = ["SERVICE_FAILED", "HTTP_FAILED", "SERVER_ERROR"];
+
+function serverReasonTip(err, fallback) {
+  const code = String(err?.code || "");
+  const message = String(err?.message || "").trim();
+  if (!message || !code || GENERIC_ERROR_CODES.includes(code)) return fallback;
+  return message;
+}
+
 function uploadAvatarToCloud(localPath) {
   if (!localPath || typeof pvpClient.uploadAvatarFile !== "function") return Promise.reject(new Error("当前环境不支持头像上传"));
   return ensureCloudAuth()
@@ -979,9 +1133,10 @@ function uploadAvatarToCloud(localPath) {
       return pvpClient.uploadAvatarFile(localPath);
     })
     .then(res => {
-      const avatarUrl = res?.avatarUrl || res?.fileID || "";
-      if (!avatarUrl) throw new Error("头像上传未返回有效地址");
-      return avatarUrl;
+      // fileID 是写入资料的稳定标识；avatarUrl 是服务端换好的临时链接，只用于即时预览。
+      const fileID = res?.fileID || "";
+      if (!fileID) throw new Error("头像上传未返回有效地址");
+      return { fileID, previewUrl: res?.avatarUrl || "" };
     });
 }
 
@@ -1005,11 +1160,12 @@ function chooseAvatarImage() {
       app.ui.profileTip = "头像上传中…";
       render();
       profileAvatarUploadPromise = uploadAvatarToCloud(localPath)
-        .then(avatarUrl => {
+        .then(uploaded => {
           if (version !== profileAvatarPickVersion) return;
           if (app.ui.profileDraft) {
-            app.ui.profileDraft.avatarUrl = avatarUrl;
-            app.ui.profileDraft.avatarPreviewUrl = "";
+            // 提交给服务端的是 fileID，预览用临时链接，二者不可混用
+            app.ui.profileDraft.avatarUrl = uploaded.fileID;
+            app.ui.profileDraft.avatarPreviewUrl = uploaded.previewUrl;
           }
           app.ui.profileTip = "头像上传成功";
           toast("头像上传成功");
@@ -1018,8 +1174,9 @@ function chooseAvatarImage() {
           if (version !== profileAvatarPickVersion) return;
           console.warn("[profile] upload avatar failed", err && err.message ? err.message : err);
           if (app.ui.profileDraft) app.ui.profileDraft.avatarPreviewUrl = "";
-          app.ui.profileTip = "头像上传失败，请重试";
-          toast("头像上传失败，请重试");
+          const tip = serverReasonTip(err, "头像上传失败，请重试");
+          app.ui.profileTip = tip;
+          toast(tip);
         })
         .then(() => {
           if (version === profileAvatarPickVersion) {
@@ -1080,8 +1237,9 @@ function saveProfileDraft() {
     })
     .catch(err => {
       console.warn("[profile] update failed", err && err.message ? err.message : err);
-      app.ui.profileTip = "资料保存失败，请重试";
-      toast("资料保存失败，请重试");
+      const tip = serverReasonTip(err, "资料保存失败，请重试");
+      app.ui.profileTip = tip;
+      toast(tip);
       return false;
     })
     .then(saved => {
@@ -1098,8 +1256,9 @@ function openProfileSheet(tip = "") {
   app.ui.profileEditingName = false;
   app.ui.profileTip = tip;
   app.ui.profileSheetOpen = true;
-  app.ui.profilePromptShown = true;
   render();
+  // 原生授权按钮必须在弹窗布局确定后创建，位置与canvas 上画的微信按钮完全重合。
+  createProfileAuthButton();
 }
 
 function closeProfileSheet() {
@@ -1125,28 +1284,58 @@ function closeProfileSheet() {
   return true;
 }
 
-function profileNeedsNickname(user = app.ui.authUser) {
-  return !String(user?.nickName || "").trim();
+function wechatProfileAuthAvailable() {
+  return typeof wx !== "undefined" && typeof wx.createUserInfoButton === "function";
 }
 
-function menuProfileAuthRect() {
-  return { x: 16, y: view.safeTop + 10, w: 34 + 160, h: 38 };
-}
-
+// 是否已经自动弹过授权引导：只以本地标记为准。
+// 同一次安装只自动弹一次；用户删除小程序后本地标记消失，重新进入会再弹一次。
 function profileAuthPromptConsumed() {
-  return !profileNeedsNickname() || app.ui.profileAuthPrompted || loadProfileAuthPrompted();
+  return app.ui.profileAuthPrompted || loadProfileAuthPrompted();
 }
 
-function shouldUseAvatarAuth() {
-  return app.scene === "menu" && !app.ui.profileSheetOpen && !profileAuthPromptConsumed();
-}
-
-function promptProfileIfNeeded(needsProfile) {
-  if (!needsProfile || profileAuthPromptConsumed()) return;
+// 进入首页时自动弹出资料弹窗（内含微信授权按钮）。
+// 微信小游戏无法用代码直接拉起系统授权框，必须由用户点击 UserInfoButton 触发，
+// 因此这里弹的是游戏内弹窗，微信授权框由弹窗里的原生按钮点击后弹出。
+function promptProfileAuthIfNeeded() {
+  if (app.scene !== "menu" || app.ui.profileSheetOpen) return;
+  if (profileAuthPromptConsumed()) return;
+  saveProfileAuthPrompted();
   app.ui.profileFirstOpen = true;
-  app.ui.profileAuthGuide = true;
-  render();
-  createProfileAuthButton("avatar");
+  openProfileSheet();
+}
+
+// 资料弹窗布局：canvas 绘制与原生授权按钮定位共用，避免两者错位。
+function profileSheetGeom() {
+  const firstOpen = !!app.ui.profileFirstOpen;
+  const authEnabled = wechatProfileAuthAvailable();
+  const pw = 300;
+  const sz = 60;
+  const bh = 40;
+  const ph = (firstOpen ? 270 : 240) + (authEnabled ? 50 : 0);
+  const px = (view.width - pw) / 2;
+  const py = (view.height - ph) / 2;
+  const cx = px + pw / 2;
+  const cy = py + (firstOpen ? 96 : 76);
+  const nameY = cy + sz / 2 + 36;
+  const authY = cy + sz / 2 + 56;
+  return {
+    firstOpen,
+    authEnabled,
+    pw,
+    ph,
+    px,
+    py,
+    cx,
+    cy,
+    sz,
+    bh,
+    bx: px + 20,
+    bw: pw - 40,
+    nameY,
+    authY,
+    saveY: authEnabled ? authY + 50 : authY
+  };
 }
 
 // 统一按钮风格：浅底深字，清晰可读
@@ -1154,62 +1343,53 @@ const BTN_FILL = "#fff7e8";
 const BTN_STROKE = "#c4b49a";
 const BTN_TEXT = "#4a3826";
 
-function createProfileAuthButton(mode = "avatar") {
-  if (profileAuthButton && profileAuthButtonMode === mode) return true;
+// 资料弹窗内的“使用微信昵称头像”按钮：canvas 上画视觉样式，原生 UserInfoButton 透明覆盖其上接管点击。
+function createProfileAuthButton() {
   destroyProfileAuthButton();
-  if (typeof wx === "undefined" || typeof wx.createUserInfoButton !== "function") {
-    saveProfileAuthPrompted();
-    app.ui.profileAuthGuide = false;
-    openProfileSheet("当前环境无法微信授权，请填写个人信息");
-    return false;
-  }
-  const rect = menuProfileAuthRect();
+  if (!wechatProfileAuthAvailable()) return false;
+  const g = profileSheetGeom();
   profileAuthButton = wx.createUserInfoButton({
     type: "text",
     text: "",
     style: {
-      left: rect.x,
-      top: rect.y,
-      width: rect.w,
-      height: rect.h,
-      lineHeight: rect.h,
+      left: g.bx,
+      top: g.authY,
+      width: g.bw,
+      height: g.bh,
+      lineHeight: g.bh,
       backgroundColor: "rgba(255,255,255,0.01)",
       color: "rgba(0,0,0,0)",
       textAlign: "center",
       fontSize: 1,
-      borderRadius: Math.floor(rect.h / 2),
+      borderRadius: 14,
       borderWidth: 0
     }
   });
-  profileAuthButtonMode = mode;
   profileAuthButton.onTap(res => {
-    saveProfileAuthPrompted();
-    app.ui.profileAuthGuide = false;
     const info = res && res.userInfo;
-    if (info && (info.nickName || info.avatarUrl)) {
-      app.ui.profileDraft = {
-        nickName: info.nickName || app.ui.authUser?.nickName || "",
-        avatarUrl: info.avatarUrl || app.ui.authUser?.avatarUrl || ""
-      };
-      // 微信授权资料保留在 users.profile/userInfo；游戏内展示资料另存 customProfile。
-      ensureCloudAuth()
-        .then(authed => authed && pvpClient.saveWechatProfile ? pvpClient.saveWechatProfile(info) : null)
-        .catch(err => console.warn("[profile] save wechat profile failed", err && err.message ? err.message : err));
-      saveProfileDraft();
-      destroyProfileAuthButton();
+    if (!info || (!info.nickName && !info.avatarUrl)) {
+      app.ui.profileTip = "未获取到微信资料，请手动填写昵称并上传头像";
       render();
       return;
     }
-    destroyProfileAuthButton();
-    openProfileSheet("未授权微信资料，请填写昵称并上传头像");
+    app.ui.profileDraft = {
+      nickName: info.nickName || app.ui.authUser?.nickName || "",
+      avatarUrl: info.avatarUrl || app.ui.authUser?.avatarUrl || "",
+      avatarPreviewUrl: ""
+    };
+    // 微信授权资料保留在 users.profile/userInfo；游戏内展示资料另存 customProfile。
+    ensureCloudAuth()
+      .then(authed => authed && pvpClient.saveWechatProfile ? pvpClient.saveWechatProfile(info) : null)
+      .catch(err => console.warn("[profile] save wechat profile failed", err && err.message ? err.message : err));
+    saveProfileDraft().then(saved => { if (saved) closeProfileSheet(); });
+    render();
   });
   if (typeof profileAuthButton.onError === "function") {
     profileAuthButton.onError(err => {
       console.warn("[profile] auth error", err && err.message ? err.message : err);
-      saveProfileAuthPrompted();
-      app.ui.profileAuthGuide = false;
       destroyProfileAuthButton();
-      openProfileSheet("微信授权不可用，请填写个人信息");
+      app.ui.profileTip = "微信授权不可用，请手动填写昵称并上传头像";
+      render();
     });
   }
   return true;
@@ -1220,21 +1400,20 @@ function drawProfileSheet(ctx, view, actions) {
   ctx.fillStyle = "rgba(20,16,10,0.55)";
   ctx.fillRect(0, 0, view.width, view.height);
   ctx.restore();
-  const firstOpen = !!app.ui.profileFirstOpen;
-  const pw = 300, ph = firstOpen ? 270 : 240;
-  const px = (view.width - pw) / 2, py = (view.height - ph) / 2;
+  const g = profileSheetGeom();
+  const { firstOpen, authEnabled, px, py, pw, ph, cx, cy, sz, bx, bw, bh, nameY, authY, saveY } = g;
   const r = 16;
   fillRoundRect(ctx, px, py, pw, ph, r, "#fff7e8", "#d9c39a");
   text(ctx, "个人资料", px + pw / 2, py + 28, 17, "#4a3826", "center");
   text(ctx, "×", px + pw - 22, py + 23, 24, "#806e57", "center", "middle");
   if (firstOpen) {
-    wrapText(ctx, "设置你的昵称和头像，用于联机对战展示身份。", px + 20, py + 48, pw - 40, 11, 2, 11, "#8a7860");
+    const tip = authEnabled
+      ? "授权微信昵称头像，或自己填写，用于联机对战展示身份。"
+      : "设置你的昵称和头像，用于联机对战展示身份。";
+    wrapText(ctx, tip, px + 20, py + 48, pw - 40, 11, 2, 11, "#8a7860");
   }
 
   const draft = app.ui.profileDraft || {};
-  const sz = 60;
-  const cx = px + pw / 2;
-  const cy = py + (firstOpen ? 96 : 76);
   const avatarUrl = draft.avatarPreviewUrl || draft.avatarUrl || "";
 
   fillRoundRect(ctx, cx - sz / 2, cy - sz / 2, sz, sz, sz / 2, "#ede5d5", "#c4b49a");
@@ -1245,7 +1424,6 @@ function drawProfileSheet(ctx, view, actions) {
     text(ctx, "上传中", cx, cy + 1, 11, "#fff7e8", "center", "middle");
   }
   if (app.ui.profileTip) text(ctx, app.ui.profileTip, cx, cy + sz / 2 + 14, 10, profileAvatarUploading ? "#8f5c25" : "#8a7860", "center");
-  const nameY = cy + sz / 2 + 36;
   const nameLabel = draft.nickName || (app.ui.profileEditingName ? "输入中…" : "未设置昵称");
   const editSize = 20;
   const nameW = Math.min(120, Math.max(28, ctx.measureText(nameLabel).width));
@@ -1268,11 +1446,13 @@ function drawProfileSheet(ctx, view, actions) {
   ctx.fill();
   ctx.restore();
 
-  const bw = pw - 40, bx = px + 20;
-  const saveY = cy + sz / 2 + 56;
   const busy = profileAvatarUploading || profileSaving;
+  // 微信授权按钮：点击由覆盖其上的原生 UserInfoButton 处理，这里不注册 canvas 命中区。
+  if (authEnabled) {
+    button(ctx, { x: bx, y: authY, w: bw, h: bh, label: "使用微信昵称头像", fill: "#b47a2c", stroke: "#8f5c25", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
+  }
   const saveLabel = profileAvatarUploading ? "头像上传中…" : (profileSaving ? "保存中…" : "保存");
-  button(ctx, { x: bx, y: saveY, w: bw, h: 40, label: saveLabel, fill: busy ? "#8d9a91" : "#3a6b58", stroke: busy ? "#8d9a91" : "#3a6b58", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
+  button(ctx, { x: bx, y: saveY, w: bw, h: bh, label: saveLabel, fill: busy ? "#8d9a91" : "#3a6b58", stroke: busy ? "#8d9a91" : "#3a6b58", color: "#fff7e8", size: 15, r: 14, shadow: false, gloss: false });
 
   // 遮罩位于最底层；资料框本身吞掉点击，只有框外点击会关闭。
   actions.push({ id: "profileMask", x: 0, y: 0, w: view.width, h: view.height });
@@ -1280,7 +1460,7 @@ function drawProfileSheet(ctx, view, actions) {
   const avatarHitSize = 84;
   actions.push({ id: "profileAvatar", x: cx - avatarHitSize / 2, y: cy - avatarHitSize / 2, w: avatarHitSize, h: avatarHitSize });
   actions.push({ id: "profileName", x: cx - 100, y: nameY - 16, w: 200, h: 28 });
-  actions.push({ id: "profileSave", x: bx, y: saveY, w: bw, h: 40 });
+  actions.push({ id: "profileSave", x: bx, y: saveY, w: bw, h: bh });
   actions.push({ id: "profileClose", x: px + pw - 40, y: py + 4, w: 36, h: 36 });
 }
 
@@ -1295,10 +1475,13 @@ function setScene(scene) {
   }
   persistActiveSingleMatch();
   app.scene = scene;
+  if (scene !== "history") {
+    app.ui.historyRecordDetailKey = "";
+    app.ui.historyRecordScroll = 0;
+    app.ui.__historyRecordLayout = null;
+  }
   if (scene === "menu") {
-    ensureCloudAuth().then(() => {
-      if (app.scene === "menu") promptProfileIfNeeded(profileNeedsNickname());
-    });
+    ensureCloudAuth().then(() => promptProfileAuthIfNeeded());
   }
   if (scene === "result") setTimeout(submitRankResultIfNeeded, 0);
   if (scene === "menu" || scene === "history") refreshCloudMatchHistory(scene === "history");
@@ -1307,7 +1490,6 @@ function setScene(scene) {
 
 function startMatch(optionsPatch = {}) {
   clearAiTimer();
-  if (app._rankDisconnectTimer) { clearTimeout(app._rankDisconnectTimer); app._rankDisconnectTimer = null; }
   app.ui.handScroll = 0;
   app.ui.battleCardDetailId = "";
   app.ui.battleCardDetailUid = "";
@@ -1326,7 +1508,6 @@ function startMatch(optionsPatch = {}) {
   app.ui.battleRowScrolls = {};
   app.ui.passLeadHintActive = false;
   app.ui.passLeadHintActiveKey = "";
-  app.ui.passLeadHintShownKey = "";
   app.ui.passLeadHintDismissedKey = "";
   app.ui.passLeadHintMatchKey = `single:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   app.ui.dismissedRecentPlaySeq = 0;
@@ -1405,7 +1586,6 @@ function vibrate() {
   }
 }
 
-const SHARE_DEBUG_KEY = "zhangyu.share.debug.v1";
 const AUTH_SESSION_KEY = "zhangyu.auth.session.v1";
 const PROFILE_AUTH_PROMPTED_KEY = "zhangyu.profile.authPrompted.v1";
 const LEGACY_PROFILE_HANDLED_KEY = "zhangyu.profile.handled.v1";
@@ -1567,38 +1747,31 @@ async function refreshAdminStats() {
   }
 }
 
+function clearAuthSession() {
+  applyAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
+  saveAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
+}
+
+function isAuthExpiredError(err) {
+  return String(err?.code || "") === "AUTH_EXPIRED";
+}
+
 let silentLoginRunning = false;
 let silentLoginPromise = null;
-async function silentLogin() {
-  if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) {
-    try {
-      if (!app.ui.authUser && pvpClient.getCurrentUser) {
-        const result = await pvpClient.getCurrentUser();
-        app.ui.authUser = result.user || null;
-        if (app.scene === "menu") promptProfileIfNeeded(!!result.needsProfile);
-      }
-      console.log("[user-login] cached token valid, skip wx.login");
-      refreshCloudMatchHistory(false);
-      refreshAdminStatus();
-      return true;
-    } catch (err) {
-      console.warn("[user-login] cached token invalid, relogin:", err?.message || err);
-      applyAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
-      saveAuthSession({ token: "", expiresAt: 0, tokenStorage: "" });
-    }
-  }
+// 走微信 code 换取新令牌；并发调用共用同一次请求。
+async function requestLoginToken() {
   if (silentLoginRunning) return silentLoginPromise;
   silentLoginRunning = true;
   silentLoginPromise = (async () => {
     try {
-      console.log("[user-login] starting silent login...");
+      debugLog("[user-login] starting silent login...");
       const loginResult = await wxLogin("silent");
-      console.log("[user-login] wxLogin result:", JSON.stringify(loginResult));
+      debugLog("[user-login] wxLogin result:", JSON.stringify(loginResult));
       const code = loginResult?.result?.code || "";
       if (!code && !loginResult?.ok) throw new Error(loginResult?.error?.message || loginResult?.exception?.message || "wx.login 失败");
-      console.log("[user-login] calling pvpClient.login with code:", code.slice(0, 6) + "...");
+      debugLog("[user-login] calling pvpClient.login with code:", code.slice(0, 6) + "...");
       const result = await pvpClient.login({ code, trigger: "silent" });
-      console.log("[user-login] login success, token:", result?.token ? result.token.slice(0, 8) + "..." : "MISSING");
+      debugLog("[user-login] login success, token:", result?.token ? result.token.slice(0, 8) + "..." : "MISSING");
       const session = {
         token: result.token,
         expiresAt: result.expiresAt,
@@ -1609,7 +1782,7 @@ async function silentLogin() {
       saveAuthSession(session);
       refreshCloudMatchHistory(false);
       refreshAdminStatus();
-      if (app.scene === "menu") promptProfileIfNeeded(!!result.needsProfile);
+      if (app.scene === "menu") promptProfileAuthIfNeeded();
       return true;
     } catch (err) {
       console.error("[user-login] silent login FAILED:", err?.message || err, err);
@@ -1621,6 +1794,16 @@ async function silentLogin() {
   })();
   return silentLoginPromise;
 }
+
+// 令牌被服务端判定失效时（例如令牌记录已失效或存储格式变更），必须丢弃本地令牌重新登录，
+// 否则本地 expiresAt 未到期就会一直用坏令牌请求，界面持续提示“登录已过期，请重新登录”。
+async function reloginForExpiredToken() {
+  clearAuthSession();
+  const success = await requestLoginToken();
+  return success ? app.ui.authToken : "";
+}
+
+pvpClient.setAuthInvalidHandler?.(reloginForExpiredToken);
 
 async function ensureCloudAuth() {
   if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) {
@@ -1639,12 +1822,18 @@ async function ensureCloudAuth() {
       }
       refreshCloudMatchHistory(false);
       refreshAdminStatus();
+      return true;
     } catch (err) {
-      console.warn("[user-login] refresh user data failed", err?.message || err);
+      // 仅网络或数据刷新失败时保留登录态；令牌失效必须清理并重新登录。
+      if (!isAuthExpiredError(err)) {
+        console.warn("[user-login] refresh user data failed", err?.message || err);
+        return true;
+      }
+      console.warn("[user-login] 登录态已失效，重新登录", err?.message || err);
+      clearAuthSession();
     }
-    return true;
   }
-  return !!(await silentLogin());
+  return !!(await requestLoginToken());
 }
 
 function normalizeHistoryRecords(records = []) {
@@ -1670,16 +1859,16 @@ async function uploadMatchRecord(record) {
     console.error("[history] uploadMatchRecord: missing recordKey", record);
     return false;
   }
-  console.log("[history] uploading record:", record.recordKey, "syncState:", record.syncState);
+  debugLog("[history] uploading record:", record.recordKey, "syncState:", record.syncState);
   const authed = await ensureCloudAuth();
-  console.log("[history] ensureCloudAuth:", authed, "token:", app.ui.authToken ? app.ui.authToken.slice(0, 8) + "..." : "NONE");
+  debugLog("[history] ensureCloudAuth:", authed, "token:", app.ui.authToken ? app.ui.authToken.slice(0, 8) + "..." : "NONE");
   if (!authed) {
     console.error("[history] upload skipped: not authed");
     return false;
   }
   try {
     const result = await pvpClient.recordMatchHistory(record);
-    console.log("[history] upload success:", JSON.stringify(result));
+    debugLog("[history] upload success:", JSON.stringify(result));
     removeLocalMatchRecord(record.recordKey);
     if (result?.record) applyCloudHistoryRecords([result.record].concat(app.ui.cloudHistoryRecords || []));
     if (app.scene === "menu" || app.scene === "history") refreshCloudMatchHistory(true);
@@ -1780,34 +1969,6 @@ function maybeLoadMoreHistory() {
 
 setRecordMatchCloudHook(record => uploadMatchRecord(record));
 
-function clipboardErrorTip(error) {
-  const message = String(error?.message || error?.errMsg || error || "");
-  if (/privacy agreement|api scope|privacy/i.test(message)) return "复制失败：需在用户隐私保护指引声明剪贴板能力";
-  return message ? `复制失败：${message}` : "复制失败，请重试";
-}
-
-async function copyPvpRoomId() {
-  const roomId = app.pvp.roomId || "";
-  if (!roomId) return toast("暂无房间号");
-  const result = pvpClient.copyRoomIdResult ? await pvpClient.copyRoomIdResult(roomId) : { ok: pvpClient.copyRoomId(roomId) };
-  if (result.ok) return toast("房间号已复制");
-  return toast(clipboardErrorTip(result.error));
-}
-
-function rememberShareDebug(value) {
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api?.setStorageSync) return;
-  try { api.setStorageSync(SHARE_DEBUG_KEY, value); } catch (err) {
-    console.warn("[share-debug] 保存诊断信息失败:", err.message || err);
-  }
-}
-
-function readShareDebug() {
-  const api = typeof wx !== "undefined" ? wx : null;
-  if (!api?.getStorageSync) return null;
-  try { return api.getStorageSync(SHARE_DEBUG_KEY) || null; } catch (err) { return null; }
-}
-
 function encodeShareQuery(params) {
   return Object.entries(params)
     .filter(([, value]) => value != null && String(value) !== "")
@@ -1835,7 +1996,7 @@ function getSharePayload() {
     title: roomId ? `章鱼牌房间 ${roomId}｜打开后自动加入` : "来盘章鱼牌吧",
     query: encodeShareQuery(queryParams)
   };
-  console.log("[share-debug] 生成分享参数:", debugJson({
+  debugLog("[share-debug] 生成分享参数:", debugJson({
     appScene: app.scene,
     pvpRoomId: app.pvp.roomId,
     pendingRoomId: app.pvp.pendingRoomId,
@@ -1862,7 +2023,7 @@ function getSharePayload() {
   }
 
   earlySharePayload = { ...normal };
-  console.warn("[share-early] 已更新最早期回调 payload:", debugJson(earlySharePayload));
+  debugWarn("[share-early] 已更新最早期回调 payload:", debugJson(earlySharePayload));
   return normal;
 }
 
@@ -1870,27 +2031,9 @@ let shareRegistrationReason = "未注册";
 
 function gameShareHandler() {
   try {
-    console.log(`[share] onShareAppMessage 回调被触发! 注册来源=${shareRegistrationReason} 当前 app.pvp.roomId=`, app.pvp.roomId,
-      "app.pvp.room=", debugJson(app.pvp.room ? { roomId: app.pvp.room.roomId, _id: app.pvp.room._id, status: app.pvp.room.status } : null));
-    console.log("[share-debug] 回调时完整状态:", debugJson({
-      time: new Date().toISOString(),
-      registrationReason: shareRegistrationReason,
-      scene: app.scene,
-      pvp: app.pvp,
-      currentShareRoomId: currentShareRoomId()
-    }));
+    debugLog(`[share] onShareAppMessage 回调被触发，注册来源=${shareRegistrationReason} roomId=`, currentShareRoomId());
     const payload = getSharePayload();
-    const debugRecord = {
-      time: Date.now(),
-      registrationReason: shareRegistrationReason,
-      scene: app.scene,
-      roomId: currentShareRoomId(),
-      payload,
-      parsedQuery: parseShareQueryText(payload.query)
-    };
-    rememberShareDebug(debugRecord);
-    console.log("[share] 被动转发 payload:", debugJson(payload));
-    console.log("[share-debug] 已保存本次分享记录:", debugJson(debugRecord));
+    debugLog("[share] 被动转发 payload:", debugJson(payload));
     return payload;
   } catch (e) {
     console.error("[share] onShareAppMessage 回调异常:", e.message, e.stack);
@@ -1907,12 +2050,12 @@ function registerShareHandler(api, reason) {
   }
   shareRegistrationReason = reason;
   if (shareHandlerRegistered) {
-    console.log(`[share-debug] 最早期分享回调已存在，仅更新上下文，来源=${reason}`);
+    debugLog(`[share-debug] 最早期分享回调已存在，仅更新上下文，来源=${reason}`);
     return true;
   }
   api.onShareAppMessage(gameShareHandler);
   shareHandlerRegistered = true;
-  console.log(`[share] onShareAppMessage 已兜底注册，来源=${reason}`);
+  debugLog(`[share] onShareAppMessage 已兜底注册，来源=${reason}`);
   return true;
 }
 
@@ -1921,16 +2064,16 @@ function showGameShareMenu(api, reason) {
   api.showShareMenu({
     withShareTicket: false,
     menus: ["shareAppMessage"],
-    success: res => console.log(`[share] showShareMenu success，来源=${reason}:`, debugJson(res || {})),
+    success: res => debugLog(`[share] showShareMenu success，来源=${reason}:`, debugJson(res || {})),
     fail: err => console.warn(`[share] showShareMenu failed，来源=${reason}:`, debugJson(err || {})),
-    complete: res => console.log(`[share-debug] showShareMenu complete，来源=${reason}:`, debugJson(res || {}))
+    complete: res => debugLog(`[share-debug] showShareMenu complete，来源=${reason}:`, debugJson(res || {}))
   });
 }
 
 function setupShare() {
   const api = typeof wx !== "undefined" ? wx : null;
   if (!api) return;
-  console.log("[share] setupShare 开始注册");
+  debugLog("[share] setupShare 开始注册");
   registerShareHandler(api, "游戏启动");
   showGameShareMenu(api, "游戏启动");
 }
@@ -2403,7 +2546,7 @@ function savePvpShareCode(filePathOverride = "") {
 
 function guideShare(reason = "点击房间分享按钮") {
   const roomId = normalizePvpRoomId(app.pvp.roomId);
-  console.log(`[share-debug] ${reason}:`, debugJson({
+  debugLog(`[share-debug] ${reason}:`, debugJson({
     scene: app.scene,
     rawRoomId: app.pvp.roomId,
     pendingRoomId: app.pvp.pendingRoomId,
@@ -2415,7 +2558,7 @@ function guideShare(reason = "点击房间分享按钮") {
   registerShareHandler(api, `${reason}-${roomId}`);
   showGameShareMenu(api, `${reason}-${roomId}`);
   const preview = getSharePayload();
-  console.warn("[share-debug] 分享前即时 payload 预览:", debugJson(preview));
+  debugWarn("[share-debug] 分享前即时 payload 预览:", debugJson(preview));
   if (app.ui.pvpShareCodeRoomId !== roomId) app.ui.pvpShareCodePath = "";
   app.ui.pvpShareGuideOpen = true;
   loadPvpShareCode(roomId);
@@ -2616,6 +2759,21 @@ function onlineMatchRecordKey(match) {
   return `${roomKey}:${match?.endReason || "normal"}:${won}:${finalScores}:${rounds}`;
 }
 
+// 把座位视角的 winner 转换为“我方视角”：0=我方胜，1=我方负，null=平局
+function onlineViewWinner(match, meIdx) {
+  if (match?.winner == null) return null;
+  return match.winner === meIdx ? 0 : 1;
+}
+
+function onlineResultTextFor(match, meIdx) {
+  const winner = onlineViewWinner(match, meIdx);
+  const surrendered = match?.endReason === "surrender";
+  const disconnected = match?.endReason === "disconnect";
+  if (winner == null) return "平局";
+  if (winner === 0) return disconnected ? "对方掉线" : (surrendered ? "对方认输" : "你赢了");
+  return disconnected ? "你已掉线" : (surrendered ? "你已认输" : "你输了");
+}
+
 // 联网对局结束时，以本地玩家视角记录战绩到本机
 function recordOnlineMatch(match) {
   if (!match || !match.over) return;
@@ -2628,17 +2786,8 @@ function recordOnlineMatch(match) {
   const opp = match.players[oppIdx];
   if (!me || !opp) return;
 
-  // 把座位视角的 winner 转换为“我方视角”：0=我方胜，1=我方负，null=平局
-  let winner = match.winner;
-  if (winner === meIdx) winner = 0;
-  else if (winner === oppIdx) winner = 1;
-
-  const surrendered = match.endReason === "surrender";
-  const disconnected = match.endReason === "disconnect";
-  let resultText;
-  if (winner == null) resultText = "平局";
-  else if (winner === 0) resultText = disconnected ? "对方掉线" : (surrendered ? "对方认输" : "你赢了");
-  else resultText = disconnected ? "你已掉线" : (surrendered ? "你已认输" : "你输了");
+  const winner = onlineViewWinner(match, meIdx);
+  const resultText = onlineResultTextFor(match, meIdx);
 
   const roundResults = (match.roundResults || []).map(r => ({
     round: r.round,
@@ -2669,6 +2818,7 @@ function recordOnlineMatch(match) {
     difficulty: "pvp",
     mode: "online",
     endReason: match.endReason || "normal",
+    disconnectSnapshot: disconnectSnapshotOf(match, meIdx),
     roomId: app.pvp.roomId || "",
     matchId: match.matchId || ""
   });
@@ -2680,7 +2830,7 @@ function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
   const roomId = normalizePvpRoomId(room.roomId || room._id || app.pvp.roomId);
   const currentRoomId = normalizePvpRoomId(app.pvp.roomId);
   if (currentRoomId && roomId && currentRoomId !== roomId) {
-    console.warn("[pvp-ready-debug] ignore room response from previous session", { currentRoomId, roomId });
+    debugWarn("[pvp-ready-debug] ignore room response from previous session", { currentRoomId, roomId });
     return;
   }
   if (completeSubmission) {
@@ -2696,7 +2846,7 @@ function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
       }, 0);
     }
   }
-  console.log("[pvp-ready-debug] applyRoomUpdate", {
+  debugLog("[pvp-ready-debug] applyRoomUpdate", {
     roomId,
     incomingPlayerIndex: playerIndex,
     currentPlayerIndex: app.pvp.playerIndex,
@@ -2716,11 +2866,11 @@ function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
   const currentTurnSeq = Number(previousRoom?.turnSeq || 0) || 0;
   const nextTurnSeq = Number(room.turnSeq || 0) || 0;
   if (previousRoom && nextTurnSeq && currentTurnSeq && nextTurnSeq < currentTurnSeq) {
-    console.warn("[pvp-ready-debug] ignore stale room", { incoming: pvpReadyDebug(room), current: pvpReadyDebug(previousRoom) });
+    debugWarn("[pvp-ready-debug] ignore stale room", { incoming: pvpReadyDebug(room), current: pvpReadyDebug(previousRoom) });
     return;
   }
   if (previousRoom && nextVersion < Number(previousRoom.rules?.version || 0)) {
-    console.warn("[pvp-ready-debug] preserve newer local rules but accept room state", {
+    debugWarn("[pvp-ready-debug] preserve newer local rules but accept room state", {
       nextVersion,
       currentVersion: previousRoom.rules?.version,
       incoming: pvpReadyDebug(room),
@@ -2743,7 +2893,7 @@ function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
   app.pvp.error = "";
   app.pvp.lastSeenRuleVersion = Math.max(seenVersion, nextVersion);
   if (shouldPromptRuleChange) {
-    console.log("[pvp] 玩家2检测到规则变更，加入提示队列:", seenVersion, "->", nextVersion);
+    debugLog("[pvp] 玩家2检测到规则变更，加入提示队列:", seenVersion, "->", nextVersion);
     queuePvpRuleChanged(previousRoom?.rules || {}, room.rules, roomId);
   }
   const prevSelfReady = previousRoom ? pvpPlayerReady(previousRoom, nextPlayerIndex) : false;
@@ -2769,9 +2919,13 @@ function applyRoomUpdate(room, playerIndex, completeSubmission = false) {
     app.ui.handScroll = clampHandScroll(app.ui.handScroll);
     syncPendingPvpMulliganSwap();
     openMulliganGuideDetail();
+    persistActiveOnlineMatch();
     if (app.scene !== "battle") return setScene("battle");
   }
   if (room.status === "finished" && app.match) {
+    clearActiveOnlineMatchSnapshot();
+    // 玩家已经回到首页时直接在首页提示结算结果，不再把他拉回对战结算页
+    if (app.scene === "menu") return finishOnlineMatchOnHome(room, nextPlayerIndex);
     recordOnlineMatch(app.match);
     if (!["result", "battleCards", "pvpRoom"].includes(app.scene)) return setScene("result");
   }
@@ -2807,7 +2961,7 @@ function watchPvpRoom(roomId) {
 function resumePvpRoomSync(source = "foreground") {
   const roomId = normalizePvpRoomId(app.pvp.roomId);
   if (!roomId || !app.pvp.room || app.pvp.room.status === "dissolved") return false;
-  console.log("[pvp] 恢复房间同步, source=", source, "roomId=", roomId);
+  debugLog("[pvp] 恢复房间同步, source=", source, "roomId=", roomId);
   watchPvpRoom(roomId);
   pvpClient.fetchRoom(roomId).then(result => {
     if (normalizePvpRoomId(app.pvp.roomId) !== roomId) return;
@@ -2818,8 +2972,57 @@ function resumePvpRoomSync(source = "foreground") {
   return true;
 }
 
+// 联机对局在云端已经结束：补记战绩并直接在首页提示结果
+function finishOnlineMatchOnHome(room, playerIndex) {
+  if (!room?.match) return;
+  app.pvp.roomId = normalizePvpRoomId(room.roomId || room._id) || app.pvp.roomId;
+  app.pvp.playerIndex = Number.isInteger(playerIndex) ? playerIndex : app.pvp.playerIndex || 0;
+  app.pvp.room = room;
+  app.match = decorateOnlineMatch(room.match);
+  recordOnlineMatch(app.match);
+  const resultText = onlineResultTextFor(app.match, app.pvp.playerIndex);
+  resetPvpState();
+  app.match = null;
+  setScene("menu");
+  showHomeMatchNotice("上一局已结算", `联网对战结果：${resultText}，战绩已记录。`, `上一局：${resultText}`);
+}
+
+// 切回前台：不管离开多久，只拉一次房间按云端 status 走。
+// 房间还是 playing 就接着打；finished 说明已被对手等到超时判负，按结算提示处理。
+function resumeSuspendedOnlineMatch(source = "foreground") {
+  persistActiveOnlineMatch();
+  return resumePvpRoomSync(source);
+}
+// 重新启动时恢复被中断的联机对局：客户端不做任何时长判断，
+// 房间还在playing 就回到对局继续打，已结束则直接在首页提示结果。
+function restoreInterruptedOnlineMatch() {
+  const snapshot = readActiveMatchSnapshot(ACTIVE_ONLINE_MATCH_KEY);
+  const roomId = normalizePvpRoomId(snapshot?.roomId);
+  clearActiveOnlineMatchSnapshot();
+  if (!roomId) return false;
+  const matchId = String(snapshot.matchId || "");
+  ensureCloudAuth()
+    .then(() => pvpClient.fetchRoom(roomId))
+    .then(result => {
+      const room = result?.room;
+      if (!room?.match) return;
+      if (matchId && String(room.match.matchId || "") !== matchId) return;
+      // 启动过程中可能已经通过分享链进入其他房间或开了单机局，此时不能改写当前对局状态
+      if (activeSingleMatch() || (app.pvp.roomId && normalizePvpRoomId(app.pvp.roomId) !== roomId)) return;
+      const playerIndex = Number.isInteger(result.playerIndex) ? result.playerIndex : 0;
+      if (room.status === "finished") return finishOnlineMatchOnHome(room, playerIndex);
+      if (room.status !== "playing" || app.pvp.roomId) return;
+      app.pvp.roomId = roomId;
+      applyRoomUpdate(room, playerIndex);
+      watchPvpRoom(roomId);
+      debugLog("[online-match] 重新启动后房间仍在对战中，已回到对局继续");
+    })
+    .catch(err => debugWarn("[online-match] 恢复联机对局失败", err?.message || err));
+  return true;
+}
 function resetPvpState() {
   pvpClient.closeRoomWatch();
+  clearActiveOnlineMatchSnapshot();
   app.ui.pvpShareGuideOpen = false;
   app.ui.pvpShareCodeLoading = false;
   app.ui.pvpShareCodePath = "";
@@ -2949,7 +3152,7 @@ function createPvpRoom() {
   app.pvp.loading = true;
   setScene("pvpRoom");
   pvpClient.createRoom(currentPlayerSetup(rules), rules).then(result => {
-    console.log("[share-debug] 创建房间云函数返回:", debugJson({
+    debugLog("[share-debug] 创建房间云函数返回:", debugJson({
       resultRoomId: result.roomId,
       playerIndex: result.playerIndex,
       room: result.room ? { roomId: result.room.roomId, _id: result.room._id, status: result.room.status } : null
@@ -2957,7 +3160,7 @@ function createPvpRoom() {
     app.pvp.roomId = result.roomId;
     app.pvp.playerIndex = result.playerIndex || 0;
     applyRoomUpdate(result.room, app.pvp.playerIndex);
-    console.log("[share-debug] 创建房间后本地状态:", debugJson({
+    debugLog("[share-debug] 创建房间后本地状态:", debugJson({
       appRoomId: app.pvp.roomId,
       resolvedShareRoomId: currentShareRoomId(),
       scene: app.scene
@@ -2975,7 +3178,7 @@ function createPvpRoom() {
 async function joinPvpRoom(roomId) {
   const safeRoomId = normalizePvpRoomId(roomId);
   if (!safeRoomId) return toast("请输入4位数字房间号");
-  console.log("[pvp] joinPvpRoom 开始, roomId=", safeRoomId);
+  debugLog("[pvp] joinPvpRoom 开始, roomId=", safeRoomId);
   resetPvpState();
   app.pvp.roomId = safeRoomId;
   app.pvp.loading = true;
@@ -2994,7 +3197,7 @@ async function joinPvpRoom(roomId) {
     return;
   }
   pvpClient.joinRoom(safeRoomId, currentPlayerSetup()).then(result => {
-    console.log("[pvp] joinRoom 云函数返回成功, roomId=", result.roomId,
+    debugLog("[pvp] joinRoom 云函数返回成功, roomId=", result.roomId,
       "playerIndex=", result.playerIndex, "room.status=", result.room?.status,
       "players=", result.room?.players?.length);
     app.pvp.roomId = result.roomId;
@@ -3139,7 +3342,7 @@ function handleSharedRoute(route, source) {
     if (route.roomId === app.pvp.roomId) return true;
   }
   if (route.scene === "pvpSetup") {
-    console.log(`[launch] ${source} 检测到分享页面，进入对战准备:`, JSON.stringify(route.query || {}));
+    debugLog(`[launch] ${source} 检测到分享页面，进入对战准备:`, JSON.stringify(route.query || {}));
     applySharedPvpRules(route.query || {});
     enterPvpSetup("");
     return true;
@@ -3174,8 +3377,8 @@ function logShareEntryOptions(label, options) {
   const query = shareQueryFromOptions(options || {});
   const route = extractSharedRoute(options || {});
   const roomId = extractSharedRoomId(options || {});
-  console.log(`[share-debug] ${label} 原始 options:`, debugJson(options || null));
-  console.log(`[share-debug] ${label} 解析结果:`, debugJson({
+  debugLog(`[share-debug] ${label} 原始 options:`, debugJson(options || null));
+  debugLog(`[share-debug] ${label} 解析结果:`, debugJson({
     optionKeys: options && typeof options === "object" ? Object.keys(options) : [],
     scene: options?.scene,
     sceneLabel: describeScene(options?.scene),
@@ -3189,7 +3392,7 @@ function logShareEntryOptions(label, options) {
     route
   }));
   if (Number(options?.scene) === 1089) {
-    console.warn(`[share-debug] ${label} scene=1089 表示当前实例来源于微信“最近使用”；若这是发送分享后回到发送端，仍会沿用该来源且 query 为空，不能据此判断好友点击卡片时的参数`);
+    debugWarn(`[share-debug] ${label} scene=1089 表示当前实例来源于微信“最近使用”；若这是发送分享后回到发送端，仍会沿用该来源且 query 为空，不能据此判断好友点击卡片时的参数`);
   }
 }
 
@@ -3198,7 +3401,7 @@ function logShareEnvironment() {
   if (!api) return;
   let system = {};
   try { system = api.getSystemInfoSync ? api.getSystemInfoSync() : {}; } catch (err) {}
-  console.log("[share-debug] 运行环境:", debugJson({
+  debugLog("[share] 运行环境:", debugJson({
     SDKVersion: system.SDKVersion || "",
     version: system.version || "",
     platform: system.platform || "",
@@ -3208,15 +3411,11 @@ function logShareEnvironment() {
     hasGetEnterOptionsSync: typeof api.getEnterOptionsSync === "function",
     hasGetLaunchOptionsSync: typeof api.getLaunchOptionsSync === "function"
   }));
-  console.log("[share-debug] 本机上次分享记录:", debugJson(readShareDebug()));
-  let earlyRecord = null;
-  try { earlyRecord = api.getStorageSync?.("zhangyu.share.early.debug.v1") || null; } catch (err) {}
-  console.log("[share-early] 本机最早期回调记录:", debugJson(earlyRecord));
   try { logShareEntryOptions("getEnterOptionsSync", api.getEnterOptionsSync?.()); } catch (err) {
-    console.warn("[share-debug] getEnterOptionsSync 调用失败:", err.message || err);
+    debugWarn("[share] getEnterOptionsSync 调用失败:", err.message || err);
   }
   try { logShareEntryOptions("getLaunchOptionsSync", api.getLaunchOptionsSync?.()); } catch (err) {
-    console.warn("[share-debug] getLaunchOptionsSync 调用失败:", err.message || err);
+    debugWarn("[share] getLaunchOptionsSync 调用失败:", err.message || err);
   }
 }
 
@@ -3229,14 +3428,14 @@ function readSharedRoomId(options) {
   try {
     const enter = api.getEnterOptionsSync && api.getEnterOptionsSync();
     const fromEnter = extractSharedRoomId(enter);
-    console.log("[launch] enterOptions scene:", describeScene(enter?.scene), "query:", JSON.stringify(enter?.query || {}), "roomId:", fromEnter);
+    debugLog("[launch] enterOptions scene:", describeScene(enter?.scene), "query:", JSON.stringify(enter?.query || {}), "roomId:", fromEnter);
     if (fromEnter) return fromEnter;
   } catch (e) {}
   // 冷启动参数兜底
   try {
     const launch = api.getLaunchOptionsSync && api.getLaunchOptionsSync();
     const fromLaunch = extractSharedRoomId(launch);
-    console.log("[launch] launchOptions scene:", describeScene(launch?.scene), "query:", JSON.stringify(launch?.query || {}), "roomId:", fromLaunch);
+    debugLog("[launch] launchOptions scene:", describeScene(launch?.scene), "query:", JSON.stringify(launch?.query || {}), "roomId:", fromLaunch);
     if (fromLaunch) return fromLaunch;
   } catch (e) {}
   return "";
@@ -3245,7 +3444,7 @@ function readSharedRoomId(options) {
 function handleSharedRoomId(roomId, source) {
   const safeRoomId = normalizePvpRoomId(roomId);
   if (!safeRoomId || safeRoomId === app.pvp.roomId) return false;
-  console.log(`[launch] ${source} 检测到房间号，进入联网对战:`, safeRoomId);
+  debugLog(`[launch] ${source} 检测到房间号，进入联网对战:`, safeRoomId);
   joinPvpRoom(safeRoomId);
   return true;
 }
@@ -3286,16 +3485,19 @@ function handleLaunchRoom() {
   }
   const initialRoomId = readSharedRoomId();
   const initialRoute = readSharedRoute();
-  console.log("[share-debug] 启动最终解析:", debugJson({ initialRoomId, initialRoute }));
+  debugLog("[share-debug] 启动最终解析:", debugJson({ initialRoomId, initialRoute }));
   if (!handleSharedRoomId(initialRoomId, "启动")
     && !handleSharedRoute(initialRoute, "启动")
     && !handleSharedCardJoinFallback(initialOptions, "启动")) {
-    console.log("[launch] 启动未检测到分享参数，保持主页");
+    debugLog("[launch] 启动未检测到分享参数，保持主页");
   }
   if (api.onHide) {
     api.onHide(() => {
       // 微信通常只隐藏小游戏而不销毁 JS 进程；下次从聊天分享卡片进入时应重新允许手动加入提示。
       sharedCardJoinPromptShown = false;
+      // 只落盘当前对局作为重新进入的恢复入口，不记切后台时间：
+      // 离开多久都不影响能不能继续，联机的掉线判定完全交给云端超时
+      persistActiveOnlineMatch();
       if (!activeSingleMatch()) return;
       persistActiveSingleMatch();
       clearAiTimer();
@@ -3306,48 +3508,32 @@ function handleLaunchRoom() {
   if (api.onShow) {
     api.onShow(options => {
       logShareEntryOptions("wx.onShow", options);
-      const lastShareRecord = readShareDebug();
-      console.log("[share-debug] onShow 时本机上次分享记录:", debugJson(lastShareRecord));
-      if (lastShareRecord?.payload?.query && !Object.keys(options?.query || {}).length) {
-        console.warn("[share-debug] 本机曾生成带 query 的分享卡片，但本次 onShow 没有 query；这通常是分享面板关闭后回到发送端，不能用来判断接收端是否收到参数");
-      }
       const onShowRoomId = readSharedRoomId(options);
       const onShowRoute = extractSharedRoute(options);
-      console.log("[share-debug] onShow 最终解析:", debugJson({ onShowRoomId, onShowRoute }));
+      debugLog("[share-debug] onShow 最终解析:", debugJson({ onShowRoomId, onShowRoute }));
       if (handleSharedRoomId(onShowRoomId, "onShow")) return;
       if (handleSharedRoute(onShowRoute, "onShow")) return;
       if (handleSharedCardJoinFallback(options, "onShow")) return;
       resumeSuspendedSingleMatch();
-      resumePvpRoomSync("wx.onShow");
+      resumeSuspendedOnlineMatch("wx.onShow");
       retryPendingRankResult("wx.onShow");
       // 只在入口 query 明显带有 room/scene 关键字时才走兜底解析，避免正常切前台产生噪音
       if (!hasRoomHint(options) && !hasShareRouteHint(options)) return;
       setTimeout(() => {
         if (handleSharedRoomId(readSharedRoomId(), "onShow兜底")) return;
         if (handleSharedRoute(readSharedRoute(), "onShow兜底")) return;
-        console.log("[launch] onShow 检测到分享相关参数但未解析到有效目标，保持当前场景");
+        debugLog("[launch] onShow 检测到分享相关参数但未解析到有效目标，保持当前场景");
         render();
       }, 300);
     });
   }
-  app._rankDisconnectTimer = null;
   if (api.onNetworkStatusChange) {
     api.onNetworkStatusChange(status => {
-      if (status?.isConnected) {
-        resumePvpRoomSync("network-reconnected");
-        retryPendingRankResult("network-reconnected");
-        if (app._rankDisconnectTimer) { clearTimeout(app._rankDisconnectTimer); app._rankDisconnectTimer = null; }
-        return;
-      }
-      // 排位/AI 单机对局断网：延迟 8 秒后自动判负（给短暂抖动恢复机会）
-      const match = app.match;
-      if (!match || match.over || match.mode !== "ai") return;
-      if (app._rankDisconnectTimer) return;
-      app._rankDisconnectTimer = setTimeout(() => {
-        app._rankDisconnectTimer = null;
-        if (!app.match || app.match.over || app.match.mode !== "ai") return;
-        performDisconnectLoss("network-disconnect");
-      }, 8000);
+      // 断网不等于离开对局：排位局对 AI 本地照常能打，结算走pendingRankResult 重试；
+      // 联机局由云端心跳超时判定，客户端不再自己计时判负。
+      if (!status?.isConnected) return;
+      resumeSuspendedOnlineMatch("network-reconnected");
+      retryPendingRankResult("network-reconnected");
     });
   }
 }
@@ -3433,15 +3619,11 @@ function performSurrenderMatch() {
   return setScene("result");
 }
 
+// 联机对局主动放弃（返回首页/解散房间）时向云端认掉线
 function performDisconnectLoss(source = "disconnect") {
-  if (!app.match || app.match.over) return false;
-  if (isOnlineMatch()) {
-    if (app.pvp.submitting) return true;
-    submitPvpAction({ type: "disconnectLoss", source });
-    return true;
-  }
-  surrender(app.match, 0, "disconnect");
-  setScene("result");
+  if (!isOnlineMatch() || !app.match || app.match.over) return false;
+  if (app.pvp.submitting) return true;
+  submitPvpAction({ type: "disconnectLoss", source });
   return true;
 }
 
@@ -3617,12 +3799,6 @@ function handleMenu(action) {
     return;
   }
   if (action.id === "openProfile") {
-    if (shouldUseAvatarAuth()) {
-      app.ui.profileAuthGuide = true;
-      createProfileAuthButton("avatar");
-      render();
-      return;
-    }
     openProfileSheet();
     return;
   }
@@ -3641,6 +3817,8 @@ function handleMenu(action) {
   if (action.id === "history") {
     app.ui.historyScroll = 0;
     app.ui.historyLeaderDetailId = "";
+    app.ui.historyRecordDetailKey = "";
+    app.ui.historyRecordScroll = 0;
     setScene("history");
   }
   if (action.id === "adminStats") {
@@ -4022,6 +4200,10 @@ function handleHistory(action) {
     return render();
   }
   if (app.ui.historyLeaderDetailId) return render();
+  if (action.id === "historyRecordPanel") return;
+  if (action.id === "closeHistoryRecord") return closeHistoryRecordDetail();
+  if (app.ui.historyRecordDetailKey) return render();
+  if (action.id === "historyRecord" || action.id === "historyLeader") return openHistoryRecordDetail(action.recordKey);
   if (action.id === "back") return setScene("menu");
   render();
 }
@@ -4111,6 +4293,8 @@ function startRankMatch() {
     app.rank.currentMatch = result;
     app.rank.profile = result.profile || app.rank.profile;
     app.rank.rules = result.rules || app.rank.rules;
+    // 上一局中途退出被服务端补判负时必须告知玩家，否则会以为权势被莫名扣掉。
+    if (result.abandonedPrevious > 0) toast("上一局排位中途退出，已判负");
     const options = {
       ...(result.matchOptions || {}),
       ranked: true,
@@ -4147,7 +4331,8 @@ function rankFinalSummary(match) {
     aiLeaderId: p1.leader?.id || "",
     humanDeckMode: p0.deckMode || "auto",
     aiDeckMode: p1.deckMode || "auto",
-    endReason: match.endReason || "normal"
+    endReason: match.endReason || "normal",
+    disconnectSnapshot: disconnectSnapshotOf(match, 0)
   };
 }
 
@@ -4173,7 +4358,7 @@ function submitRankResultIfNeeded() {
     render();
   }).catch(err => {
     match.rankSubmitting = false;
-    if (err?.code === "RANK_ALREADY_FINISHED") {
+    if (isRankTerminalError(err)) {
       clearPendingRankResult(match.rankMatchId);
       match.rankSubmitted = true;
       match.rankSubmitError = "";
@@ -4294,7 +4479,7 @@ function updatePvpRoomRules(patch) {
 
 function setPvpReady(ready, expectedRuleVersion = Number(app.pvp.room?.rules?.version || 0) || 0) {
   const roomId = app.pvp.roomId;
-  console.log("[pvp-ready-debug] setPvpReady click", {
+  debugLog("[pvp-ready-debug] setPvpReady click", {
     roomId,
     playerIndex: app.pvp.playerIndex,
     ready: !!ready,
@@ -4303,19 +4488,19 @@ function setPvpReady(ready, expectedRuleVersion = Number(app.pvp.room?.rules?.ve
     room: pvpReadyDebug(app.pvp.room)
   });
   if (!roomId) {
-    console.warn("[pvp-ready-debug] setPvpReady skipped", { roomId, submitting: app.pvp.submitting });
+    debugWarn("[pvp-ready-debug] setPvpReady skipped", { roomId, submitting: app.pvp.submitting });
     return;
   }
   if (app.pvp.submitting) {
     if (ready && app.pvp.playerIndex === 0 && app.pvp.room?.status === "waiting") {
       app.pvp.queueReadyAfterRuleUpdate = true;
     }
-    console.warn("[pvp-ready-debug] setPvpReady queued or skipped", { roomId, ready: !!ready, queueReadyAfterRuleUpdate: app.pvp.queueReadyAfterRuleUpdate });
+    debugWarn("[pvp-ready-debug] setPvpReady queued or skipped", { roomId, ready: !!ready, queueReadyAfterRuleUpdate: app.pvp.queueReadyAfterRuleUpdate });
     return;
   }
   app.pvp.submitting = true;
   pvpClient.setReadyConfirmed(roomId, ready, expectedRuleVersion).then(result => {
-    console.log("[pvp-ready-debug] setPvpReady success", { playerIndex: result.playerIndex, transitioned: !!result.transitioned, room: pvpReadyDebug(result.room) });
+    debugLog("[pvp-ready-debug] setPvpReady success", { playerIndex: result.playerIndex, transitioned: !!result.transitioned, room: pvpReadyDebug(result.room) });
     applyRoomUpdate(result.room, result.playerIndex, true);
   }).catch(err => {
     console.error("[pvp-ready-debug] setPvpReady failed", { code: err?.code || "", message: err?.message || String(err), room: pvpReadyDebug(app.pvp.room) });
@@ -4397,10 +4582,6 @@ function handlePvpRoom(action) {
   }
   if (action.id === "pvpCreate") return createPvpRoom();
   if (action.id === "pvpShare") return guideShare();
-  if (action.id === "pvpCopy") {
-    copyPvpRoomId();
-    return render();
-  }
   if (action.id === "pvpJoin") return promptJoinPvpRoom();
   if (action.id === "pvpRetryJoin") return joinPvpRoom(app.pvp.roomId);
   if (action.id === "pvpRuleFactionMode") {
@@ -4466,6 +4647,18 @@ function handleBattle(action) {
     app.ui.firstPlayerAnnounced = true;
     return render();
   }
+  // 弃牌堆浮层的关闭/切换优先处理，避免回合过渡、结算等状态下点击空白关不掉面板
+  if (action.id === "closeDiscardPile") {
+    app.ui.discardPileOwner = null;
+    app.ui.discardPileScroll = 0;
+    return render();
+  }
+  if (action.id === "switchDiscardPile") {
+    app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
+    app.ui.discardPileScroll = 0;
+    return render();
+  }
+  if (action.id === "discardPilePanel") return render();
   if (app.match.roundTransition) return render();
   if (action.id === "battleCardDetail") return render();
   if (action.id === "detailPanel") {
@@ -4515,17 +4708,6 @@ function handleBattle(action) {
     app.ui.discardPileScroll = 0;
     return render();
   }
-  if (action.id === "closeDiscardPile") {
-    app.ui.discardPileOwner = null;
-    app.ui.discardPileScroll = 0;
-    return render();
-  }
-  if (action.id === "switchDiscardPile") {
-    app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
-    app.ui.discardPileScroll = 0;
-    return render();
-  }
-  if (action.id === "discardPilePanel") return render();
   if (app.ui.discardPileOwner != null) return render();
   if (action.id === "home") {
     if (app.match.over) {
@@ -4547,6 +4729,7 @@ function handleBattle(action) {
       return render();
     }
     if (action.id === "leaderAvatar") {
+      if (isPassiveLeader(app.match.players[action.playerIndex])) return render();
       if (action.playerIndex === app.match.current && !app.match.mulligan?.active) { markLeaderSkillPart("usedSkill"); return submitPvpAction({ type: "leader" }); }
       return render();
     }
@@ -4571,6 +4754,7 @@ function handleBattle(action) {
   }
   if (app.match.mode === "ai" && app.match.current !== 0) return;
     if (action.id === "leaderAvatar") {
+      if (isPassiveLeader(app.match.players[action.playerIndex])) return render();
       if (action.playerIndex === app.match.current && !app.match.mulligan?.active) {
         useLeader(app.match, action.playerIndex);
         markLeaderSkillPart("usedSkill");
@@ -5095,7 +5279,7 @@ function historyScrollBounds() {
 }
 
 function canScrollHistory() {
-  return app.scene === "history" && !app.ui.historyLeaderDetailId;
+  return app.scene === "history" && !app.ui.historyLeaderDetailId && !app.ui.historyRecordDetailKey;
 }
 
 function clampHistoryScroll(value) {
@@ -5138,6 +5322,59 @@ function startHistoryScrollInertia(initialVelocity) {
     if (Math.abs(next - before) < 0.05) return;
     render();
     maybeLoadMoreHistory();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+  }
+
+  requestFrame(step);
+}
+
+function historyRecordScrollBounds() {
+  return historyScene.recordScrollBounds(app.ui);
+}
+
+function canScrollHistoryRecord() {
+  return app.scene === "history" && !!app.ui.historyRecordDetailKey && !app.ui.historyLeaderDetailId;
+}
+
+function clampHistoryRecordScroll(value) {
+  const { maxScroll } = historyRecordScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollHistoryRecordBy(deltaY) {
+  if (!canScrollHistoryRecord()) return false;
+  const before = app.ui.historyRecordScroll || 0;
+  const next = clampHistoryRecordScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.1) {
+    app.ui.historyRecordScroll = next;
+    render();
+  }
+  return true;
+}
+
+let historyRecordScrollMotionId = 0;
+
+function cancelHistoryRecordScrollInertia() {
+  historyRecordScrollMotionId += 1;
+}
+
+function startHistoryRecordScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (!canScrollHistoryRecord() || Math.abs(velocity) < 0.04) return;
+  const motionId = ++historyRecordScrollMotionId;
+  let lastTime = Date.now();
+
+  function step() {
+    if (motionId !== historyRecordScrollMotionId || !canScrollHistoryRecord()) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const before = app.ui.historyRecordScroll || 0;
+    const next = clampHistoryRecordScroll(before + velocity * elapsed);
+    app.ui.historyRecordScroll = next;
+    if (Math.abs(next - before) < 0.05) return;
+    render();
     velocity *= Math.exp(-0.0048 * elapsed);
     if (Math.abs(velocity) >= 0.025) requestFrame(step);
   }
@@ -5339,7 +5576,7 @@ function findAction(point) {
 function handleTap(point) {
   const action = findAction(point);
   if (app.scene === "pvpRoom") {
-    console.log("[pvp-ready-debug] pvpRoom tap", {
+    debugLog("[pvp-ready-debug] pvpRoom tap", {
       point,
       actionId: action?.id || "",
       playerIndex: app.pvp.playerIndex,
@@ -5423,11 +5660,13 @@ function markGuideByLongPress(actionId) {
 }
 
 // 主将技能指引需「长按查看」+「使用技能」两者都完成；part 为 longPressed 或 usedSkill
+// 被动主将无法主动发动，长按查看即视为完成。
 function markLeaderSkillPart(part) {
   const save = loadSave();
   const g = save.guides && save.guides.leaderSkill;
   if (!g) return;
   g[part] = true;
+  if (isPassiveLeader(app.match?.players?.[localMatchPlayerIndex()])) g.usedSkill = true;
   if (g.longPressed && g.usedSkill) g.done = true;
   saveProgress({ guides: save.guides });
   if (g.done && app.ui.activeGuide === "leaderSkill") app.ui.activeGuide = "";
@@ -5456,6 +5695,25 @@ function openHistoryLeaderDetail(cardId) {
   app.ui.historyLeaderDetailId = cardId;
   app.ui.detailSwipe = null;
   vibrate();
+  render();
+}
+
+function openHistoryRecordDetail(recordKey) {
+  const key = String(recordKey || "");
+  if (!key) return;
+  cancelHistoryScrollInertia();
+  app.ui.historyRecordDetailKey = key;
+  app.ui.historyRecordScroll = 0;
+  app.ui.__historyRecordLayout = null;
+  vibrate();
+  render();
+}
+
+function closeHistoryRecordDetail() {
+  cancelHistoryRecordScrollInertia();
+  app.ui.historyRecordDetailKey = "";
+  app.ui.historyRecordScroll = 0;
+  app.ui.__historyRecordLayout = null;
   render();
 }
 
@@ -5499,12 +5757,14 @@ function startLongPress(point) {
   let onLongPress = null;
   if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && action.id === "battleLog") {
     onLongPress = openBattleLogHistory;
+  } else if (app.scene === "history" && !app.ui.historyLeaderDetailId && !app.ui.historyRecordDetailKey && action.id === "historyRecord" && action.recordKey) {
+    onLongPress = () => openHistoryRecordDetail(action.recordKey);
   } else if (action.cardId) {
     let openDetail = null;
     if (app.scene === "battle" && app.match && !app.ui.battleCardDetailId && ["card", "battleCardDetail", "leaderAvatar", "targetChoice"].includes(action.id)) {
       openDetail = openBattleCardDetail;
     }
-    if (app.scene === "history" && !app.ui.historyLeaderDetailId && action.id === "historyLeader") {
+    if (app.scene === "history" && !app.ui.historyLeaderDetailId && !app.ui.historyRecordDetailKey && action.id === "historyLeader") {
       openDetail = openHistoryLeaderDetail;
     }
     if (app.scene === "battleCards" && !app.ui.battleCardsDetailId && !app.ui.battleCardsHelpOpen && action.id === "battleCardsCard") {
@@ -5547,6 +5807,7 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
     if (!point) return;
     cancelBattleScrollInertia();
     cancelHistoryScrollInertia();
+    cancelHistoryRecordScrollInertia();
     cancelBattleCardsPageScrollInertia();
     cancelSettingDeckScrollInertia();
     cancelAdminStatsScrollInertia();
@@ -5725,6 +5986,34 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
       }
     }
 
+    if (canScrollHistoryRecord()) {
+      const bounds = historyRecordScrollBounds();
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      if (!touchStartState.historyRecordScrolling && bounds.maxScroll > 0 && start.y >= bounds.listTop && start.y <= bounds.listBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.historyRecordScrolling = true;
+      }
+      if (touchStartState.historyRecordScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollHistoryRecordBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.historyRecordScrollVelocity;
+        touchStartState.historyRecordScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.historyRecordScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
+        return;
+      }
+    }
+
     if (canScrollHistory()) {
       const bounds = historyScrollBounds();
       const start = touchStartState.point;
@@ -5829,6 +6118,12 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       return;
     }
     if (state && state.rankLeaderboardScrolled) return;
+    if (state && state.historyRecordScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startHistoryRecordScrollInertia((state.historyRecordScrollVelocity || 0) * releaseFactor);
+      return;
+    }
     if (state && state.historyScrolled) {
       const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
       const releaseFactor = Math.max(0, 1 - idleMs / 120);
@@ -5871,15 +6166,20 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
     }
     cancelSettingDeckScrollInertia();
     cancelAdminStatsScrollInertia();
+    cancelHistoryRecordScrollInertia();
     touchStartState = null;
   });
 }
 
-console.log("===== 章鱼牌 v20260720-ready-debug-v1 诊断代码已加载 =====");
+debugLog("===== 章鱼牌 v20260720-ready-debug-v1 诊断代码已加载 =====");
 loadAuthSession();
-ensureCloudAuth().then(() => retryPendingRankResult("startup-auth")).catch(err => console.warn("[rank] 启动登录/补交结算失败", err?.message || err));
+ensureCloudAuth().then(() => {
+  promptProfileAuthIfNeeded();
+  return retryPendingRankResult("startup-auth");
+}).catch(err => console.warn("[rank] 启动登录/补交结算失败", err?.message || err));
 setupShare();
 restoreInterruptedSingleMatch();
+restoreInterruptedOnlineMatch();
 retryPendingRankResult("startup");
 handleLaunchRoom();
 render();

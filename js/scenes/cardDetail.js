@@ -1,5 +1,5 @@
 const { fillRoundRect, wrapText, short, drawCardImage, text } = require("../ui/canvas");
-const { cardSummary, displayName, abilityDescriptions, factionPerkSummary, isHeroCard } = require("../core/cards");
+const { cardSummary, displayName, abilityDescriptions, factionPerkSummary, isHeroCard, isPassiveLeaderCard } = require("../core/cards");
 
 function wrappedHeight(ctx, content, maxWidth, lineHeight, maxLines, size) {
   const value = String(content || "");
@@ -54,7 +54,9 @@ function effectSections(card) {
   }
   if (effects.length) {
     sections.push({
-      title: leader ? "主将技能" : (card?.category === "situation" ? "时局效果" : "特殊效果"),
+      title: leader
+        ? (isPassiveLeaderCard(card) ? "主将技能（被动）" : "主将技能")
+        : (card?.category === "situation" ? "时局效果" : "特殊效果"),
       content: effects.join("\n"),
       color: "#f1d58a",
       lines: 8

@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_ID="${TCB_ENV_ID:-po-ke-card-d0gg2ewaac3e700c4}"
+# 与线上 pvpRoom 实际运行时保持一致；更换版本需删除函数后重建，updateFunctionCode 不会修改 runtime
 RUNTIME="${TCB_RUNTIME:-Nodejs18.15}"
-DEPLOY_MODE="${TCB_DEPLOY_MODE:-cos}"
+# cos 上传模式会导致控制台出现 ResourceNotFound.Entryfile，固定使用 zip
+DEPLOY_MODE="${TCB_DEPLOY_MODE:-zip}"
 
 cd "$ROOT_DIR"
 
@@ -79,11 +81,9 @@ log "同步 PVP 共享核心"
 node scripts/sync-pvp-core.js
 
 update_or_deploy_function "pvpRoom" "./cloudfunctions/pvpRoom"
-update_or_deploy_function "adminStats" "./cloudfunctions/adminStats"
 
 verify_function "pvpRoom" '{"action":"getLoginContext"}'
-verify_function "adminStats" '{}'
 
 log "云函数同步与部署完成"
 printf '环境：%s\n' "$ENV_ID"
-printf '函数：pvpRoom, adminStats\n'
+printf '函数：pvpRoom\n'

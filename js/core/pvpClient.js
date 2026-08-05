@@ -1,3 +1,5 @@
+const { debugLog, debugWarn } = require("./logger");
+
 const HTTP_API_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.ap-shanghai.app.tcloudbase.com/pvpRoom";
 const PVP_READY_DEBUG_VERSION = "20260803-ready-atomic-v2";
 
@@ -22,6 +24,36 @@ function setAuthToken(token) {
 
 function getAuthToken() {
   return authToken;
+}
+
+// 令牌失效（服务端 AUTH_EXPIRED）时由外部注入的重新登录逻辑，返回新的 token。
+let authInvalidHandler = null;
+let reloginPromise = null;
+
+function setAuthInvalidHandler(handler) {
+  authInvalidHandler = typeof handler === "function" ? handler : null;
+}
+
+function isAuthExpiredError(err) {
+  return String(err?.code || "") === "AUTH_EXPIRED";
+}
+
+function requestRelogin() {
+  if (!authInvalidHandler) return Promise.resolve("");
+  if (!reloginPromise) {
+    reloginPromise = Promise.resolve()
+      .then(() => authInvalidHandler())
+      .then(token => String(token || authToken || ""))
+      .catch(err => {
+        debugWarn("[pvp] 重新登录失败", err?.message || err);
+        return "";
+      })
+      .then(token => {
+        reloginPromise = null;
+        return token;
+      });
+  }
+  return reloginPromise;
 }
 
 function normalizeResult(result, fallbackMessage = "服务调用失败") {
@@ -50,6 +82,14 @@ function callHttpRoom(action, data = {}) {
       success: res => {
         const result = res?.data;
         try {
+          // CloudBase HTTP 访问服务对请求体有上限，超限会返回英文的
+          // Exceed max request payload size，直接透出用户看不懂，这里转成中文原因。
+          const rawMessage = String(result?.message || result?.errMsg || "");
+          if (res.statusCode === 413 || /payload size|request entity too large/i.test(rawMessage)) {
+            const error = new Error("图片体积过大，请重新选择一张照片");
+            error.code = "PAYLOAD_TOO_LARGE";
+            throw error;
+          }
           if (res.statusCode < 200 || res.statusCode >= 300) {
             const error = new Error(result?.message || `HTTP ${res.statusCode}`);
             error.code = result?.code || "HTTP_FAILED";
@@ -65,8 +105,16 @@ function callHttpRoom(action, data = {}) {
   });
 }
 
-function callRoom(action, data = {}) {
-  return callHttpRoom(action, data);
+// 令牌失效时自动静默重新登录并重试一次，避免本地缓存的旧令牌把用户一直卡在“登录已过期”。
+async function callRoom(action, data = {}) {
+  try {
+    return await callHttpRoom(action, data);
+  } catch (err) {
+    if (action === "login" || !isAuthExpiredError(err) || !authInvalidHandler) throw err;
+    const token = await requestRelogin();
+    if (!token) throw err;
+    return callHttpRoom(action, data);
+  }
 }
 
 function login(payload) {
@@ -101,17 +149,17 @@ async function fetchRoom(roomId) {
   let getError = null;
   try {
     const result = await getRoom(roomId);
-    console.log("[pvp-ready-debug] fetchRoom source=getRoom", roomId, roomReadyDebug(result.room));
+    debugLog("[pvp-ready-debug] fetchRoom source=getRoom", roomId, roomReadyDebug(result.room));
     return result;
   } catch (err) {
     getError = err;
   }
   try {
     const result = await callRoom("returnToRoom", { roomId, readOnly: true });
-    console.log("[pvp-ready-debug] fetchRoom source=returnToRoomReadOnly", roomId, roomReadyDebug(result.room));
+    debugLog("[pvp-ready-debug] fetchRoom source=returnToRoomReadOnly", roomId, roomReadyDebug(result.room));
     return result;
   } catch (returnError) {
-    console.warn("[pvp-ready-debug] fetchRoom all failed", roomId, {
+    debugWarn("[pvp-ready-debug] fetchRoom all failed", roomId, {
       getRoom: getError?.errMsg || getError?.message || String(getError),
       returnToRoom: returnError?.errMsg || returnError?.message || String(returnError)
     });
@@ -195,15 +243,15 @@ async function setReadyConfirmed(roomId, ready, expectedRuleVersion) {
   const traceId = `ready-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   let lastError = null;
   let playerIndex = null;
-  console.log("[pvp-ready-debug] setReadyConfirmed begin", { version: PVP_READY_DEBUG_VERSION, traceId, roomId, ready: !!ready, expectedRuleVersion });
+  debugLog("[pvp-ready-debug] setReadyConfirmed begin", { version: PVP_READY_DEBUG_VERSION, traceId, roomId, ready: !!ready, expectedRuleVersion });
   for (let attempt = 0; attempt < 3; attempt++) {
     let requestError = null;
     try {
-      console.log("[pvp-ready-debug] setReady request", { traceId, attempt: attempt + 1, roomId, ready: !!ready, expectedRuleVersion });
+      debugLog("[pvp-ready-debug] setReady request", { traceId, attempt: attempt + 1, roomId, ready: !!ready, expectedRuleVersion });
       const result = await setReady(roomId, ready, expectedRuleVersion, traceId);
       playerIndex = Number.isInteger(result.playerIndex) ? result.playerIndex : playerIndex;
       const confirmed = result.readyAccepted === true && readyResultConfirmed(result.room, playerIndex, ready, expectedRuleVersion);
-      console.log("[pvp-ready-debug] setReady response", { traceId, attempt: attempt + 1, playerIndex, confirmed, transitioned: !!result.transitioned, room: roomReadyDebug(result.room) });
+      debugLog("[pvp-ready-debug] setReady response", { traceId, attempt: attempt + 1, playerIndex, confirmed, transitioned: !!result.transitioned, room: roomReadyDebug(result.room) });
       if (confirmed) return result;
       requestError = new Error("准备状态尚未确认");
       requestError.code = "READY_NOT_CONFIRMED";
@@ -211,7 +259,7 @@ async function setReadyConfirmed(roomId, ready, expectedRuleVersion) {
     } catch (err) {
       requestError = err;
       lastError = err;
-      console.warn("[pvp-ready-debug] setReady error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
+      debugWarn("[pvp-ready-debug] setReady error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
       if (["STALE_RULES", "FORBIDDEN", "NOT_FOUND"].includes(err?.code)) throw err;
     }
 
@@ -220,7 +268,7 @@ async function setReadyConfirmed(roomId, ready, expectedRuleVersion) {
       const latest = await fetchRoom(roomId);
       playerIndex = Number.isInteger(latest.playerIndex) ? latest.playerIndex : playerIndex;
       const confirmed = readyResultConfirmed(latest.room, playerIndex, ready, expectedRuleVersion);
-      console.log("[pvp-ready-debug] setReady verify fetch", { traceId, attempt: attempt + 1, playerIndex, confirmed, room: roomReadyDebug(latest.room) });
+      debugLog("[pvp-ready-debug] setReady verify fetch", { traceId, attempt: attempt + 1, playerIndex, confirmed, room: roomReadyDebug(latest.room) });
       if (confirmed) return { ...latest, playerIndex, readyAccepted: true, transitioned: latest.room?.status === "selecting", traceId };
       if (Number(latest.room?.rules?.version || 0) !== Number(expectedRuleVersion || 0)) {
         const staleError = new Error("房间规则已修改，请确认新规则后重新准备");
@@ -229,7 +277,7 @@ async function setReadyConfirmed(roomId, ready, expectedRuleVersion) {
       }
     } catch (err) {
       lastError = err;
-      console.warn("[pvp-ready-debug] setReady verify error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
+      debugWarn("[pvp-ready-debug] setReady verify error", { traceId, attempt: attempt + 1, code: err?.code || "", message: err?.message || String(err) });
       if (err?.code === "STALE_RULES") throw err;
     }
 
@@ -288,6 +336,11 @@ function startRankMatch(playerSetup) {
   return callRoom("startRankMatch", { playerSetup });
 }
 
+// 上报排位对局的出场信息与小局比分，仅用于服务端补判负时展示，不参与结算
+function reportRankProgress(rankMatchId, payload = {}) {
+  return callRoom("reportRankProgress", { rankMatchId, setup: payload.setup, progress: payload.progress });
+}
+
 function finishRankMatch(rankMatchId, finalStateSummary, clientVersion, durationMs) {
   return callRoom("finishRankMatch", { rankMatchId, finalStateSummary, clientVersion, durationMs });
 }
@@ -314,19 +367,154 @@ function fileExt(path = "") {
   return ["jpg", "jpeg", "png", "webp", "gif"].includes(ext) ? ext : "jpg";
 }
 
+// 头像在界面上始终是小尺寸圆形展示，这里统一取原图中心正方形区域并缩放到 256×256：
+// 1) 非正方形照片不会被拉变形；
+// 2) 输出体积很小，避免 base64 膨胀 33% 后触达 CloudBase HTTP 访问服务的请求体上限
+//    （表现为 Exceed max request payload size）；
+// 3) 用户可以直接选原图大照片，不需要自己关心尺寸和体积。
+const AVATAR_OUTPUT_SIZE = 256;
+// 目标文件体积，base64 后约为其 4/3，需要给请求体上限留足余量
+const AVATAR_TARGET_BYTES = 400 * 1024;
+// 上传硬上限：base64 后约 933KB，仍低于 CloudBase HTTP 访问服务的请求体上限，
+// 也低于微信 img_sec_check 的 1MB 送检上限
+const AVATAR_UPLOAD_MAX_BYTES = 700 * 1024;
+// quality 只对 jpg 生效，png 依靠 compressedWidth 缩放，因此两个参数都要给。
+const AVATAR_COMPRESS_STEPS = [
+  { compressedWidth: 512, quality: 80 },
+  { compressedWidth: 384, quality: 65 },
+  { compressedWidth: 256, quality: 50 }
+];
+
+function localFileSize(api, filePath) {
+  try { return api.getFileSystemManager().statSync(filePath)?.size || 0; } catch (err) { return 0; }
+}
+
+function createOffscreenCanvasFor(api, size) {
+  try {
+    if (typeof api.createOffscreenCanvas === "function") {
+      return api.createOffscreenCanvas({ type: "2d", width: size, height: size });
+    }
+  } catch (err) {}
+  try {
+    // 小游戏中主 canvas 已被渲染层占用，这里拿到的是离屏 canvas
+    if (typeof api.createCanvas === "function") return api.createCanvas();
+  } catch (err) {}
+  return null;
+}
+
+function createImageFor(api, canvas) {
+  try {
+    if (canvas && typeof canvas.createImage === "function") return canvas.createImage();
+  } catch (err) {}
+  try {
+    if (typeof api.createImage === "function") return api.createImage();
+  } catch (err) {}
+  return null;
+}
+
+// 裁剪失败一律返回空串，由调用方回退到 compressImage 分级压缩。
+function cropAvatarSquare(api, filePath, size = AVATAR_OUTPUT_SIZE) {
+  return new Promise(resolve => {
+    const canvas = createOffscreenCanvasFor(api, size);
+    if (!canvas || typeof canvas.getContext !== "function" || typeof canvas.toTempFilePath !== "function") return resolve("");
+    let ctx = null;
+    try {
+      canvas.width = size;
+      canvas.height = size;
+      ctx = canvas.getContext("2d");
+    } catch (err) { return resolve(""); }
+    if (!ctx) return resolve("");
+    const image = createImageFor(api, canvas);
+    if (!image) return resolve("");
+    let settled = false;
+    const finish = value => { if (!settled) { settled = true; resolve(value); } };
+    image.onload = () => {
+      const width = Number(image.width) || 0;
+      const height = Number(image.height) || 0;
+      if (!width || !height) return finish("");
+      const side = Math.min(width, height);
+      const sx = (width - side) / 2;
+      const sy = (height - side) / 2;
+      try {
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(image, sx, sy, side, side, 0, 0, size, size);
+      } catch (err) { return finish(""); }
+      try {
+        canvas.toTempFilePath({
+          x: 0,
+          y: 0,
+          width: size,
+          height: size,
+          destWidth: size,
+          destHeight: size,
+          fileType: "jpg",
+          quality: 0.85,
+          success: res => finish(res?.tempFilePath || ""),
+          fail: () => finish("")
+        });
+      } catch (err) { finish(""); }
+    };
+    image.onerror = () => finish("");
+    try { image.src = filePath; } catch (err) { finish(""); }
+  });
+}
+
+function compressImageOnce(api, src, options) {
+  return new Promise(resolve => {
+    if (typeof api.compressImage !== "function") return resolve("");
+    try {
+      api.compressImage({
+        src,
+        quality: options.quality,
+        compressedWidth: options.compressedWidth,
+        success: res => resolve(res?.tempFilePath || ""),
+        fail: () => resolve("")
+      });
+    } catch (err) { resolve(""); }
+  });
+}
+
+// 优先走 canvas 正方形裁剪；老基础库拿不到 canvas能力时回退分级压缩，
+// 每一级都从原图重新压缩，避免多次有损压缩叠加导致画质过差。
+async function prepareAvatarFile(api, filePath) {
+  const cropped = await cropAvatarSquare(api, filePath);
+  if (cropped) {
+    const croppedSize = localFileSize(api, cropped);
+    if (!croppedSize || croppedSize <= AVATAR_TARGET_BYTES) return cropped;
+  }
+  const originalSize = localFileSize(api, filePath);
+  if (!cropped && originalSize && originalSize <= AVATAR_TARGET_BYTES) return filePath;
+  let best = cropped || filePath;
+  for (const step of AVATAR_COMPRESS_STEPS) {
+    const compressed = await compressImageOnce(api, filePath, step);
+    if (!compressed) break;
+    best = compressed;
+    const size = localFileSize(api, compressed);
+    if (!size || size <= AVATAR_TARGET_BYTES) return compressed;
+  }
+  return best;
+}
+
 function uploadAvatarFile(filePath) {
   const api = wxApi();
   if (!api?.getFileSystemManager || !filePath) return Promise.reject(new Error("当前环境不支持头像上传"));
-  return new Promise((resolve, reject) => {
+  return prepareAvatarFile(api, filePath).then(finalPath => new Promise((resolve, reject) => {
+    // 处理后仍然过大时本地就给出原因，避免上传超限请求体拿到平台的英文报错
+    const size = localFileSize(api, finalPath);
+    if (size > AVATAR_UPLOAD_MAX_BYTES) {
+      const error = new Error("这张照片太大，换一张或裁剪后再试");
+      error.code = "AVATAR_TOO_LARGE";
+      return reject(error);
+    }
     api.getFileSystemManager().readFile({
-      filePath,
+      filePath: finalPath,
       encoding: "base64",
-      success: res => callRoom("uploadAvatar", { ext: fileExt(filePath), imageBase64: res.data })
+      success: res => callRoom("uploadAvatar", { ext: fileExt(finalPath), imageBase64: res.data })
         .then(resolve)
         .catch(reject),
       fail: err => reject(new Error(err?.errMsg || "头像读取失败"))
     });
-  });
+  }));
 }
 
 function closeRoomWatch() {
@@ -356,7 +544,7 @@ function watchRoom(roomId, onChange, onError) {
     const key = roomUpdateKey(room);
     if (key && key === lastDeliveredKey) return;
     lastDeliveredKey = key;
-    console.log("[pvp-ready-debug] watch deliver", { source, roomId, key, room: roomReadyDebug(room) });
+    debugLog("[pvp-ready-debug] watch deliver", { source, roomId, key, room: roomReadyDebug(room) });
     onChange(room);
   };
   const pollRoom = () => {
@@ -372,52 +560,10 @@ function watchRoom(roomId, onChange, onError) {
   return roomWatcher;
 }
 
-function plainClipboardError(err) {
-  return {
-    message: err?.errMsg || err?.message || String(err || "复制失败"),
-    errMsg: err?.errMsg || "",
-    code: err?.errCode || err?.code || ""
-  };
-}
-
-function copyTextResult(value) {
-  const api = wxApi();
-  if (!api || !api.setClipboardData) return Promise.resolve({ ok: false, error: { message: "当前环境不支持复制" } });
-  return new Promise(resolve => {
-    try {
-      api.setClipboardData({
-        data: String(value || ""),
-        success: res => resolve({ ok: true, result: res || {} }),
-        fail: err => {
-          console.warn("[pvp] setClipboardData failed", err);
-          resolve({ ok: false, error: plainClipboardError(err) });
-        }
-      });
-    } catch (err) {
-      console.warn("[pvp] setClipboardData exception", err);
-      resolve({ ok: false, error: plainClipboardError(err) });
-    }
-  });
-}
-
-function copyText(value) {
-  const api = wxApi();
-  if (!api || !api.setClipboardData) return false;
-  copyTextResult(value);
-  return true;
-}
-
-function copyRoomId(roomId) {
-  return copyText(roomId);
-}
-
-function copyRoomIdResult(roomId) {
-  return copyTextResult(roomId);
-}
-
 module.exports = {
   setAuthToken,
   getAuthToken,
+  setAuthInvalidHandler,
   login,
   createRoom,
   joinRoom,
@@ -439,6 +585,7 @@ module.exports = {
   getAdminStats,
   getRankProfile,
   startRankMatch,
+  reportRankProgress,
   finishRankMatch,
   getRankLeaderboard,
   getRankPublicProfile,
@@ -446,9 +593,5 @@ module.exports = {
   updateProfile,
   uploadAvatarFile,
   watchRoom,
-  closeRoomWatch,
-  copyText,
-  copyTextResult,
-  copyRoomId,
-  copyRoomIdResult
+  closeRoomWatch
 };

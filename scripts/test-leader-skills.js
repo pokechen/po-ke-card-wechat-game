@@ -76,7 +76,7 @@ function test(name, fn) {
 }
 
 test("奇策以整线总战力判定，摧毁并列最高非传世人物且保留传世", () => {
-  const state = stateFor(leader("赵匡胤", "若对方文脉线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"), { autoControlAll: true });
+  const state = stateFor(leader("赵匡胤", "对方文脉线总战力满 10 时摧毁全部最强非传世人物。"), { autoControlAll: true });
   const hero = card("传世人物", "hero", 20, 1, { hero: true, row: "文脉" });
   const first = card("普通甲", "unit", 6, 1, { row: "文脉" });
   const second = card("普通乙", "unit", 6, 1, { row: "文脉" });
@@ -87,7 +87,7 @@ test("奇策以整线总战力判定，摧毁并列最高非传世人物且保�
 });
 
 test("奇策在目标阵线总战力不足 10 时不摧毁人物", () => {
-  const state = stateFor(leader("刘彻", "若对方朝堂线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"), { autoControlAll: true });
+  const state = stateFor(leader("刘彻", "对方朝堂线总战力满 10 时摧毁全部最强非传世人物。"), { autoControlAll: true });
   const target = card("普通人物", "unit", 9, 1, { row: "朝堂" });
   putBoard(state, 1, "朝堂", target);
   assert.equal(battle.useLeader(state, 0), true);
@@ -96,7 +96,7 @@ test("奇策在目标阵线总战力不足 10 时不摧毁人物", () => {
 });
 
 test("阵线翻倍不影响传世人物，也不与已有鼓舞叠加", () => {
-  const state = stateFor(leader("石勒", "使己方疆场线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"), { autoControlAll: true });
+  const state = stateFor(leader("石勒", "使己方疆场线所有非传世人物战力翻倍。"), { autoControlAll: true });
   const normal = card("普通人物", "unit", 5, 0, { row: "疆场" });
   const hero = card("传世人物", "hero", 10, 0, { hero: true, row: "疆场" });
   putBoard(state, 0, "疆场", normal, hero);
@@ -110,7 +110,7 @@ test("阵线翻倍不影响传世人物，也不与已有鼓舞叠加", () => {
 });
 
 test("管仲可以从对手弃牌堆选择特殊卡牌", () => {
-  const state = stateFor(leader("管仲", "从对手弃牌堆选择 1 张卡牌加入己方手牌。"));
+  const state = stateFor(leader("管仲", "从对手弃牌堆取 1 张牌加入手牌。"));
   const strategy = card("特殊谋略", "stratagem", 0, 1, { zone: "discard" });
   const hero = card("传世人物", "hero", 12, 1, { hero: true, zone: "discard" });
   state.players[1].discard = [strategy, hero];
@@ -123,7 +123,7 @@ test("管仲可以从对手弃牌堆选择特殊卡牌", () => {
 });
 
 test("刘裕可以从己方弃牌堆选择传世卡牌", () => {
-  const state = stateFor(leader("刘裕", "从己方弃牌堆选择 1 张卡牌加入手牌。"));
+  const state = stateFor(leader("刘裕", "从己方弃牌堆取 1 张牌加入手牌。"));
   const hero = card("传世人物", "hero", 12, 0, { hero: true, zone: "discard" });
   const situation = card("特殊时局", "situation", 0, 0, { zone: "discard" });
   state.players[0].discard = [hero, situation];
@@ -135,7 +135,7 @@ test("刘裕可以从己方弃牌堆选择传世卡牌", () => {
 });
 
 test("黄巢由玩家弃置两张手牌后从完整牌库选择一张", () => {
-  const state = stateFor(leader("黄巢", "弃置 2 张手牌，然后从牌库选择 1 张卡牌加入手牌。"));
+  const state = stateFor(leader("黄巢", "弃置 2 张手牌，从牌库选 1 张。"));
   const first = card("弃牌甲", "unit", 2, 0);
   const second = card("弃牌乙", "stratagem", 0, 0);
   const kept = card("保留牌", "unit", 4, 0);
@@ -154,6 +154,40 @@ test("黄巢由玩家弃置两张手牌后从完整牌库选择一张", () => {
   assert.equal(state.players[0].deck.some(item => item.uid === deckHero.uid), false);
   assert.deepEqual(new Set(state.players[0].discard.map(item => item.uid)), new Set([first.uid, second.uid]));
   assert.equal(state.players[0].leaderUsed, true);
+});
+
+test("张居正被动主将不可主动发动，且恶劣时局半损持续到后续回合", () => {
+  const state = stateFor(leader("张居正", "己方单位在恶劣时局下仅损失一半战力。"));
+  const unit = card("普通人物", "unit", 8, 0, { row: "疆场" });
+  putBoard(state, 0, "疆场", unit);
+  state.situations["疆场"] = true;
+  assert.equal(battle.useLeader(state, 0), false);
+  assert.equal(battle.isPassiveLeader(state.players[0]), true);
+  battle.recalcScores(state);
+  assert.equal(unit.effective, 4);
+  state.round = 3;
+  battle.recalcScores(state);
+  assert.equal(unit.effective, 4);
+  const opponentUnit = card("对手人物", "unit", 8, 1, { row: "疆场" });
+  putBoard(state, 1, "疆场", opponentUnit);
+  battle.recalcScores(state);
+  assert.equal(opponentUnit.effective, 1);
+});
+
+test("封锁主将技能会同时取消对手被动主将", () => {
+  const state = stateFor(leader("赵光义", "封锁对手主将技能。"), { autoControlAll: true });
+  state.players[1].leader = leader("张居正", "己方单位在恶劣时局下仅损失一半战力。");
+  state.players[1].leaderUsed = false;
+  state.players[1].leaderDisabled = false;
+  const unit = card("对手人物", "unit", 8, 1, { row: "疆场" });
+  putBoard(state, 1, "疆场", unit);
+  state.situations["疆场"] = true;
+  battle.recalcScores(state);
+  assert.equal(unit.effective, 4);
+  assert.equal(battle.useLeader(state, 0), true);
+  assert.equal(state.players[1].leaderDisabled, true);
+  battle.recalcScores(state);
+  assert.equal(unit.effective, 1);
 });
 
 console.log("主将技能测试全部通过");

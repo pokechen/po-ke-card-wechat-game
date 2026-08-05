@@ -700,7 +700,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0145",
-      "name": "华佗",
+      "name": "张仲景",
       "factionDisplayName": "开国群雄",
       "category": "unit",
       "rowDisplayName": "文脉",
@@ -732,7 +732,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0226",
-      "name": "李时珍",
+      "name": "司马光",
       "factionDisplayName": "开国群雄",
       "category": "unit",
       "rowDisplayName": "文脉",
@@ -1078,7 +1078,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0024",
-      "name": "张良",
+      "name": "华佗",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
       "rowDisplayName": "疆场",
@@ -1101,7 +1101,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0059",
-      "name": "陆逊",
+      "name": "张良",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
       "rowDisplayName": "文脉",
@@ -1313,7 +1313,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0050",
-      "name": "尉缭",
+      "name": "陆逊",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
       "rowDisplayName": "文脉",
@@ -1499,7 +1499,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0144",
-      "name": "司马光",
+      "name": "李时珍",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
       "rowDisplayName": "朝堂",
@@ -1511,7 +1511,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0269",
-      "name": "司马光",
+      "name": "李时珍",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
       "rowDisplayName": "朝堂",
@@ -1523,7 +1523,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0270",
-      "name": "司马光",
+      "name": "李时珍",
       "factionDisplayName": "百家争鸣",
       "category": "unit",
       "rowDisplayName": "朝堂",
@@ -2289,7 +2289,7 @@ const DATA = {
       "abilityDisplayNames": [
         "蛰伏"
       ],
-      "abilityText": "蛰伏：被雪耻触发后转化为 14 点振势人物。"
+      "abilityText": "蛰伏：被雪耻触发后转化为 14 点传世振势人物。"
     },
     {
       "id": "zhangyu-0143",
@@ -2724,7 +2724,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从牌组选择 1 张党争迷局并立即打出。"
+      "abilityText": "从牌组选择 1 张党争迷局打出。"
     },
     {
       "id": "zhangyu-0002",
@@ -2744,7 +2744,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "使己方文脉线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
+      "abilityText": "使己方文脉线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0004",
@@ -2754,7 +2754,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "若对方文脉线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
+      "abilityText": "对方文脉线总战力满 10 时摧毁全部最强非传世人物。"
     },
     {
       "id": "zhangyu-0332",
@@ -2764,7 +2764,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "若对方朝堂线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
+      "abilityText": "对方朝堂线总战力满 10 时摧毁全部最强非传世人物。"
     },
     {
       "id": "zhangyu-0006",
@@ -2784,7 +2784,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从牌组选择 1 张典籍散佚并立即打出。"
+      "abilityText": "从牌组选择 1 张典籍散佚打出。"
     },
     {
       "id": "zhangyu-0333",
@@ -2804,7 +2804,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从对手弃牌堆选择 1 张卡牌加入己方手牌。"
+      "abilityText": "从对手弃牌堆取 1 张牌加入手牌。"
     },
     {
       "id": "zhangyu-0008",
@@ -2844,7 +2844,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从牌组选择 1 张边患四起并立即打出。"
+      "abilityText": "从牌组选择 1 张边患四起打出。"
     },
     {
       "id": "zhangyu-0335",
@@ -2854,7 +2854,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "若对方疆场线总战力达到 10 或以上，摧毁该线当前战力最高的全部非传世人物。"
+      "abilityText": "对方疆场线总战力满 10 时摧毁全部最强非传世人物。"
     },
     {
       "id": "zhangyu-0336",
@@ -2864,7 +2864,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "使己方朝堂线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
+      "abilityText": "使己方朝堂线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0337",
@@ -2884,7 +2884,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从己方弃牌堆选择 1 张卡牌加入手牌。"
+      "abilityText": "从己方弃牌堆取 1 张牌加入手牌。"
     },
     {
       "id": "zhangyu-0339",
@@ -2894,7 +2894,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "使己方疆场线所有非传世人物战力翻倍；与该阵线的鼓舞效果不叠加。"
+      "abilityText": "使己方疆场线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0016",
@@ -2904,7 +2904,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "弃置 2 张手牌，然后从牌库选择 1 张卡牌加入手牌。"
+      "abilityText": "弃置 2 张手牌，从牌库选 1 张。"
     },
     {
       "id": "zhangyu-0340",
@@ -2914,7 +2914,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "从牌组选择任意 1 张时局牌并立即打出。"
+      "abilityText": "从牌组选择任意 1 张时局牌打出。"
     },
     {
       "id": "zhangyu-0017",
@@ -2941,14 +2941,16 @@ const DATA = {
     {
       "id": "token-越王勾践",
       "name": "越王勾践",
+      "displayName": "越王勾践",
       "factionDisplayName": "遗策复兴",
-      "category": "unit",
+      "category": "hero",
       "rowDisplayName": "疆场",
       "strength": 14,
       "abilityDisplayNames": [
+        "传世",
         "振势"
       ],
-      "abilityText": "蛰伏转化：战力 14；为同一阵线其他非传世人物各加 1 点战力。"
+      "abilityText": "蛰伏转化：战力 14 的传世人物；不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中；为同一阵线其他非传世人物各加 1 点战力。"
     },
     {
       "id": "token-越相文种",
