@@ -21,18 +21,29 @@ const cards = require("../shared/core/cards");
 const { allCards, cloneCard, shuffle, selectAutoDeckCards, deckBuildFixedValue, groupCards, categoryLabel } = cards;
 const { resolveAutoPending, runPreparedMatch, withSeed } = require("./simulate-ai-matches");
 
-// 请辞可带 3 张的4 个阵营（草莽星火构成本就不同，单列）
+// 请辞可带 3 张的4个阵营（草莽星火构成本就不同，单列）；也支持直接用阵营名作为范围
 const FACTION_SCOPES = {
   recall3: ["开国群雄", "纵横权谋", "百家争鸣", "遗策复兴"],
   situation: ["草莽星火"],
   all: cards.FACTION_KEYS.slice()
 };
+cards.FACTION_KEYS.forEach(faction => { FACTION_SCOPES[faction] = [faction]; });
 
 function parseArgs(argv) {
-  const args = { matches: 100, seed: 20260805, maxSteps: 1200, concurrency: 4, scope: "recall3", child: null, json: false, mix: "", list: false, dropUnits: 0 };
+  const args = { matches: 100, seed: 20260805, maxSteps: 1200, concurrency: 4, scope: "recall3", child: null, json: false, mix: "", list: false, dropUnits: 0, deckProfile: null };
   argv.forEach(arg => {
     if (arg === "--json") args.json = true;
     else if (arg === "--list") args.list = true;
+    else if (arg.startsWith("--profile=")) {
+      // --profile=strategyTarget:5,allowSituation:false
+      const profile = {};
+      arg.slice(10).split(",").forEach(pair => {
+        const [key, value] = pair.split(":");
+        if (!key) return;
+        profile[key.trim()] = value === "false" ? false : value === "true" ? true : Number(value);
+      });
+      args.deckProfile = profile;
+    }
     else if (arg.startsWith("--dropUnits=")) args.dropUnits = Math.max(0, Number(arg.slice(12)) || 0);
     else if (arg.startsWith("--matches=")) args.matches = Math.max(1, Number(arg.slice(10)) || args.matches);
     else if (arg.startsWith("--seed=")) args.seed = Number(arg.slice(7)) || args.seed;
@@ -76,8 +87,8 @@ function resolveMixCards(faction, mix) {
 }
 
 // 线上牌组拆成「单位部分」与「特殊卡部分」；单位部分两方共用，保证唯一变量是特殊卡
-function baseDeckParts(faction) {
-  const picked = selectAutoDeckCards({ faction, difficulty: "hard" });
+function baseDeckParts(faction, deckProfile) {
+  const picked = selectAutoDeckCards({ faction, difficulty: "hard", deckProfile: deckProfile || undefined });
   const isSpecial = card => card.category === "stratagem" || card.category === "situation";
   return { units: picked.filter(card => !isSpecial(card)), specials: picked.filter(isSpecial) };
 }
@@ -125,12 +136,16 @@ function dropWeakestUnits(units, count, pool) {
   return units.filter(card => !dropIds[card.id]);
 }
 
-function createInitialState(scope, mix, candidateIndex, dropUnits) {
+function createInitialState(scope, mix, candidateIndex, dropUnits, deckProfile) {
   const pool = FACTION_SCOPES[scope];
   const faction = pool[Math.floor(Math.random() * pool.length)];
   const parts = baseDeckParts(faction);
-  const candidateSpecials = mix.length ? resolveMixCards(faction, mix) : parts.specials;
-  const candidateUnits = dropUnits ? dropWeakestUnits(parts.units, dropUnits, factionPool(faction)) : parts.units;
+  // --profile 模式：候选方整副牌组走「注入组牌参数后的真实 selectAutoDeckCards」，
+  // 而不是手工指定构成，用于验证最终落地路径（单位挑选不受特殊卡参数影响，两边单位部分一致）
+  const candidateParts = deckProfile ? baseDeckParts(faction, deckProfile) : null;
+  const candidateSpecials = candidateParts ? candidateParts.specials : (mix.length ? resolveMixCards(faction, mix) : parts.specials);
+  const baseUnits = candidateParts ? candidateParts.units : (dropUnits ? dropWeakestUnits(parts.units, dropUnits, factionPool(faction)) : parts.units);
+  const candidateUnits = baseUnits;
   const state = battle.createMatch({ mode: "online", humanFaction: faction, aiFaction: faction, difficulty: "hard" });
   state.mode = "ai";
   state.autoControlAll = true;
@@ -152,7 +167,7 @@ function runSingleMatch(index, options) {
   const pairSeed = options.seed + Math.floor(index / 2) * 9973;
   const candidateIndex = index % 2 === 0 ? 0 : 1;
   const mix = parseMix(options.mix);
-  const { state, faction } = withSeed(pairSeed, () => createInitialState(options.scope, mix, candidateIndex, options.dropUnits));
+  const { state, faction } = withSeed(pairSeed, () => createInitialState(options.scope, mix, candidateIndex, options.dropUnits, options.deckProfile));
   state.players.forEach((_, pi) => withSeed(pairSeed + 500003 + pi * 104729, () => {
     battle.aiMulliganFor(state, pi);
     if (!state.mulligan.done[pi]) battle.finishMulligan(state, pi);
@@ -199,10 +214,10 @@ function printList() {
 
 function runParent(options) {
   const scriptPath = path.join(__dirname, "bench-special-mix.js");
-  const childConfig = Buffer.from(JSON.stringify({ seed: options.seed, maxSteps: options.maxSteps, scope: options.scope, mix: options.mix, dropUnits: options.dropUnits })).toString("base64");
+  const childConfig = Buffer.from(JSON.stringify({ seed: options.seed, maxSteps: options.maxSteps, scope: options.scope, mix: options.mix, dropUnits: options.dropUnits, deckProfile: options.deckProfile })).toString("base64");
   const summary = {
     matches: options.matches, seed: options.seed, scope: options.scope,
-    variant: (options.mix || "线上构成（自比对照）") + (options.dropUnits ? ` -${options.dropUnits}单位` : ""),
+    variant: (options.deckProfile ? `组牌参数 ${JSON.stringify(options.deckProfile)}` : options.mix || "线上构成（自比对照）") + (options.dropUnits ? ` -${options.dropUnits}单位` : ""),
     candidateWins: 0, baselineWins: 0, draws: 0, byFaction: {}
   };
   const active = new Set();

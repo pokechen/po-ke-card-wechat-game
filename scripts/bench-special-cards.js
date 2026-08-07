@@ -19,13 +19,40 @@ const battle = require("../shared/core/battle");
 const { FACTION_KEYS, buildDeck } = require("../shared/core/cards");
 const { resolveAutoPending, runPreparedMatch, withSeed } = require("./simulate-ai-matches");
 
-// 只有草莽星火带釜底抽薪 / 边患四起；战鼓齐鸣 5 个阵营全带
+// 只有草莽星火带釜底抽薪 / 边患四起；战鼓齐鸣 5 个阵营全带。也支持直接用阵营名限定范围。
 const FACTION_SCOPES = { situation: ["草莽星火"] };
+FACTION_KEYS.forEach(faction => { FACTION_SCOPES[faction] = [faction]; });
+
+// 解析 key:value[,key:value] 形式的数值参数。非法值必须直接报错：
+// 若把 "--strategy=a:1 --seed=2" 当成单个参数传入（zsh 不对未加引号的变量分词就会这样），
+// 静默 Number() 会得到 NaN 并被typeof === "number" 判定为合法权重，导致整批对比数据无效。
+function parseNumberMap(text, flag) {
+  const map = {};
+  String(text).split(",").map(item => item.trim()).filter(Boolean).forEach(pair => {
+    const at = pair.indexOf(":");
+    const key = at >= 0 ? pair.slice(0, at).trim() : pair;
+    const value = at >= 0 ? Number(pair.slice(at + 1).trim()) : NaN;
+    if (!key || !Number.isFinite(value)) {
+      throw new Error(`${flag} 参数非法：「${pair}」，正确格式为 key:number[,key:number]（整体不要含空格）`);
+    }
+    map[key] = value;
+  });
+  return Object.keys(map).length ? map : null;
+}
 
 function parseArgs(argv) {
-    const args = { matches: 100, seed: 20260731, maxSteps: 1200, concurrency: 4, scope: "", child: null, json: false, tempo: null };
+    const args = { matches: 100, seed: 20260731, maxSteps: 1200, concurrency: 4, scope: "", child: null, json: false, tempo: null, strategy: null, tuning: null };
   argv.forEach(arg => {
     if (arg === "--json") args.json = true;
+    else if (arg.startsWith("--tuning=")) {
+      // 停牌参数注入，如 --tuning=minCardsToCatch:2，可用键见 battle.js 的 resolvePassTuning
+      args.tuning = parseNumberMap(arg.slice(9), "--tuning");
+    }
+    else if (arg.startsWith("--strategy=")) {
+      // 通用策略参数注入，如 --strategy=handDeltaWeight:6 或 --strategy=scoreGainWeight:1.5,tempoHoldPenalty:4
+      // 可用键见 battle.js 的 resolveScoreStrategy
+      args.strategy = parseNumberMap(arg.slice(11), "--strategy");
+    }
     else if (arg.startsWith("--matches=")) args.matches = Math.max(1, Number(arg.slice(10)) || args.matches);
     else if (arg.startsWith("--seed=")) args.seed = Number(arg.slice(7)) || args.seed;
     else if (arg.startsWith("--maxSteps=")) args.maxSteps = Math.max(100, Number(arg.slice(11)) || args.maxSteps);
@@ -106,9 +133,11 @@ function runSingleMatch(index, options) {
   }));
   while (state.pending && resolveAutoPending(state)) {}
   const candidateIndex = candidateAsPlayer0 ? 0 : 1;
-  const strategy = {};
+  const strategy = { ...(options.strategy || {}) };
   if (options.tempo != null) strategy.tempoHoldPenalty = options.tempo;
-  const candidateCfg = Object.keys(strategy).length ? { strategy } : {};
+  const candidateCfg = {};
+  if (Object.keys(strategy).length) candidateCfg.strategy = strategy;
+  if (options.tuning) candidateCfg.tuning = options.tuning;
   const playerConfigs = candidateAsPlayer0 ? [candidateCfg, {}] : [{}, candidateCfg];
   const result = runPreparedMatch(pairSeed + 1000003, options.maxSteps, state, playerConfigs);
   return {
@@ -137,8 +166,8 @@ function binomialZ(wins, losses) {
 
 function runParent(options) {
   const scriptPath = path.join(__dirname, "bench-special-cards.js");
-  const childConfig = Buffer.from(JSON.stringify({ seed: options.seed, maxSteps: options.maxSteps, scope: options.scope, tempo: options.tempo })).toString("base64");
-  const summary = { matches: options.matches, seed: options.seed, scope: options.scope || "全阵营随机", variant: options.tempo != null ? `tempoHoldPenalty=${options.tempo}` : "无改动", candidateWins: 0, baselineWins: 0, draws: 0 };
+  const childConfig = Buffer.from(JSON.stringify({ seed: options.seed, maxSteps: options.maxSteps, scope: options.scope, tempo: options.tempo, strategy: options.strategy, tuning: options.tuning })).toString("base64");
+  const summary = { matches: options.matches, seed: options.seed, scope: options.scope || "全阵营随机", variant: options.tempo != null ? `tempoHoldPenalty=${options.tempo}` : (options.strategy || options.tuning ? JSON.stringify({ ...(options.strategy || {}), ...(options.tuning || {}) }) : "无改动"), candidateWins: 0, baselineWins: 0, draws: 0 };
   const active = new Set();
   let next = 0, finished = 0, failed = false;
   return new Promise((resolve, reject) => {

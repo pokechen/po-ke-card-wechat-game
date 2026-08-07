@@ -2,8 +2,10 @@
 "use strict";
 
 const assert = require("assert");
+const { EventEmitter } = require("events");
 const Module = require("module");
 const path = require("path");
+const https = require("https");
 
 const ROOT = path.resolve(__dirname, "..");
 const PVP_FUNCTION = path.join(ROOT, "cloudfunctions/pvpRoom/index.js");
@@ -53,18 +55,54 @@ function docRef(name, id) {
   };
 }
 
-function collectionRef(name) {
-  return {
+function collectionRef(name, filters = []) {
+  const query = {
+    where(condition = {}) {
+      return collectionRef(name, filters.concat(condition));
+    },
+    orderBy() {
+      return query;
+    },
+    limit() {
+      return query;
+    },
+    skip() {
+      return query;
+    },
+    async count() {
+      const total = [...storeFor(name).values()].filter(item => filters.every(condition => Object.entries(condition).every(([key, expected]) => {
+        const actual = item?.[key];
+        if (expected?.__dbOperation === "in") return expected.value.includes(actual);
+        if (expected?.__dbOperation === "nin") return !expected.value.includes(actual);
+        if (expected?.__dbOperation === "lt") return Number(actual) < Number(expected.value);
+        return actual === expected;
+      }))).length;
+      return { total };
+    },
+    async get() {
+      const data = [...storeFor(name).values()].filter(item => filters.every(condition => Object.entries(condition).every(([key, expected]) => {
+        const actual = item?.[key];
+        if (expected?.__dbOperation === "in") return expected.value.includes(actual);
+        if (expected?.__dbOperation === "nin") return !expected.value.includes(actual);
+        if (expected?.__dbOperation === "lt") return Number(actual) < Number(expected.value);
+        return actual === expected;
+      })));
+      return { data: clone(data) };
+    },
     doc(id) {
       return docRef(name, String(id));
     }
   };
+  return query;
 }
 
 const database = {
   command: {
     set(value) { return operation("set", value); },
-    remove() { return operation("remove"); }
+    remove() { return operation("remove"); },
+    in(value) { return operation("in", value); },
+    nin(value) { return operation("nin", value); },
+    lt(value) { return operation("lt", value); }
   },
   async createCollection(name) {
     storeFor(name);
@@ -94,6 +132,32 @@ const cloudMock = {
     deletedFiles.push(...(fileList || []));
     return { fileList: (fileList || []).map(fileID => ({ fileID, status: 0 })) };
   }
+};
+
+process.env.ADMIN_OPENID = "smoke-admin";
+process.env.WECHAT_APP_SECRET = "smoke-secret";
+
+function mockWechatResponse(callback, body) {
+  const response = new EventEmitter();
+  process.nextTick(() => {
+    callback(response);
+    response.emit("data", Buffer.from(JSON.stringify(body)));
+    response.emit("end");
+  });
+}
+
+https.get = (url, options, callback) => {
+  const request = new EventEmitter();
+  request.destroy = () => {};
+  mockWechatResponse(callback, { access_token: "smoke-access-token", expires_in: 7200 });
+  return request;
+};
+https.request = (url, options, callback) => {
+  const request = new EventEmitter();
+  request.write = () => {};
+  request.end = () => mockWechatResponse(callback, { errcode: 0, result: { suggest: "pass" } });
+  request.destroy = () => {};
+  return request;
 };
 
 const originalLoad = Module._load;
@@ -224,7 +288,7 @@ async function assertAvatarStorageRules() {
     ok: true,
     fileID: mine,
     avatarUrl: mine,
-    user: { avatarUrl: mine },
+    user: { avatarUrl: mine, avatarFileID: mine },
     players: [{ avatarUrl: mine }, { avatarUrl: "" }]
   });
   assert(resolved.avatarUrl.startsWith("https://"), "avatarUrl 必须换成可访问链接");
@@ -232,6 +296,49 @@ async function assertAvatarStorageRules() {
   assert(resolved.players[0].avatarUrl.startsWith("https://"), "数组内的 avatarUrl 也必须换成可访问链接");
   assert.equal(resolved.players[1].avatarUrl, "", "空头像保持为空");
   assert.equal(resolved.fileID, mine, "fileID 字段必须原样返回，供客户端提交资料时回传");
+  assert.equal(resolved.user.avatarFileID, mine, "本人头像的 avatarFileID 必须原样返回，不能被临时链接替换");
+}
+
+async function assertAvatarProfileLifecycle() {
+  const openid = "avatar-profile-owner";
+  const fileID = `cloud://mock.706f-mock/avatars/${openid}/1-abc.jpg`;
+  const updated = await rpc(openid, "updateProfile", { profile: { avatarUrl: fileID } });
+  assert(updated.customProfile.avatarUrl.startsWith("https://"), "保存后头像必须返回可展示的临时链接");
+  assert.equal(updated.customProfile.avatarFileID, fileID, "保存后必须返回稳定头像 fileID");
+
+  const refreshed = await rpc(openid, "currentUser");
+  assert(refreshed.user.avatarUrl.startsWith("https://"), "刷新资料必须返回新的可展示头像链接");
+  assert.equal(refreshed.user.avatarFileID, fileID, "刷新资料不得丢失稳定头像 fileID");
+
+  await rpc(openid, "saveWechatProfile", { userInfo: { nickName: "微信昵称" } });
+  const afterWechatProfile = await rpc(openid, "currentUser");
+  assert.equal(afterWechatProfile.user.avatarFileID, fileID, "保存微信资料不得覆盖自定义头像");
+
+  const loginResult = await rpc(openid, "login");
+  assert.equal(loginResult.user.avatarFileID, fileID, "静默登录不得覆盖自定义头像");
+
+  const publicUserId = "rank-avatar-owner";
+  const staleFileID = `cloud://mock.706f-mock/avatars/${openid}/stale.jpg`;
+  storeFor("rank_profiles").set(openid, {
+    openid,
+    publicUserId,
+    totalPower: 4,
+    tierPower: 1,
+    prestige: 0,
+    peakPower: 4,
+    totalMatches: 2,
+    wins: 1,
+    losses: 1,
+    draws: 0,
+    publicProfile: { nickName: "头像玩家", avatarUrl: staleFileID, avatarUpdatedAt: Date.now() - 1 },
+    updatedAt: Date.now()
+  });
+  const avatars = await rpc(openid, "refreshRankLeaderboardAvatars", { userIds: [publicUserId, "missing-user"] });
+  assert.equal(avatars.avatars.length, 1, "只返回当前可见且存在的排行榜玩家头像");
+  assert.equal(avatars.avatars[0].userId, publicUserId, "批量头像刷新必须按公开玩家 ID 对应");
+  assert(avatars.avatars[0].avatarUrl.startsWith("https://"), "批量头像刷新必须返回可展示临时链接");
+  assert(avatars.avatars[0].avatarUrl.includes(encodeURIComponent(fileID)), "批量头像刷新必须使用 users 表中的当前头像，而不是旧排位资料");
+  assert(avatars.avatarExpiresAt > Date.now(), "批量头像刷新必须返回临时链接过期时间");
 }
 
 // 直接校验脱敏函数本身，避免随机牌局跑不到 leaderDeckChoice 这类 pending 就漏过回归。
@@ -341,6 +448,45 @@ async function testBothReadyOrders() {
   await startAndAct(guestFirst);
 }
 
+async function testBattleFeedbackFlow() {
+  const player = "feedback-player";
+  await rpc(player, "saveWechatProfile", { userInfo: { nickName: "反馈玩家" } });
+  await rpcFailure(player, "submitBattleFeedback", { content: "", battle: {} }, "MISSING_FEEDBACK_CONTENT");
+  const submitted = await rpc(player, "submitBattleFeedback", {
+    content: "首轮结算显示异常，请协助核查。",
+    battle: {
+      matchId: "feedback-smoke-match",
+      mode: "online",
+      resultText: "胜利",
+      players: [
+        { side: "我方", faction: "开国群雄", leader: "刘邦", leaderId: "leader-liu-bang" },
+        { side: "对方", faction: "草莽星火", leader: "陈胜", leaderId: "leader-chen-sheng" }
+      ],
+      history: [{ seq: 1, round: 1, side: "我方", type: "play", text: "玩家打出「刘邦」 → 汉祖：生效" }],
+      logs: ["第一局结束"]
+    }
+  });
+  const feedbackId = submitted.feedback?.feedbackId;
+  assert(feedbackId, "提交反馈后必须返回反馈 ID");
+  assert.equal(submitted.feedback.status, "pending", "新反馈应默认为待处理");
+  await rpcFailure(player, "getBattleFeedbackDetail", { feedbackId }, "FORBIDDEN");
+
+  const stats = await rpc("smoke-admin", "getAdminStats");
+  const feedbackSummary = stats.stats.feedback.items.find(item => item.feedbackId === feedbackId);
+  assert(feedbackSummary, "管理员统计必须包含反馈摘要");
+  assert.equal(feedbackSummary.user.nickName, "反馈玩家", "反馈摘要必须返回用户昵称");
+  const detail = await rpc("smoke-admin", "getBattleFeedbackDetail", { feedbackId });
+  assert.equal(detail.feedback.user.nickName, "反馈玩家", "管理员详情必须返回反馈用户昵称");
+  assert.equal(detail.feedback.battle.history.length, 1, "管理员详情必须读取完整战斗记录");
+  const updated = await rpc("smoke-admin", "updateBattleFeedback", {
+    feedbackId,
+    patch: { status: "processed", note: "已复现并登记", reply: "感谢反馈，我们会尽快处理。" }
+  });
+  assert.equal(updated.feedback.status, "processed", "管理员应能更新处理状态");
+  assert.equal(updated.feedback.note, "已复现并登记", "管理员备注应被保存");
+  assert.equal(updated.feedback.reply, "感谢反馈，我们会尽快处理。", "管理员回复应被保存但不触达用户");
+}
+
 async function testRuleChangeInvalidatesOldState() {
   const context = await createJoinedRoom("rule-change");
   await rpc(context.guest, "setReady", {
@@ -369,9 +515,11 @@ async function testRuleChangeInvalidatesOldState() {
 }
 
 (async () => {
+  await assertAvatarProfileLifecycle();
+  await testBattleFeedbackFlow();
   await testBothReadyOrders();
   await testRuleChangeInvalidatesOldState();
-  console.log("PVP flow smoke tests passed: create/join, both ready orders, rule version reset, setup, start, both actions");
+  console.log("PVP flow smoke tests passed: avatar lifecycle, feedback flow, create/join, both ready orders, rule version reset, setup, start, both actions");
 })().catch(error => {
   console.error(error.stack || error);
   process.exitCode = 1;

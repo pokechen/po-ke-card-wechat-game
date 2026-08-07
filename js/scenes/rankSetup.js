@@ -4,12 +4,16 @@ const { FACTION_LABELS, DIFFICULTY_LABELS, deckStatus, leadersFor, displayName }
 const rankCore = require("../core/rank");
 const { setupOptions, selectedValue, drawRow, drawSetupDropdown, selectedLeader, currentHumanFaction } = require("./matchSetup");
 
-function avatar(ctx, profile, x, y, size) {
+function avatar(ctx, profile, ui, x, y, size) {
   const fallback = () => {
     fillRoundRect(ctx, x, y, size, size, size / 2, "#315e59", "#e5c27e");
     text(ctx, "章", x + size / 2, y + size / 2 + 1, 14, "#fff4d8", "center", "middle");
   };
-  if (!drawRemoteImage(ctx, profile?.avatarUrl, x, y, size, size, { radius: size / 2, onFail: fallback })) fallback();
+  const onFail = () => {
+    ui.authAvatarNeedsRefresh = true;
+    fallback();
+  };
+  if (!drawRemoteImage(ctx, profile?.avatarUrl, x, y, size, size, { radius: size / 2, onFail })) fallback();
 }
 
 function drawProgress(ctx, x, y, w, value, max, color) {
@@ -146,7 +150,7 @@ function draw(ctx, view, actions, ui = {}, rank = {}) {
   } else if (rank.error && !profile) {
     wrapText(ctx, rank.error, x + 18, cardY + 18, w - 36, 14, 2, 13, "#9f3b24");
   } else if (profile) {
-    avatar(ctx, profile, x + 16, cardY + 14, 44);
+    avatar(ctx, ui.authUser || profile, ui, x + 16, cardY + 14, 44);
     text(ctx, short(profile.nickName || "匿名玩家", 10), x + 70, cardY + 26, 13, "#2f2417");
     text(ctx, `${profile.tierName} · ${profile.powerText}`, x + 70, cardY + 48, 17, "#8f3c1f");
     text(ctx, `总场 ${profile.totalMatches || 0} · 胜率 ${profile.winRate || 0}%`, x + 70, cardY + 70, 11, "#775c34");

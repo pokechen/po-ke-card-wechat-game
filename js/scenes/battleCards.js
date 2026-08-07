@@ -125,7 +125,7 @@ function drawScoreHelp(ctx, view, actions) {
   actions.push({ id: "battleCardsHelpPanel", x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d1ad6a");
   text(ctx, "总战力说明", panelX + 20, panelY + 28, 18, "#2f2417");
-  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、雪耻+8、蛰伏+6、通才+2、鼓舞+7、奇策+6、时局+6。\n总战力是按以上规则计算出的整体强度分，数字越高，代表这组卡牌的基础战力和能力加成整体越强，便于对比双方卡牌强度。";
+  const rule = "每张牌以基础战力计分，并按能力加分：传世+8、出使+11、济世+7、同盟+6、集贤+7、召唤+7、振势+4、复国+8、战俘+6、通才+2、鼓舞+7、奇策+6、时局+6。\n总战力是按以上规则计算出的整体强度分，数字越高，代表这组卡牌的基础战力和能力加成整体越强，便于对比双方卡牌强度。";
   wrapText(ctx, rule, panelX + 20, panelY + 64, panelW - 40, 21, 8, 13, "#5f4727");
   const close = { id: "closeBattleCardsHelp", x: panelX + 74, y: panelY + panelH - 48, w: panelW - 148, h: 34 };
   actions.push(close);

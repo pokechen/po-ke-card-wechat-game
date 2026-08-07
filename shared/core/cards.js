@@ -41,28 +41,28 @@ const ABILITY_LABELS = {
   "通才": "通才",
   "奇策": "奇策",
   "鼓舞": "鼓舞",
-  "召唤岳家军": "召唤岳家军",
-    "召唤无当飞军": "召唤无当飞军",
-    "召唤东吴水师": "召唤东吴水师",
-    "蛰伏": "蛰伏",
-    "雪耻": "雪耻"
+  "请辞": "请辞",
+  "召唤风火轮": "召唤",
+  "召唤哮天犬": "召唤",
+  "战俘": "战俘",
+  "复国": "复国"
 };
 
 const ABILITY_DESCRIPTIONS = {
-  "传世": "不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。",
-  "出使": "打到对方阵线，随后己方抽 2 张牌。",
-  "济世": "打出后可从己方弃牌堆复归 1 张非传世人物。",
-  "同盟": "同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。",
-  "振势": "为同一阵线的其他非传世人物各加 1 点战力。",
-  "集贤": "打出后从牌库中立即打出所有同名牌。",
-  "通才": "可部署到卡牌标注的任一阵线，系统会选择或让你选择收益最高的位置。",
-  "奇策": "摧毁目标范围内有效战力最高的非传世人物。",
-  "鼓舞": "使己方指定或所在阵线的非传世人物战力翻倍。",
-  "召唤岳家军": "打出后从己方手牌和牌库中把所有「岳家军」一并部署到「疆场」阵线。",
-  "召唤无当飞军": "诸葛亮每次离开战场时，召唤一张 11 点传世「无当飞军」顶替；若因小局清场离场，则在下一局开始入场。",
-  "召唤东吴水师": "周瑜每次离开战场时，召唤一张 8 点「东吴水师」顶替；若因小局清场离场，则在下一局开始入场。",
-  "蛰伏": "被雪耻触发后转化：疆场 4 点蛰伏变为 14 点传世振势，朝堂 2 点蛰伏变为 8 点同盟。",
-  "雪耻": "选择一条阵线，触发该线所有蛰伏人物转化。"
+  "传世": "战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。",
+  "出使": "打到对方阵线，己方抽 2 张牌。",
+  "济世": "从己方弃牌堆复归 1 张非传世人物。",
+  "同盟": "同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。",
+  "振势": "同一阵线的其他非传世人物各 +1 战力。",
+  "集贤": "打出后，从牌库打出其余同名牌。",
+  "通才": "可部署至卡牌标注的任一阵线。",
+  "奇策": "摧毁目标范围内当前战力最高的非传世人物。",
+  "鼓舞": "使己方指定阵线的所有非传世人物战力翻倍。",
+  "请辞": "选择己方场上 1 名非传世人物，将其收回手牌。",
+  "召唤风火轮": "每次离开战场时，在己方疆场召唤 1 张 11 战力、传世的「风火轮」。",
+  "召唤哮天犬": "每次离开战场时，在己方疆场召唤 1 张 8 战力「哮天犬」。",
+  "战俘": "被复国触发后转化为指定人物。",
+  "复国": "选择一条阵线，触发该线所有战俘人物转化。"
 };
 
 function splitDisplayList(value) {
@@ -141,8 +141,7 @@ function leaderSummary(card) {
   return abilityText && !isNoAbilityText(abilityText) ? abilityText : "主将技能";
 }
 
-// 被动主将（对应昆特牌原版被动领袖）：无需主动发动，开局即生效并持续整场对局。
-// 秦昭襄王（双方济世复归随机）、朱元璋（双方出使翻倍）、张居正（恶劣时局半损）。
+// 被动主将无需主动发动；孔子为开局一次性被动，其余为整场持续被动。
 function leaderAbilitySource(card) {
   return `${card?.name || ""} ${card?.abilityText || ""}`;
 }
@@ -159,8 +158,12 @@ function isHalfSituationLeaderCard(card) {
   return !!card && /half (of )?(their )?strength|lose half|半损|一半战力/i.test(leaderAbilitySource(card));
 }
 
+function isOpeningDrawLeaderCard(card) {
+  return card?.id === "zhangyu-0009";
+}
+
 function isPassiveLeaderCard(card) {
-  return isEnvoyDoubleLeaderCard(card) || isRandomRestoreLeaderCard(card) || isHalfSituationLeaderCard(card);
+  return isOpeningDrawLeaderCard(card) || isEnvoyDoubleLeaderCard(card) || isRandomRestoreLeaderCard(card) || isHalfSituationLeaderCard(card);
 }
 
 function allCards() {
@@ -212,26 +215,53 @@ function recruitMemberText(card) {
 
 function highestPowerRemovalDescription(card) {
   const rowText = (card?.row || []).map(row => ROW_LABELS[row]).filter(Boolean).join("、") || "对应阵线";
-  return `若对方${rowText}总战力达到 10 或以上，摧毁其${rowText}当前战力最高的非传世人物。`;
+  return `若对方${rowText}总战力 ≥10，摧毁其${rowText}当前战力最高的非传世人物。`;
 }
 
-function abilityDescriptions(card) {
+function isYueFeiRecruit(card) {
+  return !!card && (card.id === "zhangyu-0114" || card.name === "岳飞") && hasAbility(card, "集贤");
+}
+
+function abilityDescriptions(card, options = {}) {
+  const customMultilineText = String(card?.abilityText || "").trim();
+  if (customMultilineText.includes("\n")) return customMultilineText.split("\n").filter(Boolean);
+  if (isYueFeiRecruit(card)) {
+    const remaining = options?.showRecruitDeckCount && Array.isArray(options?.deck)
+      ? options.deck.filter(item => item.name === "岳家军").length
+      : null;
+    const countText = remaining == null ? "" : `牌库共 ${remaining} 张「岳家军」。`;
+    return [
+      `传世：${ABILITY_DESCRIPTIONS.传世}`,
+      `集贤：${countText}打出后，从手牌和牌库将所有岳家军部署至己方疆场。`
+    ];
+  }
   return (card?.abilities || []).map(ability => {
     const label = ABILITY_LABELS[ability] || ability;
     const members = ability === "集贤" ? recruitMemberText(card) : "";
-    const recruitTargetName = ability === "集贤" ? (card?.recruitTargetDisplayName || card?.recruitTarget || "") : "";
+    const recruitTargetName = ability === "集贤"
+      ? (card?.recruitTargetDisplayName || card?.recruitTarget || (!card?.recruitGroupDisplayName ? card.name : ""))
+      : "";
+    const recruitCountName = recruitTargetName || (ability === "集贤" ? card?.recruitGroupDisplayName || "" : "");
+    const remainingCount = ability === "集贤" && recruitCountName && options?.showRecruitDeckCount && Array.isArray(options?.deck)
+      ? recruitRelated(card, options.deck).length
+      : null;
     const description = ability === "奇策"
       ? (card?.category === "stratagem" && card?.abilityText
         ? String(card.abilityText).replace(/^[^：]*：/, "")
         : highestPowerRemovalDescription(card))
-      : (ability === "雪耻" || ability === "蛰伏") && card?.category !== "stratagem" && card?.abilityText
+      : ability === "复国" && card?.name === "卧薪尝胆"
+        ? "选择一条阵线，触发己方该线所有战俘人物转化。"
+      : (ability === "复国" || ability === "战俘") && card?.category !== "stratagem" && card?.abilityText
         ? String(card.abilityText).replace(/^[^：]*：/, "")
-        : recruitTargetName
-          ? `打出后从牌库中立即打出所有「${recruitTargetName}」。`
-          : members
-            ? `打出后从牌库中立即打出${members}中的同组关联牌。`
+        : ability === "集贤" && card?.name === "李密"
+          ? "打出后从牌库中立即打出所有程咬金到疆场。"
+          : recruitTargetName
+            ? `打出后，从牌库打出所有「${recruitTargetName}」。`
+            : members
+            ? `打出后，从牌库打出${members}中的其余同组人物。`
             : ABILITY_DESCRIPTIONS[ability];
-    return description ? `${label}：${description}` : label;
+    const countText = remainingCount == null ? "" : `牌库共 ${remainingCount} 张「${recruitCountName}」。`;
+    return `${label}：${countText}${description || ""}`;
   }).filter(Boolean);
 }
 
@@ -347,9 +377,9 @@ function recruitBonus(card, context) {
 }
 
 function summonBonus(card, context) {
-  if (hasAbility(card, "召唤岳家军")) return 18;
-  if (hasAbility(card, "召唤无当飞军")) return 19;
-  if (hasAbility(card, "召唤东吴水师")) return 12;
+  if (isYueFeiRecruit(card)) return 18;
+  if (hasAbility(card, "召唤风火轮")) return 19;
+  if (hasAbility(card, "召唤哮天犬")) return 12;
   return (card.abilities || []).some(ability => /^召唤/.test(ability)) ? 8 : 0;
 }
 
@@ -357,16 +387,16 @@ function isSituationClearCard(card) {
   return card.category === "situation" && /拨云见日|晴空/i.test(card.name || "");
 }
 
-// 判断一组卡牌（牌组/已选卡）中是否存在「蛰伏」单位。
-// 卧薪尝胆（Awakening）只会转化场上的蛰伏人物，牌组中若没有蛰伏单位则毫无价值，
-// 因此它的记分与是否入组都依赖牌组是否含有蛰伏。
+// 判断一组卡牌（牌组/已选卡）中是否存在「战俘」单位。
+// 卧薪尝胆（Awakening）只会转化场上的战俘人物，牌组中若没有战俘单位则毫无价值，
+// 因此它的记分与是否入组都依赖牌组是否含有战俘。
 function deckHasDormantUnit(list) {
-  return Array.isArray(list) && list.some(card => hasAbility(card, "蛰伏"));
+  return Array.isArray(list) && list.some(card => hasAbility(card, "战俘"));
 }
 
 function isAwakeningCard(card) {
   const name = card.name;
-  return hasAbility(card, "雪耻") || name === "卧薪尝胆" || name === "破釜沉舟";
+  return hasAbility(card, "复国") || name === "卧薪尝胆" || name === "破釜沉舟";
 }
 
 function isAwakeningStratagemCard(card) {
@@ -381,7 +411,7 @@ const STRATEGY_CARD_BONUS = {
   highestPowerRemovalUnitHuangGai: 9, // 黄盖·奇策（人物牌，保留原值）
   highestPowerRemovalStratagem: 15,    // 釜底抽薪·奇策：摧毁最高战力非传世人物
   highestPowerRemovalUnitOther: 5,   // 其他带奇策的人物牌
-  awakening: 11,        // 卧薪尝胆·雪耻：触发蛰伏转化
+  awakening: 11,        // 卧薪尝胆·复国：触发战俘转化
   recall: 13,            // 请辞归隐·请辞：回收单位再打出（基础分，revival 联动另计）
   situationClear: 9,      // 拨云见日：清除时局
   situationOther: 12      // 其余时局：压制对方一条阵线
@@ -410,8 +440,8 @@ function cardValueBase(card, context, bonus) {
   if (hasAbility(card, "集贤")) value += recruitBonus(card, context);
   value += summonBonus(card, context);
   if (hasAbility(card, "振势")) value += 1;
-  if (hasAbility(card, "雪耻")) value += b.awakening;
-  if (hasAbility(card, "蛰伏")) value += 3;
+  if (hasAbility(card, "复国")) value += b.awakening;
+  if (hasAbility(card, "战俘")) value += 3;
   if (hasAbility(card, "通才")) value += 2;
   const name = cleanCardName(card.name);
   if (hasAbility(card, "鼓舞") || name === "战鼓齐鸣") value += b.rowBoost;
@@ -446,7 +476,7 @@ function deckBuildCardValue(card, context = {}) {
 
 // 牌组「总战力」展示使用重平衡后的加分，使特殊/时局牌的分数更贴近其实际效果价值
 // （特殊牌基础战力为 0、只有能力加分，原加分偏低，展示上无法体现其真实价值）。
-// 卧薪尝胆依赖牌组中的蛰伏单位，牌组无蛰伏时其展示分归零。
+// 卧薪尝胆依赖牌组中的战俘单位，牌组无战俘时其展示分归零。
 const displayCardValueBase = makeCardValue(STRATEGY_CARD_BONUS);
 function displayCardValue(card, context = {}) {
   const value = displayCardValueBase(card, context);
@@ -458,7 +488,7 @@ function displayCardValue(card, context = {}) {
 
 // ---- 组牌估值：固定分+ 组内摊薄 ----
 // 自动组牌的入组单位不是单卡，而是 addAutoDeckGroup + expandAutoDeckGroup 一次带入的整组
-// （同名同盟、同名集贤、集贤组/集贤目标、蛰伏↔雪耻、召唤目标都会被强制一起入组），
+// （同名同盟、同名集贤、集贤组/集贤目标、战俘↔复国、召唤目标都会被强制一起入组），
 // 因此「组合是否齐全」在组牌阶段本来就必然成立，不能按「当前已选牌里有没有伙伴」动态打分——
 // 那会让分数取决于挑选顺序，使强组合因为伙伴还没被选中而永远排在后面。
 // 估值只读卡牌自身字段与阵营池的静态组合信息，不读已选牌。
@@ -498,7 +528,7 @@ function poolHasReplayRevivalUnit(pool) {
 
 function deckBuildFixedValue(card, pool, valueFn) {
   const list = Array.isArray(pool) && pool.length ? pool : allCards();
-  // 纯转化器只转化场上的蛰伏人物，牌池里没有蛰伏单位时是彻底的死牌
+  // 纯转化器只转化场上的战俘人物，牌池里没有战俘单位时是彻底的死牌
   if (isPureAwakeningTool(card) && !deckHasDormantUnit(list)) return 0;
   let value = (valueFn || deckBuildCardValue)(card, { pool: list });
   value += deckAllianceAdjust(card, list);
@@ -583,6 +613,36 @@ function leadersFor(faction) {
   return allCards().filter(card => card.category === "leader" && card.faction === key);
 }
 
+// hard 难度下 AI「随机主将」的候选白名单：22 个主将两两全循环赛（3 组独立种子、每对 30 场、
+// 共 6930 场、双方 hard 自动组牌、交替座位）后，剔除各阵营内明显偏弱的主将。
+// 阵营内胜率（*为被剔除项）：
+//   开国群雄 秦穆公 74.0 > 刘彻 72.8 > 赵匡胤 72.3 > 刘邦* 68.9 > 李世民* 68.0
+//   纵横权谋 管仲 71.7 > 曹操* 62.6 > 司马懿 59.0 > 张仪* 58.9 > 秦昭襄王* 54.1
+//   百家争鸣 孔子 37.1 > 董仲舒 31.3 > 吴起 31.2 > 老子* 29.1 > 惠施* 16.6
+//   草莽星火 刘裕 56.5 > 石勒 50.2 > 黄巢* 36.0 > 朱温* 34.4 > 朱元璋* 33.4
+//   遗策复兴 司马迁 43.7 > 张居正 36.6（只有 2 个，全部保留）
+// 被剔除的刘邦/曹操/老子/朱温都属于「从牌组打出指定时局牌」，而 hard 组牌已禁用时局
+// （allowSituation:false），它们的技能在 hard 下永远不可发动（canUseLeaderAction 要求牌库有时局牌）。
+// 黄巢（弃2 张手牌换牌库 1 张）另经「vs 全体主将」口径确认为草莽短板：与其他 4 族 10 个白名单主将
+// 各 40 场共 1200 场，刘裕 55.92% / 石勒 49.62% / 黄巢仅 35.10%，故一并剔除。
+// easy / normal 不受影响，仍在全部主将里随机，保持难度分层。
+const HARD_LEADER_WHITELIST = {
+  "开国群雄": ["zhangyu-0003", "zhangyu-0332", "zhangyu-0004"],
+  "纵横权谋": ["zhangyu-0005", "zhangyu-0008"],
+  "百家争鸣": ["zhangyu-0009", "zhangyu-0336", "zhangyu-0335"],
+  "草莽星火": ["zhangyu-0338", "zhangyu-0339"],
+  "遗策复兴": ["zhangyu-0017", "zhangyu-0018"]
+};
+
+// hard 随机主将的候选池；白名单缺失或全部失效时回退到全部主将，保证任何阵营都有可用主将
+function hardLeaderPool(faction) {
+  const key = validFactionName(faction);
+  const all = leadersFor(key);
+  const ids = HARD_LEADER_WHITELIST[key] || [];
+  const pool = all.filter(card => ids.includes(card.id));
+  return pool.length ? pool : all;
+}
+
 function normalizeDeckIds(ids, faction) {
   const seen = {};
   const normalized = [];
@@ -630,17 +690,17 @@ function groupCards(cards) {
 
 function groupHasSynergy(group) {
   const card = group.card;
-  return group.cards.length > 1 && (hasAbility(card, "同盟") || hasAbility(card, "集贤") || hasAbility(card, "蛰伏") || hasAbility(card, "召唤岳家军"));
+  return group.cards.length > 1 && (hasAbility(card, "同盟") || hasAbility(card, "集贤") || hasAbility(card, "战俘"));
 }
 
 function summonDeckTarget(card) {
-  if (hasAbility(card, "召唤岳家军")) return "岳家军";
+  if (isYueFeiRecruit(card)) return "岳家军";
   return "";
 }
 
-// 「纯转化器」：本身没有战力、只为触发蛰伏转化而存在的雪耻牌（卧薪尝胆）。
-// 与之相对，范蠡是8 战力传世人物，雪耻只是附带能力，不带蛰伏也能正常上场，
-// 因此不应被绑进蛰伏组（经 120 场/变体验证：范蠡单带+1.68pp，绑上文种 3 张则 -9.24pp）。
+// 「纯转化器」：本身没有战力、只为触发战俘转化而存在的复国牌（卧薪尝胆）。
+// 与之相对，范蠡是8 战力传世人物，复国只是附带能力，不带战俘也能正常上场，
+// 因此不应被绑进战俘组（经 120 场/变体验证：范蠡单带+1.68pp，绑上文种 3 张则 -9.24pp）。
 function isPureAwakeningTool(card) {
   return isAwakeningCard(card) && !isHeroCard(card) && !(card.strength > 0);
 }
@@ -650,17 +710,17 @@ function autoDeckCardsAreRelated(left, right) {
   const leftName = left.name || left.name;
   const rightName = right.name || right.name;
   const sameName = leftName === rightName;
-  if (sameName && [left, right].some(card => hasAbility(card, "同盟") || hasAbility(card, "集贤") || hasAbility(card, "蛰伏") || hasSummon(card))) {
+  if (sameName && [left, right].some(card => hasAbility(card, "同盟") || hasAbility(card, "集贤") || hasAbility(card, "战俘") || hasSummon(card))) {
     return true;
   }
   if (left.recruitGroupDisplayName && left.recruitGroupDisplayName === right.recruitGroupDisplayName) return true;
   if (left.recruitTarget === rightName) return true;
   if (right.recruitTarget === leftName && !right.recruitTargetOneWay) return true;
-  // 蛰伏单位需要转化器才有价值，所以「蛰伏 -> 纯转化器」单向拉入；反向不成立，
-  // 避免转化器把不同阵线的蛰伏套件串成一个大组（文种锁朝堂、勾践锁疆场）。
-  if (hasAbility(left, "蛰伏") && isPureAwakeningTool(right)) return true;
-  // 蛰伏单位之间只有同阵线才算一组（同阵线才能被同一次转化覆盖）
-  if (hasAbility(left, "蛰伏") && hasAbility(right, "蛰伏")) {
+  // 战俘单位需要转化器才有价值，所以「战俘 -> 纯转化器」单向拉入；反向不成立，
+  // 避免转化器把不同阵线的战俘套件串成一个大组（文种锁朝堂、勾践锁疆场）。
+  if (hasAbility(left, "战俘") && isPureAwakeningTool(right)) return true;
+  // 战俘单位之间只有同阵线才算一组（同阵线才能被同一次转化覆盖）
+  if (hasAbility(left, "战俘") && hasAbility(right, "战俘")) {
     return (left.row || []).some(row => (right.row || []).includes(row));
   }
   if (summonDeckTarget(left) === rightName || summonDeckTarget(right) === leftName) return true;
@@ -760,7 +820,28 @@ function selectAutoDeckCards(options = {}) {
     easy: { unitTarget: 28, strategyTarget: 8, topRatio: 0.95, randomPick: true, maxHeroes: 2, maxEnvoyCards: 1 },
     normal: { unitTarget: 25, strategyTarget: 6, topRatio: 0.55, randomPick: true, maxHeroes: 5, maxEnvoyCards: 2 },
     // hard 已切换为「越困难牌组越小越强」策略：对比旧 28/8 的 100 场胜率 60%（60胜39负1平），22/4 为验证通过方案
-    hard: { unitTarget: 22, strategyTarget: 4, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxEnvoyCards: 99 }
+    // allowSituation:false —— 时局牌禁止进 hard 自动组牌，只有草莽星火受影响（唯一会选到时局的阵营，
+    // 原构成 请辞x1+战鼓齐鸣+釜底抽薪+边患四起 → 现请辞x1+战鼓齐鸣+釜底抽薪）。
+    // 7 组独立种子共 2100 场草莽镜像验证：剔除平局胜率 53.32%（1096胜/959负，z=3.02，7/7 组同向为正）。
+    // 机制：时局双向生效，AI 打出后自己的高战力单位同样被压成 1 点，等于自损。
+    // 复现：node scripts/bench-special-mix.js --scope=草莽星火 --profile=allowSituation:false --matches=300
+    //
+    // 草莽星火最终构成「请辞归隐 + 战鼓齐鸣 + 釜底抽薪」已用「vs 全体主将」口径复核为最优
+    // （口径见 RULE.mdc：本方 3 个白名单主将 × 其他 4 族 10 个白名单主将 = 30 对，每对 40 场，
+    // 2 组独立种子共 2400 场，相同配对与种子，唯一变量是特殊卡）：
+    //   线上 请辞+战鼓+釜底46.46%（46.89/ 46.03）
+    //   时代洪流替换战鼓齐鸣            44.44%（45.29 / 43.59）  -2.02pp，2/2 组同向为负
+    //   去掉战鼓齐鸣只留 2 张特殊卡     43.53%（44.44 / 42.63）  -2.93pp，z=2.03
+    // 复现：node scripts/bench-faction-vs-all.js --faction=草莽星火 --matches=40 [--mix="..."]
+    //
+    // strategyTarget 保持 4：4 张内的构成已是最优，替换任意一张都变差（各 300 场镜像，
+    // 基线 请辞归隐x3+战鼓齐鸣）：请辞x2+战鼓+釜底 4 组1200 场回归 50.30%、请辞x3+釜底（去战鼓）
+    // 47.20%、第4 张换时局 39.65%~43.71%、只带 3 张 43.86%。
+    // 提到 5 张（第 5 张必为釜底抽薪）在全阵营口径 900 场只有 51.37%~52.58%，按阵营拆开各 600 场后
+    // 收益只属于纵横权谋（63.00%），开国群雄 49.33% / 遗策复兴 48.47% / 百家争鸣 47.13% 均为略负，
+    // 且无通用组牌信号可区分（各阵营战力分布几乎一致，纵横第 5 张换废牌拨云见日只有 43.73%/45.67%，
+    // 排除牌数效应）。因此不整体提到 5，避免为单一阵营硬编码而过拟合 AI 镜像口径。
+    hard: { unitTarget: 22, strategyTarget: 4, topRatio: 0.25, randomPick: false, maxHeroes: 99, maxEnvoyCards: 99, allowSituation: false }
   }[difficulty] || { unitTarget: 24, strategyTarget: 5, topRatio: 0.55, randomPick: true, maxHeroes: 5, maxEnvoyCards: 2 };
   // deckProfile 允许实验性覆盖组牌配置（如回归对比传 28/8 复现旧基线）；不传则使用上面已验证的线上基线
   const config = options.deckProfile ? { ...baseConfig, ...options.deckProfile } : baseConfig;
@@ -776,6 +857,12 @@ function selectAutoDeckCards(options = {}) {
   const usedUnits = {};
   let heroCount = 0;
   let envoyCount = 0;
+  // 整组入组会一次带入多张（集贤/同盟套件常为 3 张），因此实际单位数可能超出 unitTarget：
+  // 百家争鸣被顶到 25 单位 / 牌组 29 张（5 族最大），抽牌浓度最差，与它 5 族最低的胜率一致。
+  // 已验证：限制超标（超出 unitTarget+1 就回滚该组，使百家变为 22 单位 / 26 张、集贤 10→6、
+  // 战力 149→141，其余 4 族逐张不变）在百家镜像 6 组独立种子 1800 场只有 51.09%（z=0.89，
+  // 4/6 组同向），首组 53.79% 属小样本假阳性，故不采用，保持整组入组不设上限。
+  // 复现：node scripts/bench-special-mix.js --scope=百家争鸣 --profile=maxUnitOvershoot:1 --matches=300
   while (picked.filter(card => card.category === "unit" || card.category === "hero").length < config.unitTarget) {
     const group = pickFromGroups(unitGroups, usedUnits, config.topRatio, config.randomPick, strengthBias, groupScore);
     if (!group) break;
@@ -796,9 +883,15 @@ function selectAutoDeckCards(options = {}) {
   while (picked.filter(card => card.category === "stratagem" || card.category === "situation").length < config.strategyTarget) {
     const group = pickFromGroups(strategyGroups, usedStrategies, config.topRatio, config.randomPick, strengthBias, groupScore);
     if (!group) break;
-    // 纯转化器（卧薪尝胆）本身 0 战力、没有蛰伏就是废牌，且与蛰伏只有单向关联，
-    // 因此不允许作为种子主动入组，只能作为附带件随蛰伏单位一起进牌组。
+    // 纯转化器（卧薪尝胆）本身 0 战力、没有战俘就是废牌，且与战俘只有单向关联，
+    // 因此不允许作为种子主动入组，只能作为附带件随战俘单位一起进牌组。
     if (isPureAwakeningTool(group.card)) {
+      usedStrategies[group.key] = true;
+      continue;
+    }
+    // 时局牌（边患四起/党争迷局/典籍散佚/时代洪流/拨云见日）是双向生效的，AI 打出后
+    // 自己的高战力单位同样被压成1 点，实测在 hard 组牌里是纯负资产，故禁止作为种子入组。
+    if (config.allowSituation === false && group.card.category === "situation") {
       usedStrategies[group.key] = true;
       continue;
     }
@@ -870,6 +963,7 @@ module.exports = {
   isEnvoyDoubleLeaderCard,
   isRandomRestoreLeaderCard,
   isHalfSituationLeaderCard,
+  isOpeningDrawLeaderCard,
   isPassiveLeaderCard,
   cloneCard,
   shuffle,
@@ -886,6 +980,7 @@ module.exports = {
   hasAbility,
   eligibleCards,
   leadersFor,
+  hardLeaderPool,
   groupCards,
   normalizeDeckIds,
   deckStatus,

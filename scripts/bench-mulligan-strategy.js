@@ -57,7 +57,7 @@ function parseArgs(argv) {
     }
   });
   if (args.scope && !FACTION_SCOPES[args.scope]) throw new Error(`未知阵营范围 ${args.scope}，可选：${Object.keys(FACTION_SCOPES).join(" / ")}`);
-  if (!["lowest", "worst", "none"].includes(args.baseline)) throw new Error(`未知基线 ${args.baseline}，可选：lowest / worst / none / online`);
+  if (!["lowest", "worst", "none", "online"].includes(args.baseline)) throw new Error(`未知基线 ${args.baseline}，可选：lowest / worst / none / online`);
 
   return args;
 }
@@ -171,7 +171,8 @@ function applyPickerMulligan(state, playerIndex, picker) {
 
 // 候选：线上换牌规则，统一调用 battle.aiMulliganFor，脚本不复制一份换牌逻辑
 function applyCandidateMulligan(state, playerIndex) {
-  const before = state.players[playerIndex].hand.map(card => card.name);
+  const player = state.players[playerIndex];
+  const before = player.hand.map(card => card.name);
   const swaps = battle.aiMulliganFor(state, playerIndex);
   if (!state.mulligan.done[playerIndex]) battle.finishMulligan(state, playerIndex);
   return { swaps, dropped: trackDropped(state, playerIndex, before) };
@@ -183,6 +184,9 @@ function baselineApplier(mode) {
     battle.finishMulligan(state, pi);
     return { swaps: 0, dropped: [] };
   };
+  // online：基线也走线上换牌规则。双方逻辑相同时是A/A 对称性校验（实测 200 场 98/98），
+  // 需要验证新候选规则时在 battle.js 的 mulliganCardValue 里临时挂开关，与本模式对打。
+  if (mode === "online") return (state, pi) => applyCandidateMulligan(state, pi);
   return (state, pi) => applyPickerMulligan(state, pi, selectBaselineCard);
 }
 

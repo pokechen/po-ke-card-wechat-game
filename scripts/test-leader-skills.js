@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const battle = require("../shared/core/battle");
+const { abilityDescriptions, allCards } = require("../shared/core/cards");
 
 let uidSeq = 0;
 
@@ -188,6 +189,72 @@ test("封锁主将技能会同时取消对手被动主将", () => {
   assert.equal(state.players[1].leaderDisabled, true);
   battle.recalcScores(state);
   assert.equal(unit.effective, 1);
+});
+
+test("孔子开局被动额外抽 1 张，不能主动发动", () => {
+  const state = battle.createMatch({
+    mode: "hotseat",
+    humanFaction: "百家争鸣",
+    aiFaction: "开国群雄",
+    humanLeaderId: "zhangyu-0009",
+    aiLeaderId: "zhangyu-0001"
+  });
+  assert.equal(state.players[0].leader.name, "孔子");
+  assert.equal(state.players[0].hand.length, 11);
+  assert.equal(state.players[1].hand.length, 10);
+  assert.equal(battle.isPassiveLeader(state.players[0]), true);
+  assert.equal(battle.useLeader(state, 0), false);
+});
+
+test("集贤仅在己方手牌详情显示动态牌库数量", () => {
+  const mengchang = { name: "孟尝君", abilities: ["集贤"], recruitGroupDisplayName: "" };
+  const deck = [{ name: "孟尝君" }, { name: "孟尝君" }, { name: "孟尝君" }];
+  const inHand = abilityDescriptions(mengchang, { deck, showRecruitDeckCount: true })[0];
+  const outsideHand = abilityDescriptions(mengchang, { deck, showRecruitDeckCount: false })[0];
+  assert.match(inHand, /牌库共 3 张「孟尝君」/);
+  assert.doesNotMatch(outsideHand, /牌库共/);
+});
+
+test("李密详情明确程咬金部署到疆场", () => {
+  const liMi = allCards().find(item => item.id === "zhangyu-0284");
+  assert.ok(liMi);
+  assert.match(abilityDescriptions(liMi)[0], /打出后从牌库中立即打出所有程咬金到疆场。/);
+});
+
+test("刘邦、曹操、老子从牌库打出指定时局并消耗该牌", () => {
+  [
+    ["刘邦", "从牌组选择 1 张党争迷局打出。", "党争迷局", "朝堂"],
+    ["曹操", "从牌组选择 1 张典籍散佚打出。", "典籍散佚", "文脉"],
+    ["老子", "从牌组选择 1 张边患四起打出。", "边患四起", "疆场"]
+  ].forEach(([name, abilityText, situationName, row]) => {
+    const state = stateFor(leader(name, abilityText));
+    const selected = card(situationName, "situation", 0, 0, { zone: "deck", row });
+    const unrelated = card("无关时局", "situation", 0, 0, { zone: "deck", row: "疆场" });
+    state.players[0].deck = [selected, unrelated];
+    assert.equal(battle.useLeader(state, 0), true);
+    assert.equal(state.pending.type, "leaderSituation");
+    assert.deepEqual(state.pending.candidates.map(item => item.uid), [selected.uid]);
+    assert.equal(battle.resolvePending(state, { uid: selected.uid }), true);
+    assert.equal(state.players[0].deck.some(item => item.uid === selected.uid), false);
+    assert.equal(state.players[0].discard.some(item => item.uid === selected.uid), true);
+    assert.equal(state.situations[row], true);
+    assert.equal(state.players[0].leaderUsed, true);
+  });
+});
+
+test("卧薪尝胆只转化己方所选阵线的战俘", () => {
+  const state = stateFor(leader("测试主将", "抽 1 张牌。"), { autoControlAll: true });
+  const awakening = card("卧薪尝胆", "stratagem", 0, 0, { row: "疆场" });
+  const ownCaptive = card("勾践", "unit", 4, 0, { row: "疆场" });
+  const enemyCaptive = card("勾践", "unit", 4, 1, { row: "疆场" });
+  ownCaptive.abilities = ["战俘"];
+  enemyCaptive.abilities = ["战俘"];
+  state.players[0].hand = [awakening, card("保留手牌", "unit", 1, 0)];
+  putBoard(state, 0, "疆场", ownCaptive);
+  putBoard(state, 1, "疆场", enemyCaptive);
+  assert.equal(battle.playCard(state, awakening.uid, "疆场"), true);
+  assert.equal(ownCaptive.transformed, true);
+  assert.notEqual(enemyCaptive.transformed, true);
 });
 
 console.log("主将技能测试全部通过");

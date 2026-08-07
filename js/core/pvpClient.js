@@ -328,6 +328,18 @@ function getAdminStats() {
   return callRoom("getAdminStats");
 }
 
+function submitBattleFeedback(content, battle) {
+  return callRoom("submitBattleFeedback", { content, battle });
+}
+
+function getBattleFeedbackDetail(feedbackId) {
+  return callRoom("getBattleFeedbackDetail", { feedbackId });
+}
+
+function updateBattleFeedback(feedbackId, patch) {
+  return callRoom("updateBattleFeedback", { feedbackId, patch });
+}
+
 function getRankProfile() {
   return callRoom("getRankProfile");
 }
@@ -338,7 +350,12 @@ function startRankMatch(playerSetup) {
 
 // 上报排位对局的出场信息与小局比分，仅用于服务端补判负时展示，不参与结算
 function reportRankProgress(rankMatchId, payload = {}) {
-  return callRoom("reportRankProgress", { rankMatchId, setup: payload.setup, progress: payload.progress });
+  return callRoom("reportRankProgress", {
+    rankMatchId,
+    progressVersion: payload.progressVersion,
+    setup: payload.setup,
+    progress: payload.progress
+  });
 }
 
 function finishRankMatch(rankMatchId, finalStateSummary, clientVersion, durationMs) {
@@ -347,6 +364,10 @@ function finishRankMatch(rankMatchId, finalStateSummary, clientVersion, duration
 
 function getRankLeaderboard(limit = 50) {
   return callRoom("getRankLeaderboard", { limit });
+}
+
+function refreshRankLeaderboardAvatars(userIds) {
+  return callRoom("refreshRankLeaderboardAvatars", { userIds });
 }
 
 function getRankPublicProfile(userId) {
@@ -583,11 +604,15 @@ module.exports = {
   getCurrentUser,
   getAdminStatus,
   getAdminStats,
+  submitBattleFeedback,
+  getBattleFeedbackDetail,
+  updateBattleFeedback,
   getRankProfile,
   startRankMatch,
   reportRankProgress,
   finishRankMatch,
   getRankLeaderboard,
+  refreshRankLeaderboardAvatars,
   getRankPublicProfile,
   saveWechatProfile,
   updateProfile,

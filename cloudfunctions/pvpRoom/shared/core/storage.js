@@ -13,7 +13,8 @@ const DEFAULT_SAVE = {
     cardDetail: { done: false, count: 0 },
     leaderSkill: { done: false, count: 0, longPressed: false, usedSkill: false },
     battleRecord: { done: false, count: 0 },
-    fieldCardDetail: { done: false, count: 0 }
+    fieldCardDetail: { done: false, count: 0 },
+    discardPile: { done: false, count: 0 }
   },
   // 分步指引在当前对局序列中的游标，保证「每轮对局最多一个、按序触发、未完成的再触发」
   guideCursor: 0,

@@ -53,7 +53,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0195",
@@ -65,7 +65,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0194",
@@ -77,7 +77,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0146",
@@ -90,7 +90,7 @@ const DATA = {
         "传世",
         "济世"
       ],
-      "abilityText": "传世、济世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "传世、济世：传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。济世从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0190",
@@ -102,7 +102,7 @@ const DATA = {
       "abilityDisplayNames": [
         "鼓舞"
       ],
-      "abilityText": "鼓舞：使己方指定或所在阵线的非传世人物战力翻倍。"
+      "abilityText": "鼓舞：使己方指定阵线的所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0193",
@@ -135,7 +135,7 @@ const DATA = {
         "出使",
         "传世"
       ],
-      "abilityText": "出使、传世：打到对方阵线，随后己方抽 2 张牌。不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "出使、传世：出使打到对方阵线，己方抽 2 张牌。传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0198",
@@ -157,19 +157,19 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策：若对方疆场总战力达到 10 或以上，摧毁其疆场当前战力最高的非传世人物。"
+      "abilityText": "奇策：若对方疆场总战力 ≥10，摧毁其疆场当前战力最高的非传世人物。"
     },
     {
       "id": "zhangyu-0150",
-      "name": "周瑜",
+      "name": "杨戬",
       "factionDisplayName": "天下共识",
       "category": "unit",
       "rowDisplayName": "朝堂",
       "strength": 0,
       "abilityDisplayNames": [
-        "召唤东吴水师"
+        "召唤哮天犬"
       ],
-      "abilityText": "召唤东吴水师：周瑜每次离开战场时，召唤一张 8 点「东吴水师」顶替；若因小局清场离场，则在下一局开始入场。"
+      "abilityText": "召唤：每次离开战场时，在己方疆场召唤 1 张 8 战力「哮天犬」。"
     },
     {
       "id": "zhangyu-0202",
@@ -195,7 +195,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0204",
@@ -207,7 +207,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0205",
@@ -219,7 +219,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0206",
@@ -242,7 +242,7 @@ const DATA = {
       "rowDisplayName": "疆场",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0166",
@@ -252,7 +252,7 @@ const DATA = {
       "rowDisplayName": "疆场",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0167",
@@ -262,7 +262,7 @@ const DATA = {
       "rowDisplayName": "疆场",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0168",
@@ -272,7 +272,7 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0169",
@@ -282,7 +282,7 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0170",
@@ -292,7 +292,7 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0171",
@@ -302,7 +302,7 @@ const DATA = {
       "rowDisplayName": "文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0172",
@@ -312,7 +312,7 @@ const DATA = {
       "rowDisplayName": "文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0173",
@@ -322,7 +322,7 @@ const DATA = {
       "rowDisplayName": "文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0174",
@@ -332,7 +332,7 @@ const DATA = {
       "rowDisplayName": "朝堂/文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0175",
@@ -342,7 +342,7 @@ const DATA = {
       "rowDisplayName": "朝堂/文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0207",
@@ -352,7 +352,7 @@ const DATA = {
       "rowDisplayName": "朝堂/文脉",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "时局：压制对应阵线，非传世人物战力降为 1。"
+      "abilityText": "时局：对应阵线的非传世人物战力降为 1。"
     },
     {
       "id": "zhangyu-0176",
@@ -362,7 +362,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "晴天：清除场上全部时局效果。"
+      "abilityText": "拨云见日：清除场上全部时局效果。"
     },
     {
       "id": "zhangyu-0177",
@@ -372,7 +372,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "晴天：清除场上全部时局效果。"
+      "abilityText": "拨云见日：清除场上全部时局效果。"
     },
     {
       "id": "zhangyu-0178",
@@ -382,7 +382,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "晴天：清除场上全部时局效果。"
+      "abilityText": "拨云见日：清除场上全部时局效果。"
     },
     {
       "id": "zhangyu-0179",
@@ -394,7 +394,7 @@ const DATA = {
       "abilityDisplayNames": [
         "鼓舞"
       ],
-      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。"
+      "abilityText": "鼓舞：选择己方一条阵线，该线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0180",
@@ -406,7 +406,7 @@ const DATA = {
       "abilityDisplayNames": [
         "鼓舞"
       ],
-      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。"
+      "abilityText": "鼓舞：选择己方一条阵线，该线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0181",
@@ -418,7 +418,7 @@ const DATA = {
       "abilityDisplayNames": [
         "鼓舞"
       ],
-      "abilityText": "鼓舞：选择己方一条阵线，该线人物战力翻倍。"
+      "abilityText": "鼓舞：选择己方一条阵线，该线所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0185",
@@ -428,7 +428,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "请辞：将己方场上一张非传世人物收回手牌。"
+      "abilityText": "请辞：选择己方场上 1 名非传世人物，将其收回手牌。"
     },
     {
       "id": "zhangyu-0186",
@@ -438,7 +438,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "请辞：将己方场上一张非传世人物收回手牌。"
+      "abilityText": "请辞：选择己方场上 1 名非传世人物，将其收回手牌。"
     },
     {
       "id": "zhangyu-0187",
@@ -448,7 +448,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "请辞：将己方场上一张非传世人物收回手牌。"
+      "abilityText": "请辞：选择己方场上 1 名非传世人物，将其收回手牌。"
     },
     {
       "id": "zhangyu-0182",
@@ -516,7 +516,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0210",
@@ -528,7 +528,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0211",
@@ -540,7 +540,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0212",
@@ -552,7 +552,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0043",
@@ -564,7 +564,7 @@ const DATA = {
       "abilityDisplayNames": [
         "振势"
       ],
-      "abilityText": "振势：为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "振势：同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "zhangyu-0213",
@@ -576,7 +576,7 @@ const DATA = {
       "abilityDisplayNames": [
         "振势"
       ],
-      "abilityText": "振势：为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "振势：同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "zhangyu-0214",
@@ -588,7 +588,7 @@ const DATA = {
       "abilityDisplayNames": [
         "振势"
       ],
-      "abilityText": "振势：为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "振势：同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "zhangyu-0215",
@@ -620,7 +620,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0218",
@@ -632,7 +632,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0219",
@@ -644,7 +644,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0220",
@@ -686,7 +686,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0224",
@@ -708,7 +708,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0225",
@@ -770,7 +770,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0228",
@@ -782,7 +782,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0229",
@@ -794,7 +794,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0230",
@@ -806,7 +806,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0231",
@@ -818,7 +818,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0232",
@@ -830,7 +830,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0026",
@@ -842,7 +842,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0233",
@@ -854,7 +854,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0234",
@@ -876,7 +876,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0235",
@@ -888,7 +888,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0036",
@@ -900,7 +900,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0236",
@@ -954,7 +954,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0052",
-      "name": "李斯",
+      "name": "韩信",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
       "rowDisplayName": "疆场",
@@ -982,7 +982,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0241",
@@ -994,11 +994,11 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0049",
-      "name": "贾诩",
+      "name": "李靖",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
       "rowDisplayName": "朝堂",
@@ -1026,7 +1026,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0244",
@@ -1038,7 +1038,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0245",
@@ -1050,7 +1050,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0246",
@@ -1062,11 +1062,11 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0023",
-      "name": "韩信",
+      "name": "诸葛亮",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
       "rowDisplayName": "疆场",
@@ -1074,7 +1074,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0024",
@@ -1087,7 +1087,7 @@ const DATA = {
         "传世",
         "济世"
       ],
-      "abilityText": "传世、济世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "传世、济世：传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。济世从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0247",
@@ -1109,7 +1109,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0248",
@@ -1121,7 +1121,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0249",
@@ -1133,7 +1133,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0250",
@@ -1145,7 +1145,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0251",
@@ -1159,7 +1159,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0252",
-      "name": "李牧",
+      "name": "李斯",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
       "rowDisplayName": "疆场",
@@ -1169,7 +1169,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0073",
-      "name": "乐毅",
+      "name": "贾诩",
       "factionDisplayName": "纵横权谋",
       "category": "unit",
       "rowDisplayName": "朝堂",
@@ -1197,7 +1197,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0255",
@@ -1219,7 +1219,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0054",
@@ -1231,7 +1231,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0256",
@@ -1245,7 +1245,7 @@ const DATA = {
     },
     {
       "id": "zhangyu-0055",
-      "name": "李靖",
+      "name": "周瑜",
       "factionDisplayName": "纵横权谋",
       "category": "hero",
       "rowDisplayName": "朝堂",
@@ -1253,7 +1253,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0056",
@@ -1275,7 +1275,7 @@ const DATA = {
       "abilityDisplayNames": [
         "出使"
       ],
-      "abilityText": "出使：打到对方阵线，随后己方抽 2 张牌。"
+      "abilityText": "出使：打到对方阵线，己方抽 2 张牌。"
     },
     {
       "id": "zhangyu-0257",
@@ -1297,7 +1297,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0258",
@@ -1309,7 +1309,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0050",
@@ -1331,7 +1331,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0259",
@@ -1343,7 +1343,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0011",
@@ -1375,7 +1375,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0261",
@@ -1387,7 +1387,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0262",
@@ -1399,7 +1399,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0263",
@@ -1411,7 +1411,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0264",
@@ -1423,7 +1423,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0265",
@@ -1435,7 +1435,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0099",
@@ -1447,7 +1447,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0266",
@@ -1459,7 +1459,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0267",
@@ -1471,7 +1471,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0268",
@@ -1483,7 +1483,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0082",
@@ -1495,7 +1495,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0144",
@@ -1507,7 +1507,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0269",
@@ -1519,7 +1519,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0270",
@@ -1531,7 +1531,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0271",
@@ -1543,7 +1543,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0272",
@@ -1555,7 +1555,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0273",
@@ -1567,7 +1567,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0274",
@@ -1589,7 +1589,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0012",
@@ -1602,7 +1602,7 @@ const DATA = {
         "传世",
         "振势"
       ],
-      "abilityText": "传世、振势：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "传世、振势：传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。振势使同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "zhangyu-0275",
@@ -1664,7 +1664,7 @@ const DATA = {
       "abilityDisplayNames": [
         "振势"
       ],
-      "abilityText": "振势：为同一阵线的其他非传世人物各加 1 点战力。"
+      "abilityText": "振势：同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "zhangyu-0081",
@@ -1686,7 +1686,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0080",
@@ -1718,7 +1718,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0280",
@@ -1730,7 +1730,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0078",
@@ -1742,7 +1742,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0085",
@@ -1754,7 +1754,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策：若对方文脉总战力达到 10 或以上，摧毁其文脉当前战力最高的非传世人物。"
+      "abilityText": "奇策：若对方文脉总战力 ≥10，摧毁其文脉当前战力最高的非传世人物。"
     },
     {
       "id": "zhangyu-0281",
@@ -1766,7 +1766,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0282",
@@ -1778,7 +1778,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0283",
@@ -1790,7 +1790,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0284",
@@ -1802,7 +1802,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有程咬金。",
+      "abilityText": "集贤：打出后从牌库中立即打出所有程咬金到疆场。",
       "recruitTarget": "程咬金",
       "recruitTargetDisplayName": "程咬金",
       "recruitTargetOneWay": true
@@ -1827,7 +1827,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0287",
@@ -1903,7 +1903,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0288",
@@ -1995,7 +1995,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0293",
@@ -2007,7 +2007,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0294",
@@ -2019,7 +2019,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0295",
@@ -2051,7 +2051,7 @@ const DATA = {
       "abilityDisplayNames": [
         "通才"
       ],
-      "abilityText": "通才：可部署到卡牌标注的任一阵线"
+      "abilityText": "通才：可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0297",
@@ -2073,7 +2073,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0042",
@@ -2087,7 +2087,7 @@ const DATA = {
         "振势",
         "通才"
       ],
-      "abilityText": "传世、振势、通才：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。为同一阵线的其他非传世人物各加 1 点战力。可部署到卡牌标注的任一阵线。"
+      "abilityText": "传世、振势、通才：传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。振势使同一阵线的其他非传世人物各 +1 战力。通才可部署至卡牌标注的任一阵线。"
     },
     {
       "id": "zhangyu-0298",
@@ -2099,7 +2099,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0299",
@@ -2111,7 +2111,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0300",
@@ -2123,7 +2123,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0301",
@@ -2135,7 +2135,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0302",
@@ -2277,7 +2277,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策：若对方朝堂总战力达到 10 或以上，摧毁其朝堂当前战力最高的非传世人物。"
+      "abilityText": "奇策：若对方朝堂总战力 ≥10，摧毁其朝堂当前战力最高的非传世人物。"
     },
     {
       "id": "zhangyu-0132",
@@ -2287,9 +2287,9 @@ const DATA = {
       "rowDisplayName": "疆场",
       "strength": 4,
       "abilityDisplayNames": [
-        "蛰伏"
+        "战俘"
       ],
-      "abilityText": "蛰伏：被雪耻触发后转化为 14 点传世振势人物。"
+      "abilityText": "战俘：被复国触发后转化为 14 点传世、振势人物。"
     },
     {
       "id": "zhangyu-0143",
@@ -2301,7 +2301,7 @@ const DATA = {
       "abilityDisplayNames": [
         "济世"
       ],
-      "abilityText": "济世：打出后可从己方弃牌堆复归 1 张非传世人物。"
+      "abilityText": "济世：从己方弃牌堆复归 1 张非传世人物。"
     },
     {
       "id": "zhangyu-0306",
@@ -2322,9 +2322,9 @@ const DATA = {
       "strength": 10,
       "abilityDisplayNames": [
         "传世",
-        "召唤岳家军"
+        "集贤"
       ],
-      "abilityText": "传世、召唤岳家军：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后从己方手牌和牌库中把所有「岳家军」一并部署到「疆场」阵线。"
+      "abilityText": "传世、集贤：传世战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。集贤：打出后从牌库和手牌中立即打出所有岳家军到己方疆场。"
     },
     {
       "id": "zhangyu-0307",
@@ -2336,7 +2336,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0308",
@@ -2348,7 +2348,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0309",
@@ -2360,7 +2360,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0310",
@@ -2402,7 +2402,7 @@ const DATA = {
       "abilityDisplayNames": [
         "奇策"
       ],
-      "abilityText": "奇策：若对方朝堂总战力达到 10 或以上，摧毁其朝堂当前战力最高的非传世人物。"
+      "abilityText": "奇策：若对方朝堂总战力 ≥10，摧毁其朝堂当前战力最高的非传世人物。"
     },
     {
       "id": "zhangyu-0314",
@@ -2414,7 +2414,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0315",
@@ -2426,7 +2426,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0316",
@@ -2438,7 +2438,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0317",
@@ -2480,7 +2480,7 @@ const DATA = {
       "abilityDisplayNames": [
         "鼓舞"
       ],
-      "abilityText": "鼓舞：使己方指定或所在阵线的非传世人物战力翻倍。"
+      "abilityText": "鼓舞：使己方指定阵线的所有非传世人物战力翻倍。"
     },
     {
       "id": "zhangyu-0319",
@@ -2491,9 +2491,9 @@ const DATA = {
       "strength": 8,
       "abilityDisplayNames": [
         "传世",
-        "雪耻"
+        "复国"
       ],
-      "abilityText": "传世、雪耻：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。打出后触发所在朝堂线蛰伏人物转化。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。\n复国：打出后触发所在朝堂线战俘人物转化。"
     },
     {
       "id": "zhangyu-0320",
@@ -2505,7 +2505,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "传世：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中。"
+      "abilityText": "传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     },
     {
       "id": "zhangyu-0321",
@@ -2519,15 +2519,15 @@ const DATA = {
     },
     {
       "id": "zhangyu-0322",
-      "name": "诸葛亮",
+      "name": "哪吒",
       "factionDisplayName": "遗策复兴",
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 0,
       "abilityDisplayNames": [
-        "召唤无当飞军"
+        "召唤风火轮"
       ],
-      "abilityText": "召唤无当飞军：诸葛亮每次离开战场时，召唤一张 11 点传世「无当飞军」顶替；若因小局清场离场，则在下一局开始入场。"
+      "abilityText": "召唤：每次离开战场时，在己方疆场召唤 1 张 11 战力传世的「风火轮」。"
     },
     {
       "id": "zhangyu-0148",
@@ -2539,7 +2539,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0323",
@@ -2551,7 +2551,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0324",
@@ -2563,7 +2563,7 @@ const DATA = {
       "abilityDisplayNames": [
         "集贤"
       ],
-      "abilityText": "集贤：打出后从牌库中立即打出所有同名牌。"
+      "abilityText": "集贤：打出后，从牌库打出其余同名牌。"
     },
     {
       "id": "zhangyu-0117",
@@ -2583,9 +2583,9 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [
-        "雪耻"
+        "复国"
       ],
-      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。"
+      "abilityText": "复国：选择一条阵线，触发己方该线所有战俘人物转化。"
     },
     {
       "id": "zhangyu-0189",
@@ -2595,9 +2595,9 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [
-        "雪耻"
+        "复国"
       ],
-      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。"
+      "abilityText": "复国：选择一条阵线，触发己方该线所有战俘人物转化。"
     },
     {
       "id": "zhangyu-0325",
@@ -2607,9 +2607,9 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [
-        "雪耻"
+        "复国"
       ],
-      "abilityText": "雪耻：选择一条阵线，触发该线所有蛰伏人物转化。"
+      "abilityText": "复国：选择一条阵线，触发己方该线所有战俘人物转化。"
     },
     {
       "id": "zhangyu-0326",
@@ -2654,7 +2654,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0328",
@@ -2666,7 +2666,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0329",
@@ -2678,7 +2678,7 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。"
+      "abilityText": "同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
       "id": "zhangyu-0134",
@@ -2688,9 +2688,9 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": 2,
       "abilityDisplayNames": [
-        "蛰伏"
+        "战俘"
       ],
-      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。"
+      "abilityText": "战俘：被复国触发后转化为 8 点同盟人物。"
     },
     {
       "id": "zhangyu-0330",
@@ -2700,9 +2700,9 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": 2,
       "abilityDisplayNames": [
-        "蛰伏"
+        "战俘"
       ],
-      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。"
+      "abilityText": "战俘：被复国触发后转化为 8 点同盟人物。"
     },
     {
       "id": "zhangyu-0331",
@@ -2712,9 +2712,9 @@ const DATA = {
       "rowDisplayName": "朝堂",
       "strength": 2,
       "abilityDisplayNames": [
-        "蛰伏"
+        "战俘"
       ],
-      "abilityText": "蛰伏：被雪耻触发后转化为 8 点同盟人物。"
+      "abilityText": "战俘：被复国触发后转化为 8 点同盟人物。"
     },
     {
       "id": "zhangyu-0001",
@@ -2874,7 +2874,7 @@ const DATA = {
       "rowDisplayName": "",
       "strength": null,
       "abilityDisplayNames": [],
-      "abilityText": "双方出使人物战力翻倍。"
+      "abilityText": "双方非传世出使人物战力翻倍。"
     },
     {
       "id": "zhangyu-0338",
@@ -2950,7 +2950,7 @@ const DATA = {
         "传世",
         "振势"
       ],
-      "abilityText": "蛰伏转化：战力 14 的传世人物；不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中；为同一阵线其他非传世人物各加 1 点战力。"
+      "abilityText": "战俘转化\n传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。\n振势：同一阵线的其他非传世人物各 +1 战力。"
     },
     {
       "id": "token-越相文种",
@@ -2963,23 +2963,23 @@ const DATA = {
       "abilityDisplayNames": [
         "同盟"
       ],
-      "abilityText": "蛰伏转化：战力 8；同名越相文种在同一阵线并列时战力倍增。"
+      "abilityText": "战俘转化\n同盟：同名同盟人物在同一阵线并列 N 张时，每张战力按 N 倍计算。"
     },
     {
-      "id": "token-东吴水师",
-      "name": "东吴水师",
-      "displayName": "东吴水师",
+      "id": "token-哮天犬",
+      "name": "哮天犬",
+      "displayName": "哮天犬",
       "factionDisplayName": "天下共识",
       "category": "unit",
       "rowDisplayName": "疆场",
       "strength": 8,
       "abilityDisplayNames": [],
-      "abilityText": "周瑜离开战场后召唤的东吴水师，战力固定为 8；若周瑜因小局清场离场，则在下一局开始入场。"
+      "abilityText": "杨戬离开战场后召唤"
     },
     {
-      "id": "token-无当飞军",
-      "name": "无当飞军",
-      "displayName": "无当飞军",
+      "id": "token-风火轮",
+      "name": "风火轮",
+      "displayName": "风火轮",
       "factionDisplayName": "遗策复兴",
       "category": "hero",
       "rowDisplayName": "疆场",
@@ -2987,7 +2987,7 @@ const DATA = {
       "abilityDisplayNames": [
         "传世"
       ],
-      "abilityText": "诸葛亮离开战场后召唤的蜀汉精锐；无当飞军为 11 点传世军队，不受时局、奇策、请辞、鼓舞、振势、同盟等特殊效果影响。"
+      "abilityText": "哪吒离开战场后召唤\n传世：战力不受时局、鼓舞、振势影响，也不会被奇策、请辞或济世选中。"
     }
   ]
 };

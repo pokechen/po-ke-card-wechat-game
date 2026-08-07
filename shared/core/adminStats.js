@@ -157,7 +157,6 @@ function endReasonLabel(value) {
     normal: "正常结束",
     surrender: "认输结束",
     disconnect: "掉线结束",
-    timeout: "超时结束",
     draw: "平局结束"
   };
   return labels[safeText(value, 24)] || "未知原因";

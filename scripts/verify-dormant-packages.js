@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
-// 验证「蛰伏体系」各子套件单独携带时的胜率，用于决定自动组牌是否应把它们拆成独立组。
+// 验证「战俘体系」各子套件单独携带时的胜率，用于决定自动组牌是否应把它们拆成独立组。
 //
 // 规则前提（已核对 battle.js /卡牌数据）：
-//  - 文种：2 战力，row=["朝堂"]，蛰伏 -> 转化为「越相文种」8 战力 + 同盟
+//  - 文种：2 战力，row=["朝堂"]，战俘 -> 转化为「越相文种」8 战力 + 同盟
 //    （3 张同在朝堂时每张 8×3=24，合计 72）
-//  - 勾践：4 战力，row=["疆场"]，蛰伏 -> 转化为「越王勾践」14 战力 + 传世 + 振势
-//  - 范蠡：8 战力传世(hero)，row=["朝堂"]，雪耻 -> 打出时只转化「朝堂」线的蛰伏
+//  - 勾践：4 战力，row=["疆场"]，战俘 -> 转化为「越王勾践」14 战力 + 传世 + 振势
+//  - 范蠡：8 战力传世(hero)，row=["朝堂"]，复国 -> 打出时只转化「朝堂」线的战俘
 //    => 范蠡只能转化文种，救不了疆场的勾践
-//  - 卧薪尝胆：谋略 ×3，雪耻，可任选阵线（AI 选蛰伏最多的一条）
+//  - 卧薪尝胆：谋略 ×3，复国，可任选阵线（AI 选战俘最多的一条）
 //
 // 设计：
-//  - 固定阵营「遗策复兴」，基准牌组 = 当前线上 hard 自动组牌（已不含蛰伏件）。
+//  - 固定阵营「遗策复兴」，基准牌组 = 当前线上 hard 自动组牌（已不含战俘件）。
 //  - 每个变体在基准牌组上「等量替换」：加入套件所需的 N 个单位位/ M 个谋略位，
 //    就按固定组牌估值从低到高移除同样数量的单位 / 谋略，保持单位数与谋略数不变，
 //    使唯一变量是「用套件替换掉最弱的牌是否更好」。
@@ -26,14 +26,14 @@ const {
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
 const FACTION = "遗策复兴";
 
-const FANLI = "zhangyu-0319";// 范蠡：8 战力传世，雪耻（朝堂）
-const GOUJIAN = "zhangyu-0132";                // 勾践：蛰伏（疆场）-> 14 传世振势
-const WENZHONG = ["zhangyu-0134", "zhangyu-0330", "zhangyu-0331"]; // 文种：蛰伏（朝堂）-> 8 同盟
-const AWAKEN = ["zhangyu-0188", "zhangyu-0189", "zhangyu-0325"];   // 卧薪尝胆：谋略，雪耻
+const FANLI = "zhangyu-0319";// 范蠡：8 战力传世，复国（朝堂）
+const GOUJIAN = "zhangyu-0132";                // 勾践：战俘（疆场）-> 14 传世振势
+const WENZHONG = ["zhangyu-0134", "zhangyu-0330", "zhangyu-0331"]; // 文种：战俘（朝堂）-> 8 同盟
+const AWAKEN = ["zhangyu-0188", "zhangyu-0189", "zhangyu-0325"];   // 卧薪尝胆：谋略，复国
 
 // 变体定义：fanli / wenzhong / goujian / awaken 分别为是否带范蠡、文种张数、是否带勾践、卧薪张数
 const VARIANTS = [
-  { key: "base", label: "基准(无蛰伏件)", fanli: false, wenzhong: 0, goujian: false, awaken: 0 },
+  { key: "base", label: "基准(无战俘件)", fanli: false, wenzhong: 0, goujian: false, awaken: 0 },
   { key: "fanli", label: "范蠡单带", fanli: true, wenzhong: 0, goujian: false, awaken: 0 },
   { key: "fanli+wz1", label: "范蠡+文种1", fanli: true, wenzhong: 1, goujian: false, awaken: 0 },
   { key: "fanli+wz2", label: "范蠡+文种2", fanli: true, wenzhong: 2, goujian: false, awaken: 0 },
@@ -57,7 +57,7 @@ function parseArgs(argv) {
     else if (arg.startsWith("--seed=")) args.seed = Number(arg.slice(7)) || args.seed;
     else if (arg.startsWith("--maxSteps=")) args.maxSteps = Math.max(100, Number(arg.slice(11)) || args.maxSteps);
     else if (arg.startsWith("--only=")) args.only = arg.slice(7).split(",");
-    // --aiCfg='{"awakeningWastePenalty":0,"awakeningWaitPenalty":0,"dormantSetupWeight":0}' 可关闭蛰伏时机逻辑做新旧对比
+    // --aiCfg='{"awakeningWastePenalty":0,"awakeningWaitPenalty":0,"dormantSetupWeight":0}' 可关闭战俘时机逻辑做新旧对比
     else if (arg.startsWith("--aiCfg=")) args.aiCfg = JSON.parse(arg.slice(8));
   });
   return args;
@@ -260,7 +260,7 @@ function main() {
   process.stdout.write("\n");
 
   const lines = [];
-  lines.push(`蛰伏套件拆分验证  阵营=${FACTION}  种子数=${args.seeds}  起始种子=${args.seed}(start=${args.start})`);
+  lines.push(`战俘套件拆分验证  阵营=${FACTION}  种子数=${args.seeds}  起始种子=${args.seed}(start=${args.start})`);
   lines.push(`每变体场数 = 种子数 × 2（交替先后手），对手固定为同一份基准牌组`);
   lines.push("");
   if (sample) {

@@ -90,9 +90,41 @@ function drawLogo(ctx, view, x, y, size) {
   drawAssetImage(ctx, LOGO_SRC, x, y, size, size, { radius: Math.floor(size * 0.24), fit: "cover", placeholder: false });
 }
 
+function fitSummaryText(ctx, content, maxWidth, size) {
+  const value = String(content || "");
+  ctx.save();
+  ctx.font = `${size}px ${FONT_STACK}`;
+  if (ctx.measureText(value).width <= maxWidth) {
+    ctx.restore();
+    return value;
+  }
+  let result = "";
+  for (const char of value) {
+    if (ctx.measureText(`${result}${char}…`).width > maxWidth) break;
+    result += char;
+  }
+  ctx.restore();
+  return `${result}…`;
+}
+
 function drawSummaryCard(ctx, view, actions, y, h, save, settings, latest, ui = {}) {
   const summaryRect = { id: "history", x: 26, y, w: view.width - 52, h };
-  actions.push(summaryRect);
+  const compact = h <= 96;
+  const padX = 22;
+  const headerY = y + (compact ? 18 : 21);
+  const dividerY = y + (compact ? 31 : 35);
+  const bodyTop = dividerY + (compact ? 15 : 18);
+  const bodyBottom = y + h - (compact ? 16 : 18);
+  const historyLinkW = 94;
+  const historyLinkH = 28;
+  const historyLink = {
+    id: "history",
+    x: summaryRect.x + summaryRect.w - historyLinkW - 12,
+    y: headerY - historyLinkH / 2,
+    w: historyLinkW,
+    h: historyLinkH
+  };
+  actions.push(summaryRect, historyLink);
   ctx.save();
   ctx.shadowColor = "rgba(48,35,18,0.12)";
   ctx.shadowBlur = 12;
@@ -100,7 +132,23 @@ function drawSummaryCard(ctx, view, actions, y, h, save, settings, latest, ui = 
   fillRoundRect(ctx, summaryRect.x, summaryRect.y, summaryRect.w, summaryRect.h, 18, "rgba(255,250,240,0.94)", "#dcc48d");
   ctx.restore();
 
-  const padX = 22;
+  text(ctx, "对战信息", summaryRect.x + padX, headerY, 12, "#8d6840", "left", "middle");
+  ctx.save();
+  ctx.shadowColor = "rgba(95,42,20,0.18)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
+  fillRoundRect(ctx, historyLink.x, historyLink.y, historyLink.w, historyLink.h, historyLinkH / 2, "#8f3c1f", "#6f2d17");
+  ctx.restore();
+  text(ctx, "查看战绩 ›", historyLink.x + historyLink.w / 2, headerY, 11, "#fff7d8", "center", "middle");
+  ctx.save();
+  ctx.strokeStyle = "rgba(216,189,131,0.68)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(summaryRect.x + padX, dividerY);
+  ctx.lineTo(summaryRect.x + summaryRect.w - padX, dividerY);
+  ctx.stroke();
+  ctx.restore();
+
   const historyReady = !!ui.cloudHistoryLoaded;
   const lines = [];
   if (!historyReady) {
@@ -118,17 +166,11 @@ function drawSummaryCard(ctx, view, actions, y, h, save, settings, latest, ui = 
       lines.push({ t: "完成一局后，这里会显示最近一局对局信息", s: 10, c: "#8d6840" });
     }
   }
-  const lineGap = 19;
+  const lineGap = compact ? 17 : 19;
   const blockH = (lines.length - 1) * lineGap;
-  const startY = y + h / 2 - blockH / 2;
-  lines.forEach((ln, i) => text(ctx, ln.t, summaryRect.x + padX, startY + i * lineGap, ln.s, ln.c, "left", "middle"));
-
-  // 「查看战绩」入口放在右上角，避免底部留白
-  const badgeW = 92, badgeH = 26;
-  const badgeX = summaryRect.x + summaryRect.w - badgeW - 14;
-  const badgeY = y + 13;
-  fillRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 13, "#fff5df", "#dcc48d");
-  text(ctx, "查看战绩 ›", badgeX + badgeW / 2, badgeY + badgeH / 2, 11, "#8f3c1f", "center", "middle");
+  const startY = bodyTop + Math.max(0, (bodyBottom - bodyTop - blockH) / 2);
+  const contentW = summaryRect.w - padX * 2;
+  lines.forEach((ln, i) => text(ctx, fitSummaryText(ctx, ln.t, contentW, ln.s), summaryRect.x + padX, startY + i * lineGap, ln.s, ln.c, "left", "middle"));
 }
 
 function formatTime(ts) {
@@ -161,7 +203,9 @@ function historySummary(history) {
 
 function latestMatchLine(item) {
   if (!item) return "";
-  const title = item.endReason === "disconnect" ? (item.ranked ? "排位掉线" : "掉线") : (item.resultText || (item.endReason === "surrender" ? "认输" : "已结束"));
+  const title = item.ranked && ["abandon", "invalid"].includes(item.endReason)
+    ? "排位弃局"
+    : (item.endReason === "disconnect" ? (item.ranked ? "排位掉线" : "掉线") : (item.resultText || (item.endReason === "surrender" ? "认输" : "已结束")));
   return `最近一局：${title} · ${formatTime(item.time)}`;
 }
 
@@ -243,7 +287,11 @@ function draw(ctx, view, actions, ui = {}) {
     ctx.fill();
     ctx.restore();
   };
-  if (!drawRemoteImage(ctx, user.avatarUrl, avatarX, avatarY, avatarSize, avatarSize, { radius: avatarSize / 2, onFail: fallbackAvatar })) fallbackAvatar();
+  const onAvatarFail = () => {
+    ui.authAvatarNeedsRefresh = true;
+    fallbackAvatar();
+  };
+  if (!drawRemoteImage(ctx, user.avatarUrl, avatarX, avatarY, avatarSize, avatarSize, { radius: avatarSize / 2, onFail: onAvatarFail })) fallbackAvatar();
   const nickName = user.nickName || "章鱼隐士";
   const nickX = avatarX + avatarSize + 8;
   text(ctx, nickName, nickX, avatarY + avatarSize / 2 + 1, 13, "#4a3826", "left", "middle");

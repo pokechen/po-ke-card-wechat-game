@@ -11,12 +11,14 @@ const {
   categoryLabel,
   deckStatus,
   leadersFor,
+  hardLeaderPool,
   tokenByName,
   cloneCard,
   isHeroCard,
   isEnvoyDoubleLeaderCard,
   isRandomRestoreLeaderCard,
   isHalfSituationLeaderCard,
+  isOpeningDrawLeaderCard,
   isPassiveLeaderCard
 } = require("./cards");
 const { recordMatch, getActiveCustomDeckIds } = require("./storage");
@@ -35,6 +37,9 @@ const MATCH_MORALE = 2;
     const expectedCatchPerCard = (typeof t.expectedCatchPerCard === "number") ? t.expectedCatchPerCard : 10;
     return {
       expectedCatchPerCard,
+      // passLeadMin 实测是死参数：它所在的条件同时要求 opponentCardsToCatch >= minCardsToCatch，
+      // 而 catch>=3 已隐含分差 >=21，必然大于 passLeadMin，取值 5 / 16 都不改变任何决策（0/597）。
+      // 保留是为了让该条件语义完整；扫描结论见 ADVANCED_AI 上方注释。
       passLeadMin: (typeof t.passLeadMin === "number") ? t.passLeadMin : expectedCatchPerCard,
       minCardsToCatch: (typeof t.minCardsToCatch === "number") ? t.minCardsToCatch : 3,
       unconditionalPassLead: (typeof t.unconditionalPassLead === "number") ? t.unconditionalPassLead : expectedCatchPerCard * 3,
@@ -42,6 +47,46 @@ const MATCH_MORALE = 2;
     };
   }
 
+// ADVANCED_AI 出牌打分权重。
+//
+// 【已完成全量胜率扫描，结论：全部无提升空间，不要再逐个调这些数值】（2026-08-06）
+// 口径：全阵营随机镜像、hard 自动组牌、双方逐张同牌、交替座位，候选方注入单个权重，
+// 每变体 300 场（种子 20260806），A/A 校验 200场 100/100 严格对称。共扫 32 个变体，
+// 全部落在 ±2pp 噪声内，无一达到 53% 门槛：
+//   scoreGainWeight              0.4→50.51  1.0→50.51  1.8→51.34  3.0→46.49
+//   finalScoreGainWeight         1.6→49.66  3.0→50.34
+//   futureResourceWeight         0→49.49  0.3→51.86  0.45→50.34  1.0→50.17  2.0→41.95
+//   mustWinFutureWeight          0.1→49.16  0.6→48.48
+//   finalFutureWeight            0→50.00   0.4→50.00（两值都精确 50.00%，见下文第3局说明）
+//   handDeltaWeight              0→50.172.5→49.497→48.49
+//   futurePowerWeight            0.05→48.31  0.4→51.68
+//   securedRoundBonus            12→49.49  40→49.66
+//   highestPowerRemovalNetSwing  Normal 2→49.50 / 16→48.66；Final 0→50.00 / 10→49.49
+//   overkillAllowance            2→50.00  8→48.65；overkillPenalty 2→46.98
+//   停牌参数(resolvePassTuning)   minCardsToCatch 2→49.49 / 4→51.18；
+//                                expectedCatchPerCard 6→48.16 / 14→51.18
+//   组合                scoreGain1.6+future0.4+futurePower0.3→48.99；
+//                                future0.3+mustWin0.15→51.69；future0.3+futurePower0.4→47.47
+// 唯一一度看起来有效的 futureResourceWeight:0.3 扩到 5 组独立种子 1500 场后回归到
+// 50.41%（742/730，z=0.31，逐组 51.86/51.36/51.01/48.45/49.32），属小样本假阳性。
+// 复现：node scripts/bench-special-cards.js --strategy=futureResourceWeight:0.3 --matches=300
+//
+// 为什么调不动（决策杠杆诊断，20 场 597 个决策点，统计注入后 argmax 是否改变）：
+//   高杠杆：scoreGainWeight 18~34%、futureResourceWeight 13~15%、overkillAllowance 13.6%
+//   低杠杆：futurePowerWeight 4.7%、highestPowerRemovalNetSwingNormal 1.7%、
+//           securedRoundBonus 1.2%、handDeltaWeight 仅 0.8%
+//   死旋钮：passLeadMin 0.0%（被同一条件里的 minCardsToCatch 完全支配：catch≥3 已隐含
+//           分差≥21 > passLeadMin，两端取值 5 / 16 都不改变任何决策）；
+//           situationNetSwing 在 hard 下完全不触发（5 族牌组时局 0 张，且能从牌组打出时局的
+//           主将刘邦/曹操/老子/朱温都已不在 hardLeaderPool 白名单）。
+// handDeltaWeight 近似死旋钮的原因是结构性的：每打一张牌手牌都 -1，handDeltaGain 在同一
+// 局面的各候选间几乎是常数，只影响不了 argmax（只有出使/抽牌/请辞类候选才有差异）。
+// 真正兑现卡差的是停牌与小局取舍，不在这条按牌打分的通道里。
+// 第 3 局也基本不吃这些权重：597 个决策点里第1/2/3 局分别是 383/203/11，收官走的是
+// searchBestWinningSequenceDocumentV2 的最小资源计划，因此 finalFutureWeight 两端同值。
+// 另外 80.3% 的决策虽由本打分通道产出（forcedRuleApplied统计 1226 个决策点：NONE 60.3%、
+// MUST_AVOID_MATCH_LOSS 20.0%、OPPONENT_PASSED_* 15.2%、其余停牌硬规则 4.6%），
+// 但其中 27% 的局面前两名候选打分差 < 1 —— 打分面本身是平的，换序不换结果。
 const ADVANCED_AI = {
   knownStateSearchDepth: 6,
   maxActionsPerNode: 20,
@@ -60,6 +105,10 @@ const ADVANCED_AI = {
   mustWinFutureWeight: 0.28,
   finalFutureWeight: 0.12,
   handDeltaWeight: 4.5,
+  // 手牌质量项：Δ(手牌 futureCardValue 之和) 的权重
+  futurePowerWeight: 0.18,
+  // 必争局且本次动作已锁定该小局时的加分
+  securedRoundBonus: 24,
   highestPowerRemovalNetSwingNormal: 8,
   highestPowerRemovalNetSwingFinal: 4,
   situationNetSwing: 6,
@@ -69,10 +118,10 @@ const ADVANCED_AI = {
   overkillAllowance: 4,
   overkillPenalty: 1,
   overkillCap: 30,
-  // 蛰伏体系出牌时机：正确打法是「先把蛰伏人物铺到同一阵线，再打雪耻一次性全部转化」。
-  // awakeningWastePenalty：本次转化数为 0（空转）但手牌/牌库仍有可转化蛰伏时的扣分；
-  // awakeningWaitPenalty：手牌里每张尚未上场、可落在同一阵线的蛰伏，对提前打雪耻的扣分；
-  // dormantSetupWeight：打出蛰伏人物时按「预期转化增量」加分，避免 2 战力的文种被低估。
+  // 战俘体系出牌时机：正确打法是「先把战俘人物铺到同一阵线，再打复国一次性全部转化」。
+  // awakeningWastePenalty：本次转化数为 0（空转）但手牌/牌库仍有可转化战俘时的扣分；
+  // awakeningWaitPenalty：手牌里每张尚未上场、可落在同一阵线的战俘，对提前打复国的扣分；
+  // dormantSetupWeight：打出战俘人物时按「预期转化增量」加分，避免 2 战力的文种被低估。
   awakeningWastePenalty: 20,
   awakeningWaitPenalty: 8,
   dormantSetupWeight: 1,
@@ -141,12 +190,15 @@ function resolveAiFaction(value) {
   return resolveFaction(value, "草莽星火");
 }
 
-function resolveLeaderId(options, side, faction, forceRandom) {
+// side==="ai" 且 difficulty==="hard" 时，「随机主将」只从 hardLeaderPool 白名单里抽
+// （easy/normal 仍全量随机，保持难度分层）；玩家显式指定了具体主将时不受影响。
+function resolveLeaderId(options, side, faction, forceRandom, difficulty) {
   const ids = side === "ai" ? options.aiLeaderIds : options.humanLeaderIds;
   const legacy = side === "ai" ? options.aiLeaderId : options.humanLeaderId;
   const stored = ids?.[faction] ?? ids?.random ?? legacy;
   if (forceRandom || stored === "random") {
-    const leader = randomItem(leadersFor(faction), null);
+    const pool = side === "ai" && difficulty === "hard" ? hardLeaderPool(faction) : leadersFor(faction);
+    const leader = randomItem(pool, null);
     return leader ? leader.id : "";
   }
   return stored;
@@ -167,8 +219,8 @@ function createMatch(options = {}) {
   const humanCustomDeckIds = customStatus.valid ? customStatus.ids : null;
   const aiCustomStatus = deckStatus(Array.isArray(options.aiCustomDeckIds) ? options.aiCustomDeckIds : [], aiFaction);
   const aiCustomDeckIds = aiCustomStatus.valid ? aiCustomStatus.ids : null;
-  const humanLeaderId = resolveLeaderId(options, "human", humanFaction, humanFactionRandom);
-  const aiLeaderId = resolveLeaderId(options, "ai", aiFaction, aiFactionRandom);
+  const humanLeaderId = resolveLeaderId(options, "human", humanFaction, humanFactionRandom, "normal");
+  const aiLeaderId = resolveLeaderId(options, "ai", aiFaction, aiFactionRandom, difficulty);
   const humanName = mode === "ai" ? "玩家" : "玩家一";
   const players = [
     makePlayer(humanName, 0, humanFaction, "normal", humanCustomDeckIds, humanLeaderId),
@@ -199,6 +251,11 @@ function createMatch(options = {}) {
   };
   draw(state.players[0], 10);
   draw(state.players[1], 10);
+  state.players.forEach(player => {
+    if (!isOpeningDrawLeaderCard(player.leader)) return;
+    draw(player, 1);
+    addLog(state, `${player.name}的主将「${cardLabel(player.leader)}」被动生效：开局额外抽 1 张牌。`);
+  });
   if (mode === "ai") aiMulligan(state);
   recalcScores(state);
   addLog(state, mode === "online"
@@ -211,10 +268,10 @@ function createMatch(options = {}) {
   return state;
 }
 
-// 被动主将：开局即生效、整场对局持续，无需主动发动（对应昆特牌原版的被动领袖）。
+// 被动主将无需主动发动；孔子只在开局自动结算一次，其余被动整场持续生效。
 function logPassiveLeaders(state) {
   state.players.forEach(player => {
-    if (!isPassiveLeader(player)) return;
+    if (!isPassiveLeader(player) || isOpeningDrawLeaderCard(player.leader)) return;
     addLog(state, `${player.name}的主将「${cardLabel(player.leader)}」为被动技能，开局即生效并持续整场对局：${player.leader.abilityText || ""}`);
   });
 }
@@ -240,10 +297,16 @@ function otherIndex(index) {
 // 换牌估值整体对齐组牌估值 47.00%｜同盟/集贤改用「手牌+牌库」上下文 46.00%
 // 阈值由固定 11 改为牌库剩余牌均值（含 ×0.9/×1.1）46.00%｜集贤按出牌口径 recruitPowerBonus 46.50%
 // 偷看换来那张牌、更差就不换（作弊上界）47.83%｜请辞条件仅看手牌 48.53%｜手上多张请辞只留1 张 51.12%
+// 战鼓齐鸣抬到换牌阈值（与请辞同构：组牌阶段是必带的第4 张、换成任何时局都掉 7~10pp，
+//   但换牌估值只有 rowBoost=9 < 阈值 11 会被换掉）3 组 900 场 50.22%；再叠加釜底抽薪 50.34%。
+//   无效原因：战鼓 9 分已接近阈值，只有在手上其它牌都 ≥11（手牌本来就好）时才轮到它被换，
+//   那种局面下拿一张牌库随机牌替换低价值特殊卡本身不亏。诊断：600 局共换1147 张，战鼓仅占 54 张。
+// 传世牌可换（现行 lowestMulliganCard硬性排除 isHeroCard）：无需实验，hard 5 个阵营的传世牌
+//   换牌估值全部 ≥11（传世 +6，且 0 战力传世都带出使按 20−strength 计价），该约束等价于无。
 // 上述「保留组合件」类改动若做得太宽，会让候选池里没有低于阈值的牌、换牌配额用不完，
 // 换牌次数与胜率强正相关（换牌数600→215 时胜率降到 45%），这是它们变差的共同机制。
-// 「有蛰伏才留雪耻/有雪耻才留蛰伏」是死代码：hard 自动组牌 5 个阵营全部蛰伏 0 张、雪耻 0 张，
-// 蛰伏体系至今进不了自动组牌，这两条只在玩家自定义牌组带越国套件时才有意义。
+// 「有战俘才留复国/有复国才留战俘」是死代码：hard 自动组牌 5 个阵营全部战俘 0 张、复国 0 张，
+// 战俘体系至今进不了自动组牌，这两条只在玩家自定义牌组带越国套件时才有意义。
 //
 // 换牌阶段的天花板（灵敏度探针，复现：bench-mulligan-strategy.js --baseline=worst|none）：
 //   线上规则 vs 故意换掉最强的 2 张  300 场 65.99%（p<1e-6，极显著）
@@ -304,8 +367,12 @@ function lowestMulliganCard(player, cards) {
     .sort((a, b) => v(a) - v(b))[0] || null;
 }
 
+function isYueFeiRecruit(card) {
+  return !!card && (card.id === "zhangyu-0114" || card.name === "岳飞") && hasAbility(card, "集贤");
+}
+
 function oneWaySummonTarget(card) {
-  if (hasAbility(card, "召唤岳家军")) return "岳家军";
+  if (isYueFeiRecruit(card)) return "岳家军";
   if (hasAbility(card, "集贤") && card.recruitTarget) return card.recruitTarget;
   return "";
 }
@@ -395,6 +462,10 @@ function allMulliganDone(state) {
   return state.players.every((_, index) => mulligan.done?.[index] || (mulligan.used?.[index] || 0) >= mulligan.max);
 }
 
+// 百家争鸣被动「先声夺人」：第一小局开始前由它选择谁先出牌。固定选择让对手先出，
+// 已验证这就是最优解——百家 vs 其他阵营各 300 场：让对手先出 26.44%，改成自己先出只有 20.74%
+// （差 5.7pp）。让对手先出＝自己后手，能看到对手落子再决定，并保住「最后一张」的主动权。
+// 复现：node scripts/bench-first-player.js --matches=300（--aa 为线上现状基线）
 function aiFirstPlayerChoice(state, chooserIndex) {
   return otherIndex(chooserIndex);
 }
@@ -499,7 +570,7 @@ function isRecall(card) {
 }
 
 function isAwakening(card) {
-  return hasAbility(card, "雪耻") || card.name === "卧薪尝胆" || card.name === "破釜沉舟";
+  return hasAbility(card, "复国") || card.name === "卧薪尝胆" || card.name === "破釜沉舟";
 }
 
 function isAwakeningStratagem(card) {
@@ -507,30 +578,28 @@ function isAwakeningStratagem(card) {
 }
 
 // ---- 卧薪尝胆「死牌开局即打」策略（默认行为）----
-// 卧薪尝胆只转化场上的蛰伏人物；若双方场上与己方手牌均无蛰伏，则卧薪尝胆为彻底无用的死牌。
+// 卧薪尝胆只转化己方场上的战俘人物；若己方场上、手牌和牌库均无战俘，则它是彻底无用的死牌。
 // 轮到自己且对手尚未放弃时，立即把该死牌打出清掉废牌、让对手多打一张，随后按对手出牌做正常决策：
-//  - 无出使（手牌/牌库/弃牌均无出使，抽不到蛰伏）-> 开局直接打。
-//  - 有出使：出使还在手或牌库中时本回合不打，等出使打出后若仍未抽到蛰伏立即打
-//    （按需求「不需要看济世」，不考虑济世复归弃牌堆蛰伏）。
+//  - 无出使（手牌/牌库/弃牌均无出使，抽不到战俘）-> 开局直接打。
+//  - 有出使：出使还在手或牌库中时本回合不打，等出使打出后若仍未抽到战俘立即打
+//    （按需求「不需要看济世」，不考虑济世复归弃牌堆战俘）。
 //  - 对手已放弃本回合时返回 null，由常规逻辑去收割该局，避免误打废牌送掉本该拿下的局。
 function awakeningProactiveDumpDecision(state, playerIndex) {
   const p = state.players[playerIndex];
-  const card = p.hand.find(item => isAwakeningStratagem(item));
+  const card = p.hand.find(item => item.name === "卧薪尝胆");
   if (!card) return null;
-  // 己方与对手场上均无蛰伏、己方手牌与牌库也无蛰伏：卧薪尝胆彻底无用
-  // （若对手场上有蛰伏，打出雪耻反而会帮对手把蛰伏转化成强力单位，故不打）。
+  // 卧薪尝胆仅影响己方，因此只需判断己方是否仍有可转化战俘。
   if (ROWS.some(row => countDormantUnits(state, playerIndex, row) > 0)) return null;
-  if (ROWS.some(row => countDormantUnits(state, otherIndex(playerIndex), row) > 0)) return null;
-  if (p.hand.some(c => hasAbility(c, "蛰伏"))) return null;
-  // 牌库里还有蛰伏人物时同样不是死牌：后续抽到即可铺场再转化，不能当废牌丢掉。
-  if ((p.deck || []).some(c => hasAbility(c, "蛰伏"))) return null;
+  if (p.hand.some(c => hasAbility(c, "战俘"))) return null;
+  // 牌库里还有战俘人物时同样不是死牌：后续抽到即可铺场再转化，不能当废牌丢掉。
+  if ((p.deck || []).some(c => hasAbility(c, "战俘"))) return null;
   if (state.players[otherIndex(playerIndex)].passed) return null;
   const scoutInHand = p.hand.some(c => hasAbility(c, "出使"));
   const scoutInDeck = (p.deck || []).some(c => hasAbility(c, "出使"));
   const scoutInDiscard = (p.discard || []).some(c => hasAbility(c, "出使"));
   // 出使还在手或牌库：本回合不打，等出使打出后再判断
   if (scoutInHand || scoutInDeck) return null;
-  // 无出使（抽不到蛰伏）-> 开局立即打出；有出使且已打出(在弃牌堆)且未抽到蛰伏 -> 立即打出
+  // 无出使（抽不到战俘）-> 开局立即打出；有出使且已打出(在弃牌堆)且未抽到战俘 -> 立即打出
   return { action: "play", card, row: rowForCard(state, playerIndex, card) || "疆场" };
 }
 
@@ -538,11 +607,12 @@ function cardLabel(card) {
   return card.name || "卡牌";
 }
 
-// 朱温选牌时，同名、同效果的时局牌只展示一次；保留首张的真实 uid 供后续从牌库打出。
-function uniqueDeckSituationCards(player) {
+// 从牌库选时局的主将只展示一次同名、同效果牌，保留首张真实 uid 供后续从牌库打出。
+function uniqueDeckSituationCards(player, allowedNames = null) {
   const seen = new Set();
   return (player?.deck || []).filter(card => {
     if (card?.category !== "situation") return false;
+    if (allowedNames && !allowedNames.includes(card.name)) return false;
     const key = [
       card.name || card.id || "",
       card.abilityText || "",
@@ -554,12 +624,20 @@ function uniqueDeckSituationCards(player) {
   });
 }
 
+function leaderSituationCandidates(player) {
+  const text = leaderText(player);
+  if (!/从牌组选择/.test(text) || !/打出/.test(text)) return [];
+  const namedSituation = ["边患四起", "党争迷局", "典籍散佚"].find(name => text.includes(name));
+  if (/时局牌/.test(text)) return uniqueDeckSituationCards(player);
+  return namedSituation ? uniqueDeckSituationCards(player, [namedSituation]) : [];
+}
+
 function leaderText(player) {
   return `${player.leader?.name || ""} ${player.leader?.abilityText || ""}`.toLowerCase();
 }
 
-// 朱元璋：双方出使人物战力翻倍。
-// 注意：仅对「出使」卡生效，且作用于双方场上所有出使卡，不是某行的鼓舞。
+// 朱元璋：双方非传世出使人物战力翻倍。
+// 注意：仅对非传世「出使」卡生效，且作用于双方场上所有符合条件的卡，不是某行的鼓舞。
 function isEnvoyDoubleLeader(player) {
   return isEnvoyDoubleLeaderCard(player?.leader);
 }
@@ -600,21 +678,6 @@ function hasUnusedActiveLeader(player) {
 // 封锁主将技能是否还有价值：对手仍有未发动的主动技能，或仍在生效的被动技能。
 function leaderStillActive(player) {
   return hasUnusedActiveLeader(player) || passiveLeaderActive(player);
-}
-
-function playSituationFromLeader(state, name, preferredRow) {
-  let row;
-  if (ROWS.includes(preferredRow)) row = preferredRow;
-  else if (/边患/.test(name)) row = "疆场";
-  else if (/蔽日|党争/.test(name)) row = "朝堂";
-  else if (/倾盆|典籍/.test(name)) row = "文脉";
-  else {
-    const rows = ROWS.filter(item => !state.situations[item]);
-    row = rows[0] || "疆场";
-  }
-  const alreadyActive = !!state.situations[row];
-  state.situations[row] = true;
-  return alreadyActive ? [] : [row];
 }
 
 function playLeaderSituationCard(state, playerIndex, uid) {
@@ -760,11 +823,11 @@ function placeUnitOnBoard(state, playedBy, target, row, card) {
 }
 
 function leaveSummonSpec(card) {
-  if (hasAbility(card, "召唤无当飞军")) {
-    return { tokenName: "无当飞军", sourceName: "召唤无当飞军", fallbackName: "无当飞军" };
+  if (hasAbility(card, "召唤风火轮")) {
+    return { tokenName: "风火轮", sourceName: "召唤风火轮", fallbackName: "风火轮" };
   }
-  if (hasAbility(card, "召唤东吴水师")) {
-    return { tokenName: "东吴水师", sourceName: "召唤东吴水师", fallbackName: "东吴水师" };
+  if (hasAbility(card, "召唤哮天犬")) {
+    return { tokenName: "哮天犬", sourceName: "召唤哮天犬", fallbackName: "哮天犬" };
   }
   return null;
 }
@@ -845,7 +908,7 @@ function markBattleAction(state, entry) {
   state.lastPlayedSeq = seq;
   const next = { seq, round: state.round, ...entry };
   state.lastPlayed = next;
-  state.playedHistory = [next].concat(Array.isArray(state.playedHistory) ? state.playedHistory : []).slice(0, 80);
+  state.playedHistory = [next].concat(Array.isArray(state.playedHistory) ? state.playedHistory : []);
 }
 
 function appendLastBattleActionNote(state, note) {
@@ -865,6 +928,12 @@ function compactNameCounts(names, fallback) {
   const entries = Object.entries(counts);
   if (!entries.length && fallback) entries.push([fallback, 1]);
   return entries.map(([name, count]) => count > 1 ? `${name}x${count}` : name).join("、");
+}
+
+function compactPlayerTargetNames(names) {
+  const labels = compactNameCounts(names).split("、").filter(Boolean);
+  if (labels.length < 2 || !labels.every(label => label.startsWith("玩家"))) return labels.join("、");
+  return `${labels[0]}、${labels.slice(1).map(label => label.slice(2) || label).join("、")}`;
 }
 
 function appendLastBattleActionEffect(state, label, result) {
@@ -1049,12 +1118,9 @@ function useLeader(state, playerIndex, actionOptions = {}) {
     return true;
   }
 
-  // 朱温：从牌组选择任意 1 张时局牌并立即打出（需要玩家选择具体牌）
-  const picksDeckSituation = /从牌组选择.*时局牌/.test(text);
-  if (picksDeckSituation) {
-    const deckSituation = uniqueDeckSituationCards(player);
-    if (!deckSituation.length) return false;
-    // 已明确指定要打出的牌（云端 AI 决策 / 联机提交）：直接打出
+  // 从牌组选择时局牌：只允许选择主将文本指定的牌；打出后从牌库移除并进入弃牌堆。
+  const deckSituation = leaderSituationCandidates(player);
+  if (deckSituation.length) {
     if (actionOptions.leaderCardUid) {
       const chosen = deckSituation.find(card => card.uid === actionOptions.leaderCardUid);
       if (!chosen) return false;
@@ -1065,12 +1131,11 @@ function useLeader(state, playerIndex, actionOptions = {}) {
         type: "leaderSituation",
         playerIndex,
         candidates: deckSituation,
-        title: "朱温：从牌组选 1 张时局牌打出"
+        title: `${cardLabel(player.leader)}：从牌组选择时局牌打出`
       };
       addLog(state, `${player.name}使用主将「${cardLabel(player.leader)}」，从牌组选择时局牌。`);
       return true;
     }
-    // 非人类且无指定牌：自动选最优时局牌打出，避免 AI 卡在待选状态
     let best = deckSituation[0];
     let bestScore = -Infinity;
     deckSituation.forEach(card => {
@@ -1079,6 +1144,7 @@ function useLeader(state, playerIndex, actionOptions = {}) {
     });
     return playLeaderSituationCard(state, playerIndex, best.uid);
   }
+  if (/从牌组选择.*打出/.test(text)) return false;
 
   if (discardsTwo && isHumanControlled(state, playerIndex)) {
     state.pending = {
@@ -1142,9 +1208,6 @@ function useLeader(state, playerIndex, actionOptions = {}) {
     } else if (/通才.*更优战线|通才.*移动|移动.*通才/.test(text)) {
       const moved = optimizeMultiRowRows(state, playerIndex);
       if (moved > 0) appendLastBattleActionEffect(state, "调度", `通才x${moved}`);
-    } else if (/从牌组选择.*(边患四起|党争迷局|典籍散佚|时局牌)/.test(text)) {
-      const rows = playSituationFromLeader(state, text, actionOptions.leaderRow);
-      if (rows.length) appendLastBattleActionEffect(state, "时局", rows.map(row => ROW_LABELS[row]).join("、"));
     } else if (/清除|拨云/.test(text)) {
       const clearedRows = ROWS.filter(row => state.situations[row]).map(row => ROW_LABELS[row]);
       state.situations = {};
@@ -1237,7 +1300,10 @@ function resolveStrategyCard(state, playerIndex, card, row, actionOptions = {}) 
   }
   if (isHighestPowerRemoval(card)) return doHighestPowerRemoval(state, playerIndex, null, false, 0);
   if (isRecall(card)) return doRecall(state, playerIndex, actionOptions.recallTargetUid);
-  if (isAwakening(card)) return transformDormantUnits(state, row || bestDormantUnitRow(state, playerIndex) || "疆场");
+  if (isAwakening(card)) {
+    const targetPlayerIndex = card.name === "卧薪尝胆" ? playerIndex : null;
+    return transformDormantUnits(state, row || bestDormantUnitRow(state, playerIndex) || "疆场", targetPlayerIndex);
+  }
 }
 
 function resolveUnitAbility(state, playedBy, target, row, card, actionOptions = {}) {
@@ -1273,9 +1339,9 @@ function resolveUnitAbility(state, playedBy, target, row, card, actionOptions = 
     const boosted = (state.players[playedBy].board[targetRow] || []).filter(item => !isHeroCard(item)).length;
     if (boosted) appendLastBattleActionEffect(state, "鼓舞", `${ROW_LABELS[targetRow]}x${boosted}`);
   }
-  if (hasAbility(card, "集贤")) doRecruit(state, playedBy, target, row, card);
-  if (hasAbility(card, "召唤岳家军")) summonByName(state, playedBy, target, row, "岳家军");
-  if (hasAbility(card, "雪耻")) transformDormantUnits(state, row);
+  if (isYueFeiRecruit(card)) deployYueFamily(state, playedBy, target, row);
+  else if (hasAbility(card, "集贤")) doRecruit(state, playedBy, target, row, card);
+  if (hasAbility(card, "复国")) transformDormantUnits(state, row, card.name === "卧薪尝胆" ? playedBy : null);
   if (isHighestPowerRemoval(card) && card.category !== "stratagem") {
     const highestPowerRemovalRow = row || (card.row && card.row[0]) || null;
     doHighestPowerRemoval(state, playedBy, highestPowerRemovalRow, true, 10);
@@ -1311,10 +1377,11 @@ function doRecruit(state, playedBy, target, row, card) {
   }
 }
 
-function summonByName(state, playedBy, target, row, name) {
+function deployYueFamily(state, playedBy, target, row) {
   const player = state.players[playedBy];
+  const name = "岳家军";
   let moved = 0;
-  const summoned = [];
+  const deployed = [];
   [player.hand, player.deck].forEach(pile => {
     for (let i = pile.length - 1; i >= 0; i--) {
       const item = pile[i];
@@ -1322,15 +1389,15 @@ function summonByName(state, playedBy, target, row, name) {
         pile.splice(i, 1);
         const targetRow = (item.row || []).includes(row) ? row : ((item.row || [])[0] || row);
         placeUnitOnBoard(state, playedBy, target, targetRow, item);
-        summoned.push({ card: item, row: targetRow });
+        deployed.push({ card: item, row: targetRow });
         moved += 1;
       }
     }
   });
   if (moved) {
-    addLog(state, `${player.name}召唤 ${moved} 张「${name}」。`);
-    const summary = compactNameCounts(summoned.map(s => s.card.name || name), name);
-    const note = `召唤岳家军：${summary || `${name}x${moved}`}`;
+    addLog(state, `${player.name}集贤，打出 ${moved} 张「${name}」。`);
+    const summary = compactNameCounts(deployed.map(s => s.card.name || name), name);
+    const note = `集贤：${summary || `${name}x${moved}`}`;
     appendLastBattleActionNote(state, note);
   }
 }
@@ -1538,7 +1605,7 @@ function doHighestPowerRemoval(state, playerIndex, row, opponentOnly, minEffecti
   });
   const results = burned.map(item => removeFromBoardToDiscard(state, item.pi, item.row, item.card.uid)).filter(Boolean);
   addLog(state, `奇策摧毁 ${burned.length} 张战力 ${max} 的非传世人物：${details.join("、")}。`);
-  appendLastBattleActionEffect(state, "奇策", `摧毁${compactNameCounts(details)}`);
+  appendLastBattleActionEffect(state, "奇策", `摧毁${compactPlayerTargetNames(details)}`);
   appendLeaveSummonEffects(state, results.map(item => item.summon));
 }
 
@@ -1569,7 +1636,7 @@ function applyTransformedDormantUnit(card, token, row) {
       strength: 8,
       abilities: ["同盟"],
       abilityDisplayNames: ["同盟"],
-      abilityText: "蛰伏转化：战力 8；同名越相文种在同一阵线并列时战力倍增。",
+      abilityText: "战俘转化\n同盟：同名同盟牌在同一阵线多张并列时，每张战力按数量倍增。",
     }
  : {
       name: "越王勾践",
@@ -1580,7 +1647,7 @@ function applyTransformedDormantUnit(card, token, row) {
       strength: 14,
       abilities: ["传世", "振势"],
       abilityDisplayNames: ["传世", "振势"],
-      abilityText: "蛰伏转化：战力 14 的传世人物；不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中；为同一阵线其他非传世人物各加 1 点战力。",
+      abilityText: "战俘转化\n传世、振势：不受时局、鼓舞、振势、同盟等战力修正影响，也不会被奇策、请辞或济世选中；为同一阵线其他非传世人物各加 1 点战力。",
     };
   const next = token || fallback;
   card.transformed = true;
@@ -1603,18 +1670,20 @@ function applyTransformedDormantUnit(card, token, row) {
   card.summary = card.abilityDisplayNames.join("、") || card.abilityText || card.summary;
 }
 
-function transformDormantUnits(state, row) {
+function transformDormantUnits(state, row, targetPlayerIndex = null) {
   let count = 0;
-  state.players.forEach(player => {
+  const targets = Number.isInteger(targetPlayerIndex) ? [state.players[targetPlayerIndex]] : state.players;
+  targets.filter(Boolean).forEach(player => {
     player.board[row].forEach(card => {
-      if (hasAbility(card, "蛰伏") && !card.transformed) {
+      if (hasAbility(card, "战俘") && !card.transformed) {
         applyTransformedDormantUnit(card, transformedDormantUnitToken(card, row), row);
         count += 1;
       }
     });
   });
-  addLog(state, `雪耻触发 ${count} 张蛰伏人物转化。`);
-  if (count) appendLastBattleActionEffect(state, "雪耻", `蛰伏x${count}`);
+  const scope = Number.isInteger(targetPlayerIndex) ? "己方" : "双方";
+  addLog(state, `复国触发${scope} ${count} 张战俘人物转化。`);
+  if (count) appendLastBattleActionEffect(state, "复国", `战俘x${count}`);
 }
 
 function removeFromBoardToDiscard(state, playerIndex, row, uid) {
@@ -1975,11 +2044,11 @@ function bestDormantUnitRow(state, playerIndex) {
 }
 
 function countDormantUnits(state, playerIndex, row) {
-  return state.players[playerIndex].board[row].filter(card => hasAbility(card, "蛰伏") && !card.transformed).length;
+  return state.players[playerIndex].board[row].filter(card => hasAbility(card, "战俘") && !card.transformed).length;
 }
 
-// ---- 蛰伏体系出牌时机 ----
-// 正确打法：先把蛰伏人物铺到同一阵线，再打雪耻一次性把该线所有蛰伏转化。
+// ---- 战俘体系出牌时机 ----
+// 正确打法：先把战俘人物铺到同一阵线，再打复国一次性把该线所有战俘转化。
 // 转化后的形态由所在阵线决定（朝堂 -> 越相文种 8 战力 + 同盟；疆场 -> 越王勾践 14 战力 + 传世 + 振势），
 // 而同盟会让同名并列的每张战力乘以张数，所以「等齐再转化」的收益远高于逐张转化。
 
@@ -1997,10 +2066,10 @@ function cardCanEnterRow(card, row) {
   return !rows.length || rows.includes(row);
 }
 
-// 打出蛰伏人物的额外收益：只有在己方还持有（或牌库仍有）转化器时才成立。
+// 打出战俘人物的额外收益：只有在己方还持有（或牌库仍有）转化器时才成立。
 function dormantSetupBonus(state, playerIndex, action, S) {
   const card = action.card;
-  if (!card || !hasAbility(card, "蛰伏")) return 0;
+  if (!card || !hasAbility(card, "战俘")) return 0;
   const setupWeight = S ? S.dormantSetupWeight : ADVANCED_AI.dormantSetupWeight;
   if (!setupWeight) return 0;
   const player = state.players[playerIndex];
@@ -2008,18 +2077,18 @@ function dormantSetupBonus(state, playerIndex, action, S) {
   const converterInHand = player.hand.some(item => item.uid !== card.uid && isAwakening(item));
   const converterInDeck = (player.deck || []).some(item => isAwakening(item));
   if (!converterInHand && !converterInDeck) return 0;
-  // 转化时该线同名蛰伏的预期张数：场上已有 + 本张 + 手牌里还能落到该线的同名蛰伏
+  // 转化时该线同名战俘的预期张数：场上已有 + 本张 + 手牌里还能落到该线的同名战俘
   const sameNameInHand = player.hand.filter(item => item.uid !== card.uid
-    && hasAbility(item, "蛰伏") && item.name === card.name && cardCanEnterRow(item, row)).length;
+    && hasAbility(item, "战俘") && item.name === card.name && cardCanEnterRow(item, row)).length;
   const onBoard = state.players[playerIndex].board[row]
-    .filter(item => hasAbility(item, "蛰伏") && !item.transformed && item.name === card.name).length;
+    .filter(item => hasAbility(item, "战俘") && !item.transformed && item.name === card.name).length;
   const expectedCount = onBoard + 1 + sameNameInHand;
   const delta = Math.max(0, dormantTransformedPower(card, row, expectedCount) - (card.strength || 0));
   const weight = converterInHand ? setupWeight : setupWeight * ADVANCED_AI.dormantSetupDeckDiscount;
   return delta * weight;
 }
 
-// 打出雪耻（卧薪尝胆 / 范蠡）的时机调整：空转要重扣，手上还有能一起转化的蛰伏则应再等一等。
+// 打出复国（卧薪尝胆 / 范蠡）的时机调整：空转要重扣，手上还有能一起转化的战俘则应再等一等。
 function awakeningTimingAdjust(state, playerIndex, action, S) {
   const card = action.card;
   if (!card || !isAwakening(card)) return 0;
@@ -2030,15 +2099,15 @@ function awakeningTimingAdjust(state, playerIndex, action, S) {
   const row = action.row || rowForCard(state, playerIndex, card) || "疆场";
   const nowCount = countDormantUnits(state, playerIndex, row);
   const handDormant = player.hand.filter(item => item.uid !== card.uid
-    && hasAbility(item, "蛰伏") && cardCanEnterRow(item, row)).length;
-  const deckDormant = (player.deck || []).filter(item => hasAbility(item, "蛰伏") && cardCanEnterRow(item, row)).length;
+    && hasAbility(item, "战俘") && cardCanEnterRow(item, row)).length;
+  const deckDormant = (player.deck || []).filter(item => hasAbility(item, "战俘") && cardCanEnterRow(item, row)).length;
   if (!nowCount) {
-    // 本次转化不到任何蛰伏：手上就握着蛰伏时必须先铺场；只有牌库里还有时按折扣扣分，
-    // 避免因为「牌库理论上还有蛰伏」而一直憋着转化器，最后手牌打空被迫空转。
+    // 本次转化不到任何战俘：手上就握着战俘时必须先铺场；只有牌库里还有时按折扣扣分，
+    // 避免因为「牌库理论上还有战俘」而一直憋着转化器，最后手牌打空被迫空转。
     if (handDormant > 0) return -wastePenalty;
     return deckDormant > 0 ? -wastePenalty * ADVANCED_AI.dormantSetupDeckDiscount : 0;
   }
-  // 手上还握着能落到同一线的蛰伏：等它们上场后一次性转化收益更高
+  // 手上还握着能落到同一线的战俘：等它们上场后一次性转化收益更高
   return -Math.min(wastePenalty, handDormant * waitPenalty);
 }
 
@@ -2051,8 +2120,8 @@ function bestRecallTarget(state, playerIndex) {
   return recallTargets(state, playerIndex)[0] || null;
 }
 
-// 估算召唤类能力带来的额外收益：岳飞「召唤岳家军」会把己方手牌与牌库中所有的
-// 「岳家军」部署到疆场，并触发同盟翻倍。把这些将被召唤卡牌的净
+// 估算岳飞「集贤」带来的额外收益：该能力会把己方手牌与牌库中所有的
+// 「岳家军」部署到疆场，并触发同盟翻倍。把这些将被打出卡牌的净
 // 增量战力计入本次出牌收益，让自动出牌把「岳飞 + 岳家军」当作一个整体来决策
 // （即岳飞与岳家军绑定，优先一起打出，而非先零散打出岳家军）。
 function playerValuePool(state, playerIndex) {
@@ -2091,9 +2160,9 @@ function recruitPowerBonus(state, playerIndex, card) {
 }
 
 function summonPowerBonus(state, playerIndex, card) {
-  if (!hasAbility(card, "召唤岳家军")) {
-    if (hasAbility(card, "召唤无当飞军")) return 19;
-    if (hasAbility(card, "召唤东吴水师")) return 12;
+  if (!isYueFeiRecruit(card)) {
+    if (hasAbility(card, "召唤风火轮")) return 19;
+    if (hasAbility(card, "召唤哮天犬")) return 12;
     return 0;
   }
   const player = state.players[playerIndex];
@@ -2284,7 +2353,7 @@ function futureCardValue(state, playerIndex, card) {
   if (hasAbility(card, "济世")) value += discardHasAbility(state.players[playerIndex], "出使") ? 8 : 2;
   if (isHighestPowerRemoval(card) || card.category === "situation" || isHorn(card)) value += state.round < 3 ? 5 : 1;
   if (isHeroCard(card) && state.round < 3) value += 5;
-  if (hasAbility(card, "集贤") || hasAbility(card, "召唤岳家军")) value += state.round < 3 ? 4 : 1;
+  if (hasAbility(card, "集贤")) value += state.round < 3 ? 4 : 1;
   return value;
 }
 
@@ -2317,9 +2386,10 @@ function visibleCounterRisk(state, playerIndex, action, stats) {
   return risk;
 }
 
-function advancedFutureWeight(state, playerIndex) {
-  if (state.round >= 3) return ADVANCED_AI.finalFutureWeight;
-  return mustContestRound(state, playerIndex) ? ADVANCED_AI.mustWinFutureWeight : ADVANCED_AI.futureResourceWeight;
+function advancedFutureWeight(state, playerIndex, S) {
+  const W = S || ADVANCED_AI;
+  if (state.round >= 3) return W.finalFutureWeight;
+  return mustContestRound(state, playerIndex) ? W.mustWinFutureWeight : W.futureResourceWeight;
 }
 
 // 请辞价值按回合缩放：决胜局(第3局)回收关键牌收益更高，首局回合多可后续操作略降。
@@ -2380,16 +2450,29 @@ function leaderActionValue(state, playerIndex, stats) {
 function resolveScoreStrategy(cfg) {
   const s = (cfg && cfg.strategy) || {};
   const num = (v, d) => (typeof v === "number" ? v : d);
+  const tempoHoldPenalty = num(s.tempoHoldPenalty, 8);
   return {
     handDeltaWeight: num(s.handDeltaWeight, ADVANCED_AI.handDeltaWeight),
     finalScoreGainWeight: num(s.finalScoreGainWeight, ADVANCED_AI.finalScoreGainWeight),
     scoreGainWeight: num(s.scoreGainWeight, ADVANCED_AI.scoreGainWeight),
     envoyEarlyBonus: num(s.envoyEarlyBonus, 22),
     envoyLatePenalty: num(s.envoyLatePenalty, -16),
-    tempoHoldPenalty: num(s.tempoHoldPenalty, 8),
+    tempoHoldPenalty,
     awakeningWastePenalty: num(s.awakeningWastePenalty, ADVANCED_AI.awakeningWastePenalty),
     awakeningWaitPenalty: num(s.awakeningWaitPenalty, ADVANCED_AI.awakeningWaitPenalty),
     dormantSetupWeight: num(s.dormantSetupWeight, ADVANCED_AI.dormantSetupWeight),
+    // 以下几项此前只能改源码、无法被对比脚本注入，故一直没做过胜率扫描。
+    // 接入后scripts/bench-special-cards.js --strategy=key:value 可直接扫描，默认值与 ADVANCED_AI 一致。
+    futureResourceWeight: num(s.futureResourceWeight, ADVANCED_AI.futureResourceWeight),
+    mustWinFutureWeight: num(s.mustWinFutureWeight, ADVANCED_AI.mustWinFutureWeight),
+    finalFutureWeight: num(s.finalFutureWeight, ADVANCED_AI.finalFutureWeight),
+    futurePowerWeight: num(s.futurePowerWeight, ADVANCED_AI.futurePowerWeight),
+    securedRoundBonus: num(s.securedRoundBonus, ADVANCED_AI.securedRoundBonus),
+    highestPowerRemovalNetSwingNormal: num(s.highestPowerRemovalNetSwingNormal, ADVANCED_AI.highestPowerRemovalNetSwingNormal),
+    highestPowerRemovalNetSwingFinal: num(s.highestPowerRemovalNetSwingFinal, ADVANCED_AI.highestPowerRemovalNetSwingFinal),
+    situationNetSwing: num(s.situationNetSwing, ADVANCED_AI.situationNetSwing),
+    overkillAllowance: num(s.overkillAllowance, ADVANCED_AI.overkillAllowance),
+    overkillPenalty: num(s.overkillPenalty, ADVANCED_AI.overkillPenalty),
   };
 }
 
@@ -2404,41 +2487,49 @@ function scoreAiCandidateAdvanced(state, cfg, playerIndex, action) {
 
   const scoreGainWeight = state.round >= 3 ? S.finalScoreGainWeight : S.scoreGainWeight;
   let score = stats.gain * scoreGainWeight
-    - cost * advancedFutureWeight(state, playerIndex)
+    - cost * advancedFutureWeight(state, playerIndex, S)
     + stats.handDeltaGain * S.handDeltaWeight
-    + (knownFuturePower(stats.state, playerIndex) - knownFuturePower(state, playerIndex)) * 0.18
+    + (knownFuturePower(stats.state, playerIndex) - knownFuturePower(state, playerIndex)) * S.futurePowerWeight
     - visibleCounterRisk(state, playerIndex, action, stats);
 
-  if (mustContest && roundSecuredByDiff(state, playerIndex, stats.diffAfter)) score += 24;
+  if (mustContest && roundSecuredByDiff(state, playerIndex, stats.diffAfter)) score += S.securedRoundBonus;
   if (action.action === "leader") score += leaderActionValue(state, playerIndex, stats);
   const card = action.card;
   if (card && hasAbility(card, "出使")) score += state.round < 3 ? S.envoyEarlyBonus : S.envoyLatePenalty;
   if (card && isRecall(card)) score += recallTargetValue(state, playerIndex, action.recallTargetUid);
   if (card && hasAbility(card, "济世")) score += revivalTargetValue(state, playerIndex, action.revivalTargetUid);
-  // 蛰伏体系：先铺蛰伏、后打雪耻一次性转化
-  if (card && hasAbility(card, "蛰伏")) score += dormantSetupBonus(state, playerIndex, action, S);
+  // 战俘体系：先铺战俘、后打复国一次性转化
+  if (card && hasAbility(card, "战俘")) score += dormantSetupBonus(state, playerIndex, action, S);
   if (card && isAwakening(card)) score += awakeningTimingAdjust(state, playerIndex, action, S);
 
   const controlGain = card ? estimatePlayGain(state, playerIndex, card) : stats.gain;
   if (card && isHighestPowerRemoval(card)) {
-    const threshold = state.round >= 3 || mustContest ? ADVANCED_AI.highestPowerRemovalNetSwingFinal : ADVANCED_AI.highestPowerRemovalNetSwingNormal;
+    const threshold = state.round >= 3 || mustContest ? S.highestPowerRemovalNetSwingFinal : S.highestPowerRemovalNetSwingNormal;
     score += controlGain >= threshold ? 12 + controlGain : -18;
   }
-  if (card && card.category === "situation" && !isSituationClear(card)) score += controlGain >= ADVANCED_AI.situationNetSwing ? 10 + controlGain : -14;
-  if (card && isSituationClear(card)) score += controlGain >= ADVANCED_AI.situationNetSwing ? 8 : -12;
-  if (card && (isHorn(card) || isHeroCard(card) || hasAbility(card, "集贤") || hasAbility(card, "召唤岳家军")) && state.round < 3 && !mustContest && !opponent.passed) score -= S.tempoHoldPenalty;
+  if (card && card.category === "situation" && !isSituationClear(card)) score += controlGain >= S.situationNetSwing ? 10 + controlGain : -14;
+  if (card && isSituationClear(card)) score += controlGain >= S.situationNetSwing ? 8 : -12;
+  // 集贤是从牌库拉同名牌，打得越晚关联件越可能已被抽到手上而拉不出来（实测百家争鸣整场打出集贤
+  // 4.55 次只额外拉上场 3.68 张，3 张一组的理想值是 2 张/次，效率仅四成），因此曾试着把集贤从这条
+  // 「压手不打」惩罚里单列出来减免。百家镜像各 300 场：recruitTempoPenalty=0 → 51.49%、=4 → 51.26%，
+  // 均在噪声内，故仍与传世/鼓舞共用 tempoHoldPenalty。
+  if (card && (isHorn(card) || isHeroCard(card) || hasAbility(card, "集贤")) && state.round < 3 && !mustContest && !opponent.passed) score -= S.tempoHoldPenalty;
   if (!mustContest && state.round < 3 && diff < -10 && cost > 12 && stats.diffAfter <= 0) score -= 14;
   if (!mustContest && state.round < 3 && diff > 0 && stats.diffAfter > 18) score -= Math.min(16, stats.diffAfter - 18);
 
   // 昆特牌攻略「不做无意义反超」：对手尚未停牌时，把分差堆得远超取胜所需只是白扔卡牌，
   // 因此对超出 overkillAllowance 的部分扣分，鼓励把余力留到后续小局。
-  if (card && !opponent.passed && stats.diffAfter > ADVANCED_AI.overkillAllowance) {
-    score -= Math.min(ADVANCED_AI.overkillCap, (stats.diffAfter - ADVANCED_AI.overkillAllowance) * ADVANCED_AI.overkillPenalty);
+  if (card && !opponent.passed && stats.diffAfter > S.overkillAllowance) {
+    score -= Math.min(ADVANCED_AI.overkillCap, (stats.diffAfter - S.overkillAllowance) * S.overkillPenalty);
   }
 
   return { ...action, gain: stats.gain, score, cost, stats };
 }
 
+// 这组线性系数看着像未调过的 magic number，但「把它换成显式卡差账（我锁定本局要几张 vs
+// 对手夺回要几张）」已验证是重度负向（35~48%，两种估计器、多档容差、只让第 1 局都试过），
+// 反方向「更少停牌」也无效（50.2~50.8%）。根因是本项目小局之间不补牌，
+// 详见 searchBestWinningSequenceDocumentV2 上方的完整结论。
 function evaluateAdvancedPass(state, playerIndex, tuning) {
   const player = state.players[playerIndex];
   const opponent = state.players[otherIndex(playerIndex)];
@@ -2538,6 +2629,14 @@ function leaderActionsDocumentV2(state, playerIndex) {
   return [{ action: "leader" }];
 }
 
+function isNegativeHighestPowerRemovalAction(state, playerIndex, action) {
+  const card = action?.card;
+  return !!card
+    && card.category === "stratagem"
+    && isHighestPowerRemoval(card)
+    && estimatePlayGain(state, playerIndex, card) < 0;
+}
+
 function cardActionsDocumentV2(state, playerIndex, card) {
   const rows = choiceRowsForCard(state, playerIndex, card);
   const targetRows = rows.length ? rows : [rowForCard(state, playerIndex, card) || null];
@@ -2571,20 +2670,23 @@ function generateLegalAiActionsDocumentV2(state, playerIndex, options = {}) {
   if (!state || state.over || state.pending || state.roundTransition || state.current !== playerIndex || state.players[playerIndex]?.passed) return [];
   const actions = state.players[playerIndex].hand.flatMap(card => cardActionsDocumentV2(state, playerIndex, card));
   actions.push(...leaderActionsDocumentV2(state, playerIndex));
+  if (options.cfg?.strategy?.blockNegativeHighestPowerRemoval) {
+    actions.splice(0, actions.length, ...actions.filter(action => !isNegativeHighestPowerRemovalAction(state, playerIndex, action)));
+  }
   if (options.includePass !== false) actions.push({ action: "pass" });
   return actions;
 }
 
 function recruitFutureConsumption(state, playerIndex, card) {
-  if (!hasAbility(card, "集贤") && !hasAbility(card, "召唤岳家军")) return 0;
+  if (!hasAbility(card, "集贤")) return 0;
   const player = state.players[playerIndex];
   const related = item => {
-    if (hasAbility(card, "召唤岳家军")) return item.name === "岳家军";
+    if (isYueFeiRecruit(card)) return item.name === "岳家军";
     if (card.recruitTarget) return item.name === card.recruitTarget;
     if (card.recruitGroupDisplayName) return item.recruitGroupDisplayName === card.recruitGroupDisplayName;
     return item.name === card.name;
   };
-  const sources = hasAbility(card, "召唤岳家军") ? player.hand.concat(player.deck) : player.deck;
+  const sources = isYueFeiRecruit(card) ? player.hand.concat(player.deck) : player.deck;
   return sources
     .filter(item => item.uid !== card.uid && related(item))
     .reduce((sum, item) => sum + futureCardValue(state, playerIndex, item), 0);
@@ -2679,6 +2781,32 @@ function documentWinningResourceScore(state, playerIndex, resourceCost, actions)
   return knownFuturePower(state, playerIndex) - resourceCost - Math.max(0, diff) * 0.15 - actions.length * 0.1;
 }
 
+// 【已验证无效，不要再尝试】把「卡差经济学」放进停牌/小局取舍（2026-08-06）
+// 思路：现行停牌用一组线性 magic number（-28 + handDelta*3 再叠几条 +28/+18/+26），不回答
+// 昆特牌的核心问题「我还要花几张牌锁定这一局 vs 对手要花几张牌就能夺回」。于是实现了显式卡差账：
+// 我方所需张数用两种估计器都试过（贪心逐张累加 estimatePlayGain；以及用最小资源计划搜索精确求解），
+// 对手所需张数按其本局已投入牌的实测均值（替代写死的 expectedCatchPerCard）折算。
+// 全阵营镜像各300 场（种子 20260806，A/A 校验 50.00% 严格对称）：
+//   贪心估计 slack=0 → 35.57%（z=-4.98）｜slack=1 → 44.15%｜slack=2 → 48.32%
+//   搜索精确估计 slack=0 → 35.69%｜slack=1 → 34.90%
+//   只让第1 局：贪心 36.24%｜搜索 36.36%
+// 换估计器、缩小适用范围都没救，说明是概念不成立而非估计有偏。反方向（更少停牌）同样无效：
+//   minCardsToCatch:6（几乎禁用领先停牌）→ 50.84%｜expectedCatchPerCard:30 → 50.17%
+//
+// 根本原因是本项目与昆特牌的规则差异：**小局之间不补牌**（cleanupRound 只清场，
+// 手牌从第 1 局一直延续到第 3 局，只有出使能额外抽牌）。昆特牌第 2/3 局开局各补 2/1 张，
+// 「让掉一局换手牌」才有乘数效应；这里总资源在整场固定，让局只换来一堆没有乘数的存牌，
+// 却先付掉一点确定的士气，而士气只有 2 点——输掉一局后下一局立刻变成 mustContest。
+// 因此本规则集下的正解就是「能赢的小局都要争」，也就是现行行为。
+// 这条同时解释了为什么换牌天花板很低、以及百家争鸣「手牌打空还落后」不可能靠停牌策略修好。
+//
+// 【已验证无效】把第 1~2 局也纳入最小资源计划搜索（2026-08-06）
+// 该搜索本质是把「自己的多步动作」连成序列，只有对手已停牌时这种连续序列才真实存在；
+// 对手未停牌时落子后轮次交给对手，子节点会被下面的 turn 检查直接丢弃（实测开关命中 0%）。
+// 让搜索假设「对手这一轮不落子」后确实能生效（改变 25.4% 的决策），但胜率反而下降：
+//   争局(非必争)用计划首步 → 43.99%（z=-2.05）｜只在必争局用 → 48.31%｜两处都用 → 46.10%
+// 原因：计划优化的是「假设对手不落子时锁定本局的最小资源」，于是挑最便宜的牌挤牙膏、
+// 被对手抢走节奏。它的成立前提就是「对手已停牌」，所以现有的 opponent.passed 门槛是正确的。
 function searchBestWinningSequenceDocumentV2(state, cfg, playerIndex) {
   const queue = [{ state: cloneAiState(state), actions: [], resourceCost: 0 }];
   const visited = new Map();
@@ -2701,7 +2829,7 @@ function searchBestWinningSequenceDocumentV2(state, cfg, playerIndex) {
     }
     if (node.actions.length >= ADVANCED_AI.knownStateSearchDepth) continue;
     if (expanded >= ADVANCED_AI.maxSearchNodes) continue;
-    let actions = generateLegalAiActionsDocumentV2(node.state, playerIndex, { includePass: false });
+    let actions = generateLegalAiActionsDocumentV2(node.state, playerIndex, { includePass: false, cfg });
     if (secured) actions = actions.filter(action => action.card && isRecall(action.card));
     const scored = actions
       .map(action => scoreDocumentActionV2(node.state, cfg, playerIndex, action))
@@ -2789,7 +2917,7 @@ function analyzeDocumentTurnV2(state, cfg, playerIndex = 1) {
     };
   }
 
-  const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false })
+  const candidates = generateLegalAiActionsDocumentV2(state, playerIndex, { includePass: false, cfg })
     .map(action => scoreDocumentActionV2(state, cfg, playerIndex, action))
     .filter(action => action.stats?.ok)
     .sort((a, b) => b.score - a.score || b.gain - a.gain);

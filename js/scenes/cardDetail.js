@@ -1,6 +1,54 @@
 const { fillRoundRect, wrapText, short, drawCardImage, text } = require("../ui/canvas");
 const { cardSummary, displayName, abilityDescriptions, factionPerkSummary, isHeroCard, isPassiveLeaderCard } = require("../core/cards");
 
+const EMPHASIS_SPLIT_RE = /(双方|所有|全部|非传世|牌库|弃牌堆|手牌|并列|当前战力最高|传世|同盟|振势|鼓舞|奇策|请辞|济世|复国|战俘|召唤|\d+\s*张|\d+\s*战力|\d+\s*点|\+\s*\d+|≥\s*\d+)/g;
+const EMPHASIS_TOKEN_RE = /^(双方|所有|全部|非传世|牌库|弃牌堆|手牌|并列|当前战力最高|传世|同盟|振势|鼓舞|奇策|请辞|济世|复国|战俘|召唤|\d+\s*张|\d+\s*战力|\d+\s*点|\+\s*\d+|≥\s*\d+)$/;
+
+function detailTextTokens(content) {
+  const values = String(content || "").split(EMPHASIS_SPLIT_RE).filter(Boolean);
+  return values.map((value, index) => ({
+    value,
+    title: /^[^：:\n]{1,8}$/.test(value) && /^[：:]/.test(values[index + 1] || ""),
+    emphasis: EMPHASIS_TOKEN_RE.test(value)
+  }));
+}
+
+function drawRichEffectText(ctx, content, x, y, maxWidth, lineHeight, maxLines) {
+  const lines = [];
+  let line = [];
+  let width = 0;
+  const pushLine = () => {
+    if (line.length) lines.push(line);
+    line = [];
+    width = 0;
+  };
+  detailTextTokens(content).forEach(token => {
+    Array.from(token.value).forEach(char => {
+      if (char === "\n") {
+        pushLine();
+        return;
+      }
+      const bold = token.title || token.emphasis;
+      ctx.font = `${bold ? "700" : "500"} 12px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+      const charWidth = ctx.measureText(char).width;
+      if (width + charWidth > maxWidth && line.length) pushLine();
+      if (lines.length >= maxLines) return;
+      line.push({ char, width: charWidth, title: token.title, emphasis: token.emphasis, bold });
+      width += charWidth;
+    });
+  });
+  if (lines.length < maxLines) pushLine();
+  lines.slice(0, maxLines).forEach((items, lineIndex) => {
+    let cursorX = x;
+    items.forEach(item => {
+      ctx.font = `${item.bold ? "700" : "500"} 12px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+      ctx.fillStyle = item.title ? "#f1d58a" : (item.emphasis ? "#ff8b7d" : "#fff7d8");
+      ctx.fillText(item.char, cursorX, y + lineIndex * lineHeight);
+      cursorX += item.width;
+    });
+  });
+}
+
 function wrappedHeight(ctx, content, maxWidth, lineHeight, maxLines, size) {
   const value = String(content || "");
   if (!value) return 0;
@@ -40,9 +88,12 @@ function isLeaderCard(card) {
   return card?.category === "leader" || card?.category === "主将";
 }
 
-function effectSections(card) {
+function effectSections(card, options = {}) {
   const leader = isLeaderCard(card);
-  const effects = abilityDescriptions(card).map(cleanEffectText).filter(Boolean);
+  const effects = abilityDescriptions(card, {
+    deck: options.deck,
+    showRecruitDeckCount: !!options.showRecruitDeckCount
+  }).map(cleanEffectText).filter(Boolean);
   if (!effects.length) {
     const fallback = cleanEffectText(card?.abilityText || (leader || card?.category === "situation" || card?.category === "stratagem" ? cardSummary(card) : ""));
     if (fallback) effects.push(fallback);
@@ -83,7 +134,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
   const panelX = (view.width - panelW) / 2;
 
   const contentW = panelW - 32;
-  const sections = effectSections(card).concat(options.extraSections || []);
+  const sections = effectSections(card, options).concat(options.extraSections || []);
   const sectionW = contentW;
   let sectionsH = 0;
   sections.forEach(item => {
@@ -277,7 +328,7 @@ function drawDetail(ctx, view, actions, card, options = {}) {
     const boxH = bodyH + 30;
     fillRoundRect(ctx, panelX + 16, detailY, sectionW, boxH, 10, "rgba(43, 34, 24, 0.92)", "#b98b48");
     text(ctx, item.title, panelX + 28, detailY + 15, 12, item.color);
-    wrapText(ctx, item.content, panelX + 28, detailY + 34, sectionW - 24, 17, item.lines, 12, "#fff7d8");
+    drawRichEffectText(ctx, item.content, panelX + 28, detailY + 34, sectionW - 24, 17, item.lines);
     detailY += boxH + 8;
   });
 

@@ -5,6 +5,7 @@ const battle = require("../shared/core/battle");
 const cards = require("../shared/core/cards");
 
 const HARD = { blunder: 0, concede: true, valueNoise: 0, minLeadToStop: 1 };
+const HARD_BLOCK_NEGATIVE_REMOVAL = { ...HARD, strategy: { blockNegativeHighestPowerRemoval: true } };
 let uidSeq = 0;
 
 function fakeUnit(name, strength, owner, options = {}) {
@@ -113,6 +114,27 @@ function decide(state, playerIndex = 0) {
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
+test("纵横权谋人物槽位映射", () => {
+  const expected = [
+    ["zhangyu-0023", "诸葛亮", "hero", "疆场", 10, ["传世"]],
+    ["zhangyu-0055", "周瑜", "hero", "朝堂", 10, ["传世"]],
+    ["zhangyu-0052", "韩信", "unit", "疆场", 6, []],
+    ["zhangyu-0049", "李靖", "unit", "朝堂", 6, []],
+    ["zhangyu-0252", "李斯", "unit", "疆场", 4, []],
+    ["zhangyu-0073", "贾诩", "unit", "朝堂", 5, []]
+  ];
+
+  expected.forEach(([id, name, category, row, strength, abilities]) => {
+    const card = cards.allCards().find((item) => item.id === id);
+    assert.ok(card, `找不到卡牌：${id}`);
+    assert.equal(card.name, name);
+    assert.equal(card.category, category);
+    assert.deepEqual(card.row, [row]);
+    assert.equal(card.strength, strength);
+    assert.deepEqual(card.abilities, abilities);
+  });
+});
+
 test("用例0 普通阵营平分双方失去军心", () => {
   const state = blankState();
   toHand(state, 0, fakeUnit("手牌甲", 1, 0));
@@ -182,6 +204,20 @@ test("用例5 奇策计算己方自伤", () => {
   toBoard(state, 0, "疆场", fakeUnit("己10甲", 10, 0), fakeUnit("己10乙", 10, 0));
   toBoard(state, 1, "疆场", fakeUnit("敌10", 10, 1));
   assert.equal(battle.estimatePlayGain(state, 0, catalogCard("釜底抽薪", 0)), -10);
+});
+
+test("用例5a 净负收益的釜底抽薪不应作为系统出牌", () => {
+  const state = blankState();
+  const removal = catalogCard("釜底抽薪", 0);
+  toBoard(state, 0, "疆场", fakeUnit("己方最高", 12, 0));
+  toBoard(state, 1, "疆场", fakeUnit("对方较低", 7, 1));
+  toHand(state, 0, removal);
+  toHand(state, 1, fakeUnit("对手手牌", 1, 1));
+  state.players[1].roundsWon = 1;
+  state.current = 0;
+
+  assert.equal(battle.estimatePlayGain(state, 0, removal), -12);
+  assert.equal(battle.aiDecideTurn(state, HARD_BLOCK_NEGATIVE_REMOVAL, 0).action, "pass");
 });
 
 test("用例6 时局按双方净损失估值", () => {
@@ -277,6 +313,23 @@ test("用例14 普通集贤只从已验证牌库来源拉取", () => {
   assert.ok(state.players[0].discard.some(card => card.uid === discardCopy.uid));
 });
 
+test("用例14a 岳飞集贤从手牌和牌库部署岳家军", () => {
+  const state = blankState();
+  const yueFei = catalogCard("岳飞", 0);
+  const handYueFamily = catalogCard("岳家军", 0);
+  const deckYueFamily = catalogCard("岳家军", 0);
+  toHand(state, 0, yueFei, handYueFamily);
+  toDeck(state, 0, deckYueFamily);
+  toHand(state, 1, fakeUnit("对手手牌", 1, 1));
+  battle.playCard(state, yueFei.uid, "疆场");
+  assert.equal(state.players[0].hand.some(card => card.uid === handYueFamily.uid), false);
+  assert.equal(state.players[0].deck.some(card => card.uid === deckYueFamily.uid), false);
+  assert.ok(state.players[0].board["疆场"].some(card => card.uid === handYueFamily.uid));
+  assert.ok(state.players[0].board["疆场"].some(card => card.uid === deckYueFamily.uid));
+  const yueFeiHistory = state.playedHistory.find(entry => entry.name === "岳飞");
+  assert.match(yueFeiHistory?.description || "", /集贤：岳家军x2/);
+});
+
 test("用例15 济世连锁与空牌库抽牌", () => {
   const state = blankState();
   const first = catalogCard("张仲景", 0);
@@ -355,7 +408,7 @@ test("用例21 出使估值随战力升高而降低", () => {
   assert.equal(cards.cardValue(fakeUnit("高战力出使", 9, 0, { abilities: ["出使"] })), 11);
 });
 
-test("用例22 请辞优先回收可二次济世的非传世人物", () => {
+test("用例23 请辞优先回收可二次济世的非传世人物", () => {
   const state = blankState();
   const revival = fakeUnit("非传世济世", 1, 0, { abilities: ["济世"] });
   const body = fakeUnit("高点白板", 12, 0);
@@ -386,10 +439,10 @@ test("用例24 同盟估值随同名数量和战力动态增加", () => {
   assert.ok(cards.cardValue(high, { pool: [high, fakeUnit("高同盟", 8, 0, { abilities: ["同盟"] })] }) > cards.cardValue(low, { pool: [low, fakeUnit("低同盟", 2, 0, { abilities: ["同盟"] })] }));
 });
 
-test("用例25 集贤动态增值，召唤岳家军固定加分", () => {
+test("用例25 集贤动态增值，岳飞集贤固定加分", () => {
   const recruit = fakeUnit("集贤甲", 3, 0, { abilities: ["集贤"] });
   const mate = fakeUnit("集贤甲", 3, 0, { abilities: ["集贤"] });
-  const yueFei = fakeUnit("岳飞", 10, 0, { abilities: ["传世", "召唤岳家军"] });
+  const yueFei = fakeUnit("岳飞", 10, 0, { abilities: ["传世", "集贤"] });
   const shield = fakeUnit("岳家军", 6, 0, { abilities: ["同盟"] });
   assert.ok(cards.cardValue(recruit, { pool: [recruit, mate] }) > cards.cardValue(recruit));
   assert.equal(cards.cardValue(yueFei, { pool: [yueFei, shield, { ...shield, id: "shield-2" }] }), cards.cardValue(yueFei, { pool: [yueFei] }));
@@ -461,7 +514,7 @@ test("用例28 秦昭襄王被动生效：随机济世且不可主动发动", ()
   assert.ok(state.players[0].discard.some(card => card.uid === high.uid), "不应固定复归最高价值弃牌");
 });
 
-test("用例29 范蠡不会被雪耻清废策略选到非法阵线", () => {
+test("用例29 范蠡不会被复国清废策略选到非法阵线", () => {
   const state = blankState(["开国群雄", "遗策复兴"]);
   const fanLi = catalogCard("范蠡", 1);
   toBoard(state, 0, "疆场", fakeUnit("玩家领先", 49, 0));
@@ -474,7 +527,7 @@ test("用例29 范蠡不会被雪耻清废策略选到非法阵线", () => {
   assert.ok(state.players[1].board["朝堂"].some(card => card.uid === fanLi.uid), "范蠡应合法打到朝堂");
 });
 
-test("用例30 雪耻清废始终选择合法作用线", () => {
+test("用例30 复国清废始终选择合法作用线", () => {
   const state = blankState(["开国群雄", "遗策复兴"]);
   const awakening = catalogCard("卧薪尝胆", 1);
   toBoard(state, 1, "文脉", fakeUnit("系统文脉", 26, 1));
@@ -487,8 +540,8 @@ test("用例30 雪耻清废始终选择合法作用线", () => {
 
 test("用例31 两种离场召唤均立即生效且允许重复触发", () => {
   [
-    { sourceName: "周瑜", sourceRow: "朝堂", tokenName: "东吴水师" },
-    { sourceName: "诸葛亮", sourceRow: "疆场", tokenName: "无当飞军" }
+    { sourceName: "杨戬", sourceRow: "朝堂", tokenName: "哮天犬" },
+    { sourceName: "哪吒", sourceRow: "疆场", tokenName: "风火轮" }
   ].forEach(({ sourceName, sourceRow, tokenName }) => {
     const state = blankState();
     const source = catalogCard(sourceName, 0);
@@ -513,8 +566,8 @@ test("用例31 两种离场召唤均立即生效且允许重复触发", () => {
 
 test("用例32 两种召唤源因小局清场离场时均在下一局入场", () => {
   const state = blankState();
-  toBoard(state, 0, "朝堂", catalogCard("周瑜", 0));
-  toBoard(state, 0, "疆场", catalogCard("诸葛亮", 0));
+  toBoard(state, 0, "朝堂", catalogCard("杨戬", 0));
+  toBoard(state, 0, "疆场", catalogCard("哪吒", 0));
   toHand(state, 0, fakeUnit("玩家手牌", 1, 0));
   toHand(state, 1, fakeUnit("对手手牌", 1, 1));
 
@@ -522,8 +575,8 @@ test("用例32 两种召唤源因小局清场离场时均在下一局入场", ()
   battle.pass(state);
   battle.continueRoundTransition(state);
 
-  assert.ok(state.players[0].board["疆场"].some(card => card.name === "东吴水师"));
-  assert.ok(state.players[0].board["疆场"].some(card => card.name === "无当飞军"));
+  assert.ok(state.players[0].board["疆场"].some(card => card.name === "哮天犬"));
+  assert.ok(state.players[0].board["疆场"].some(card => card.name === "风火轮"));
 });
 
 const filter = process.argv.find(arg => arg.startsWith("--filter="))?.slice(9) || "";

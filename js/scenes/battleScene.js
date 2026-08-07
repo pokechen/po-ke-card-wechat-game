@@ -213,7 +213,7 @@ function drawRows(ctx, view, actions, state, ui, topOffset, bottomLimit) {
     const baseY = isEnemySide ? top : top + (rowH + gap) * 3 + sideGap;
     const header = drawLeaderHeader(ctx, view, actions, state, player, playerIndex, baseY - 16, ui);
     if (isEnemySide) drawRoundResultMarkers(ctx, view, state, header);
-    else drawSharedDiscardPileButton(ctx, view, actions, state, header);
+    else drawSharedDiscardPileButton(ctx, view, actions, state, ui, header);
     const rowOrder = isEnemySide ? ROWS.slice().reverse() : ROWS;
     rowOrder.forEach((row, index) => {
       const y = baseY + index * (rowH + gap);
@@ -661,7 +661,7 @@ function powerChainLine(origin, cardStrength, current) {
 
 function transformLine(card) {
   if (!card?.transformed || !card.transformedFrom) return "";
-  return `蛰伏：由「${card.transformedFrom}」经雪耻转化为「${card.displayName || card.name}」。`;
+  return `战俘：由「${card.transformedFrom}」经复国转化为「${card.displayName || card.name}」。`;
 }
 
 function describeBoardCardEffect(state, context) {
@@ -714,7 +714,7 @@ function describeBoardCardEffect(state, context) {
     const hornSource = hornCards.length ? `「${short(hornCards[0].name || hornCards[0].name || "鼓舞", 6)}」` : "已打出的鼓舞";
     lines.push(`鼓舞：${hornSource}影响${rowLabel}，战力翻倍。`);
   }
-  if (hasAbility(card, "出使") && envoyDoubleActive(state)) lines.push("主将：双方出使人物战力翻倍。");
+  if (hasAbility(card, "出使") && !isHeroCard(card) && envoyDoubleActive(state)) lines.push("主将：双方非传世出使人物战力翻倍。");
   return lines;
 }
 
@@ -858,13 +858,14 @@ function panelAfterHeader(view, header, preferredW) {
   return { x, y: header.y, w: Math.min(preferredW, availableW), h: header.h };
 }
 
-function drawSharedDiscardPileButton(ctx, view, actions, state, header) {
+function drawSharedDiscardPileButton(ctx, view, actions, state, ui, header) {
   const local = localPlayerIndex(state);
   const opponent = local === 0 ? 1 : 0;
   const localCount = state.players?.[local]?.discard?.length || 0;
   const opponentCount = state.players?.[opponent]?.discard?.length || 0;
   const rect = { id: "viewDiscardPile", playerIndex: local, ...panelAfterHeader(view, header, 112) };
   actions.push(rect);
+  ui.__guideDiscardPile = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
   fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 10, "rgba(255,250,240,0.94)", "#d3b982");
   drawFittedText(ctx, `双方弃牌 ${localCount}/${opponentCount}`, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1, rect.w - 12, 10, "#775c34");
 }
@@ -898,36 +899,28 @@ function compactEffectNames(namesText, count) {
   });
   const entries = Object.entries(counts);
   if (entries.length === 1 && count && entries[0][1] === 1) entries[0][1] = Number(count) || entries[0][1];
-  return entries.map(([name, amount]) => amount > 1 ? `${short(name, 10)}x${amount}` : short(name, 12)).join("、");
+  return entries.map(([name, amount]) => amount > 1 ? `${name}x${amount}` : name).join("、");
 }
 
 function normalizeBattleEffectSegment(segment) {
   const value = String(segment || "").replace(/^\s+|\s+$/g, "").replace(/。$/, "");
   if (!value) return "";
-  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|时局|奇策|侦察|取回|洗牌|调度|封锁|抽牌|召唤岳家军|雪耻|破釜|请辞|弃牌|主将技能)：(.+)/);
-  if (direct) {
-    const limit = direct[1] === "主将技能" ? 24 : (direct[1] === "奇策" ? 18 : (direct[1] === "弃牌" ? 24 : 16));
-    return `${direct[1]}：${short(direct[2].trim(), limit)}`;
-  }
+  const direct = value.match(/^(集贤|出使|济世|鼓舞|晴天|时局|奇策|侦察|取回|洗牌|调度|封锁|抽牌|复国|破釜|请辞|弃牌|主将技能)：(.+)/);
+  if (direct) return `${direct[1]}：${direct[2].trim()}`;
 
   const recruit = value.match(/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)\s*(\d+)\s*张[^：；。]*(?:：([^；。]+))?/);
   if (recruit) {
     const result = compactEffectNames(recruit[2] || "", Number(recruit[1])) || `额外打出x${recruit[1]}`;
     return `集贤：${result}`;
   }
-  const summon = value.match(/^召唤岳家军\s*(\d+)\s*张(?:：([^；。]+))?/);
-  if (summon) {
-    const result = compactEffectNames(summon[2] || "岳家军", Number(summon[1])) || `岳家军x${summon[1]}`;
-    return `召唤岳家军：${result}`;
-  }
   const highestPowerRemoval = value.match(/^奇策(?:销毁|摧毁)[:：]?(.+)/);
-  if (highestPowerRemoval) return `奇策：${short(highestPowerRemoval[1].trim(), 18)}`;
-  const dormantUnit = value.match(/^(?:蛰伏|奋起)转化\s*(\d+)\s*张/);
-  if (dormantUnit) return `雪耻：蛰伏x${dormantUnit[1]}`;
+  if (highestPowerRemoval) return `奇策：${highestPowerRemoval[1].trim()}`;
+  const dormantUnit = value.match(/^(?:战俘|奋起)转化\s*(\d+)\s*张/);
+  if (dormantUnit) return `复国：战俘x${dormantUnit[1]}`;
   const envoy = value.match(/^出使生效：.*抽\s*(\d+)\s*张牌/);
   if (envoy && Number(envoy[1]) > 0) return `出使：抽牌x${envoy[1]}`;
   const revival = value.match(/^举荐生效：.*复归「([^」]+)」/);
-  if (revival) return `济世：${short(revival[1], 12)}`;
+  if (revival) return `济世：${revival[1]}`;
   return "";
 }
 
@@ -935,7 +928,7 @@ function leaderSkillSummaryLabel(entry) {
   if (entry.actionType !== "leader") return "";
   const summary = String(entry.summary || "").replace(/。$/, "").trim();
   if (!summary || summary === "主将技能") return "";
-  return `主将技能：${short(summary, 24)}`;
+  return `主将技能：${summary}`;
 }
 
 function battlePlayEntryEffectLabels(entry) {
@@ -963,19 +956,24 @@ function battlePlayEntryLeaderLabel(entry) {
 
 function battlePlayEntryText(entry, state) {
   if (entry.type === "boardChange") return localizeBattleEntryText(String(entry.text || "场上卡牌变化").replace(/。$/, ""), entry, state);
-  const effectText = battlePlayEntryEffectText(entry);
   const leaderLabel = battlePlayEntryLeaderLabel(entry);
   if (entry.text) {
-    const value = String(entry.text)
+    const segments = String(entry.text)
       .replace(/^第\s*\d+\s*回合\s*[·：:]\s*/, "")
-      .replace(/；?(集贤|召唤岳家军|召唤|奇策|雪耻|破釜|蛰伏转化|奋起转化|出使生效|举荐生效|济世|请辞|鼓舞|时局|晴天|侦察|取回|洗牌|调度|封锁|抽牌|主将技能)[^；。]*。?/g, "")
-      .replace(/到(?:己方|对方)(?:疆场|朝堂|文脉)/g, "")
-      .replace(/\s*(?:→|->)\s*[^；。]*/g, "")
       .replace(/。$/, "")
-      .trim();
-    const suffix = leaderLabel && !effectText && !/主将技能被封锁|主将能力已被封锁/.test(value) ? leaderLabel : "";
-    return `${localizeBattleEntryText(value, entry, state)}${suffix}${effectText}`;
+      .split(/[；。]/)
+      .map(item => item.trim())
+      .filter(Boolean);
+    const mainText = segments.shift() || "对战行动";
+    const effects = segments.map(segment => normalizeBattleEffectSegment(segment) || segment);
+    String(entry.description || "").split(/[；。]/).map(item => item.trim()).filter(Boolean).forEach(segment => {
+      const effect = normalizeBattleEffectSegment(segment) || segment;
+      if (effect && !effects.includes(effect)) effects.push(effect);
+    });
+    const suffix = leaderLabel && !effects.length && !/主将技能被封锁|主将能力已被封锁/.test(mainText) ? leaderLabel : "";
+    return `${localizeBattleEntryText(mainText, entry, state)}${suffix}${effects.length ? ` → ${effects.join("；")}` : ""}`;
   }
+  const effectText = battlePlayEntryEffectText(entry);
   const verb = entry.actionType === "leader" ? "使用主将" : "打出";
   const actor = state?.mode === "online" && Number.isInteger(entry.playerIndex)
     ? playerIdentityLabel(state, entry.playerIndex, entry.playerName)
@@ -1003,44 +1001,8 @@ function mergeBattlePlayLogEntries(logs) {
   return entries;
 }
 
-function summonHistoryInfo(entry) {
-  const source = [entry.description, entry.text].filter(Boolean).map(String).join("；");
-  const modern = source.match(/召唤岳家军：([^；。]+)/);
-  if (modern) {
-    const names = modern[1].split("、").map(item => item.trim()).filter(Boolean);
-    const count = names.reduce((sum, name) => sum + (Number(name.match(/x(\d+)$/i)?.[1]) || 1), 0);
-    return {
-      count,
-      names: names.map(name => name.replace(/x\d+$/i, "").trim()).filter(Boolean)
-    };
-  }
-  const m = source.match(/召唤岳家军\s*(\d+)\s*张(?:：([^；。]+))?/);
-  if (!m) return null;
-  return {
-    count: Number(m[1]) || 0,
-    names: (m[2] || "岳家军").split("、").map(name => name.trim()).filter(Boolean)
-  };
-}
-
-function shouldHideSummonedBattleEntry(history, entry) {
-  if (!entry || entry.actionType !== "card" || !Number.isFinite(entry.seq)) return false;
-  const name = entry.name || "";
-  if (!name) return false;
-  return history.some(parent => {
-    if (!parent || !Number.isFinite(parent.seq) || parent.seq >= entry.seq) return false;
-    if (parent.playerIndex !== entry.playerIndex) return false;
-    const info = summonHistoryInfo(parent);
-    if (!info || entry.seq > parent.seq + info.count) return false;
-    return !info.names.length || info.names.includes(name);
-  });
-}
-
-function visibleBattlePlayHistory(history) {
-  return history.filter((entry) => !shouldHideSummonedBattleEntry(history, entry));
-}
-
 function battlePlayEntries(state) {
-  const history = Array.isArray(state.playedHistory) ? visibleBattlePlayHistory(state.playedHistory) : [];
+  const history = Array.isArray(state.playedHistory) ? state.playedHistory : [];
   if (history.length) return history;
   const playLogs = mergeBattlePlayLogEntries(state.logs || []);
   if (playLogs.length) return playLogs;
@@ -1163,6 +1125,7 @@ function drawDiscardPilePanel(ctx, view, actions, state, ui) {
   actions.push({ id: "discardPilePanel", x: panelX, y: panelY, w: panelW, h: panelH });
   fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d3b982");
   text(ctx, "弃牌堆", panelX + 18, panelY + 24, 18, "#2f2417");
+  text(ctx, "点击窗口外空白处关闭", panelX + panelW - 52, panelY + 24, 10, "#8a6a3c", "right");
   const close = { id: "closeDiscardPile", x: panelX + panelW - 42, y: panelY + 10, w: 28, h: 28 };
   actions.push(close);
   fillRoundRect(ctx, close.x, close.y, close.w, close.h, 14, "rgba(141,104,64,0.92)", "#6f4d29");
@@ -1233,8 +1196,7 @@ function wrappedTextLineCount(ctx, content, maxWidth, size, maxLines) {
   return maxLines ? Math.min(count || 1, maxLines) : (count || 1);
 }
 
-function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
-  if (!ui.battleLogHistoryOpen) return;
+function battleLogHistoryMetrics(ctx, view, state) {
   const entries = battlePlayEntries(state);
   const panelX = 16;
   const panelY = view.safeTop + 74;
@@ -1242,10 +1204,64 @@ function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
   const panelH = Math.max(300, Math.min(430, view.height - view.safeTop - view.safeBottom - 156));
   const listTop = panelY + 72;
   const listBottom = panelY + panelH - 22;
-  const rowH = 48;
   const viewportH = Math.max(0, listBottom - listTop);
-  const contentH = entries.length * rowH;
-  const maxScroll = Math.max(0, contentH - viewportH);
+  const latestRound = entries[0]?.round || state?.round || 0;
+  const rowW = panelW - 46;
+  let contentH = 0;
+  const items = entries.map((entry, index) => {
+    const prevEntry = entries[index - 1];
+    const divider = index > 0 && entry.round != null && prevEntry?.round != null && entry.round < prevEntry.round;
+    if (divider) contentH += 30;
+    const isRoundResult = entry.type === "roundResult";
+    const isPass = entry.type === "pass";
+    const isFactionPerk = entry.type === "factionPerk";
+    const isBoardChange = entry.type === "boardChange";
+    const isHistory = (entry.round ?? latestRound) < latestRound;
+    const tagW = (isRoundResult || isPass || isFactionPerk || isBoardChange) ? 56 : 0;
+    const entryText = battlePlayEntryText(entry, state);
+    const lineH = 13;
+    const wrapW = rowW - 50 - tagW;
+    const lineCount = wrappedTextLineCount(ctx, entryText, wrapW, 11);
+    const rowH = Math.max(48, lineCount * lineH + 18);
+    const item = {
+      entry,
+      index,
+      dividerY: divider ? contentH - 30 : null,
+      y: contentH,
+      rowH,
+      entryText,
+      lineH,
+      wrapW,
+      tagW,
+      isRoundResult,
+      isPass,
+      isFactionPerk,
+      isBoardChange,
+      isHistory
+    };
+    contentH += rowH + 4;
+    return item;
+  });
+  if (contentH > 0) contentH -= 4;
+  return {
+    entries,
+    items,
+    panelX,
+    panelY,
+    panelW,
+    panelH,
+    listTop,
+    listBottom,
+    viewportH,
+    contentH,
+    maxScroll: Math.max(0, contentH - viewportH)
+  };
+}
+
+function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
+  if (!ui.battleLogHistoryOpen) return;
+  const metrics = battleLogHistoryMetrics(ctx, view, state);
+  const { entries, items, panelX, panelY, panelW, panelH, listTop, listBottom, viewportH, contentH, maxScroll } = metrics;
   const scroll = Math.max(0, Math.min(ui.battleLogHistoryScroll || 0, maxScroll));
   ui.battleLogHistoryScroll = scroll;
 
@@ -1270,61 +1286,48 @@ function drawBattleLogHistoryPanel(ctx, view, actions, state, ui) {
     ctx.beginPath();
     ctx.rect(panelX + 12, listTop, panelW - 24, viewportH);
     ctx.clip();
-    const startIndex = Math.max(0, Math.floor(scroll / rowH) - 1);
-    const endIndex = Math.min(entries.length, Math.ceil((scroll + viewportH) / rowH) + 1);
-    const latestRound = entries[0]?.round || state.round || 0;
-    for (let index = startIndex; index < endIndex; index += 1) {
-      const entry = entries[index];
-      const y = listTop + index * rowH - scroll;
-      const prevEntry = entries[index - 1];
-      if (index > 0 && entry.round != null && prevEntry?.round != null && entry.round < prevEntry.round) {
-        const divH = 28;
-        fillRoundRect(ctx, panelX + 24, y + 4, panelW - 48, divH, 6, "rgba(198,149,75,0.12)", "rgba(180,132,68,0.28)");
-        text(ctx, "--- 历史对局 ---", panelX + panelW / 2, y + 4 + divH / 2, 11, "#a0885e", "center");
+    items.forEach(item => {
+      const y = listTop + item.y - scroll;
+      if (y + item.rowH < listTop || y > listBottom) return;
+      if (item.dividerY != null) {
+        const dividerY = listTop + item.dividerY - scroll;
+        fillRoundRect(ctx, panelX + 24, dividerY, panelW - 48, 26, 6, "rgba(198,149,75,0.12)", "rgba(180,132,68,0.28)");
+        text(ctx, "--- 历史对局 ---", panelX + panelW / 2, dividerY + 13, 11, "#a0885e", "center");
       }
-      const isHistory = (entry.round ?? latestRound) < latestRound;
-      const isRoundResult = entry.type === "roundResult";
-      const isPass = entry.type === "pass";
-      const isFactionPerk = entry.type === "factionPerk";
-      const isBoardChange = entry.type === "boardChange";
-      const row = { id: "battleLogHistoryPanel", x: panelX + 18, y: y + 4, w: panelW - 46, h: 40 };
+      const row = { id: "battleLogHistoryPanel", x: panelX + 18, y, w: panelW - 46, h: item.rowH };
       actions.push(row);
-      if (isRoundResult) {
+      if (item.isRoundResult) {
         fillRoundRect(ctx, row.x, row.y, row.w, row.h, 11, "#f7dca6", "#c98a2e");
-      } else if (isPass) {
+      } else if (item.isPass) {
         fillRoundRect(ctx, row.x, row.y, row.w, row.h, 10, "#fbe7dd", "#d98c6a");
-      } else if (isFactionPerk) {
+      } else if (item.isFactionPerk) {
         fillRoundRect(ctx, row.x, row.y, row.w, row.h, 10, "#e9f4de", "#6a9b55");
         fillRoundRect(ctx, row.x + 5, row.y + 6, 4, row.h - 12, 2, "#4f873c");
-      } else if (isBoardChange) {
+      } else if (item.isBoardChange) {
         fillRoundRect(ctx, row.x, row.y, row.w, row.h, 10, "#e7f0fa", "#5c83ad");
         fillRoundRect(ctx, row.x + 5, row.y + 6, 4, row.h - 12, 2, "#3f6f9f");
       } else {
         fillRoundRect(ctx, row.x, row.y, row.w, row.h, 10,
-          isHistory ? "#f1eadf" : "#fff4cf",
-          isHistory ? "#cbb88a" : "#d19330"
+          item.isHistory ? "#f1eadf" : "#fff4cf",
+          item.isHistory ? "#cbb88a" : "#d19330"
         );
-        fillRoundRect(ctx, row.x + 5, row.y + 6, 4, row.h - 12, 2, isHistory ? "#b09970" : "#c46a2b");
+        fillRoundRect(ctx, row.x + 5, row.y + 6, 4, row.h - 12, 2, item.isHistory ? "#b09970" : "#c46a2b");
       }
-      const entryText = battlePlayEntryText(entry, state);
-      const lineH = 13;
-      const tagW = (isRoundResult || isPass || isFactionPerk || isBoardChange) ? 56 : 0;
-      const wrapW = row.w - 50 - tagW;
-      const textColor = isRoundResult ? "#7a4310" : isPass ? "#9a3b1d" : isFactionPerk ? "#2f5f2a" : isBoardChange ? "#2f5575" : (isHistory ? "#7d6a50" : "#3b2b18");
-      const lineCount = wrappedTextLineCount(ctx, entryText, wrapW, 11, 2);
-      const textY = row.y + row.h / 2 - (lineCount - 1) * lineH / 2;
-      text(ctx, `${index + 1}.`, row.x + 18, row.y + row.h / 2, 10, isRoundResult ? "#b9711f" : isPass ? "#c2603c" : isFactionPerk ? "#4f873c" : isBoardChange ? "#3f6f9f" : (isHistory ? "#b09970" : "#8f3c1f"));
-      wrapText(ctx, entryText, row.x + 40, textY, wrapW, lineH, 2, 11, textColor);
-      if (isRoundResult) {
+      const textColor = item.isRoundResult ? "#7a4310" : item.isPass ? "#9a3b1d" : item.isFactionPerk ? "#2f5f2a" : item.isBoardChange ? "#2f5575" : (item.isHistory ? "#7d6a50" : "#3b2b18");
+      const lineCount = wrappedTextLineCount(ctx, item.entryText, item.wrapW, 11);
+      const textY = row.y + row.h / 2 - (lineCount - 1) * item.lineH / 2;
+      text(ctx, `${item.index + 1}.`, row.x + 18, row.y + row.h / 2, 10, item.isRoundResult ? "#b9711f" : item.isPass ? "#c2603c" : item.isFactionPerk ? "#4f873c" : item.isBoardChange ? "#3f6f9f" : (item.isHistory ? "#b09970" : "#8f3c1f"));
+      wrapText(ctx, item.entryText, row.x + 40, textY, item.wrapW, item.lineH, null, 11, textColor);
+      if (item.isRoundResult) {
         text(ctx, "双方放弃", row.x + row.w - 10, row.y + row.h / 2 + 4, 10, "#9a5a17", "right");
-      } else if (isPass) {
+      } else if (item.isPass) {
         text(ctx, "放弃", row.x + row.w - 10, row.y + row.h / 2 + 4, 10, "#b56a4a", "right");
-      } else if (isFactionPerk) {
+      } else if (item.isFactionPerk) {
         text(ctx, "被动", row.x + row.w - 10, row.y + row.h / 2 + 4, 10, "#4f873c", "right");
-      } else if (isBoardChange) {
+      } else if (item.isBoardChange) {
         text(ctx, "变化", row.x + row.w - 10, row.y + row.h / 2 + 4, 10, "#3f6f9f", "right");
       }
-    }
+    });
     ctx.restore();
     if (maxScroll > 0) {
       const trackX = panelX + panelW - 12;
@@ -1812,6 +1815,10 @@ function drawStepGuide(ctx, view, actions, state, ui) {
     target = ui.__guideFieldCard;
     title = "看场上卡牌";
     lines = ["长按场上的卡牌", "查看它的效果与说明"];
+  } else if (step === "discardPile") {
+    target = ui.__guideDiscardPile;
+    title = "查看弃牌堆";
+    lines = ["点击这里", "查看双方已弃置的卡牌"];
   }
   if (!target) return;
   drawGuidePointer(ctx, view, actions, target, title, lines);
@@ -1935,6 +1942,8 @@ function draw(ctx, view, actions, state, ui = {}) {
     const selectedUids = new Set(state.pending?.selectedUids || []);
     const currentSelected = pendingLeaderDiscard && selectedUids.has(detail.uid);
     const detailCard = pendingRevive ? { ...detail, effective: detail.strength } : detail;
+    const showRecruitDeckCount = detailContext?.zone === "hand" && detailContext.playerIndex === local;
+    const recruitDeck = showRecruitDeckCount ? state.players[detailContext.playerIndex]?.deck : null;
     const pendingSections = pendingRevive ? [{
       title: "济世选择",
       content: "点击当前卡牌复归到战场；左右滑动切换其它可复归卡牌；点击空白处跳过本次济世。",
@@ -1986,6 +1995,8 @@ function draw(ctx, view, actions, state, ui = {}) {
       swipeOffset,
       progressIndex: currentIdx,
       progressTotal: entries.length,
+      deck: recruitDeck,
+      showRecruitDeckCount,
       extraSections,
       count: pendingRecall ? (detail.stackCount || 1) : discardStackCount(state, detailContext, detail),
       headerAction: pendingLeaderDiscard || pendingLeaderSituation || pendingDiscardChoice ? { id: "closeDetail", label: "取消" } : null,
@@ -2010,5 +2021,6 @@ module.exports = {
   detailCardEntries,
   sortedHandCards,
   handScrollBounds,
-  discardPileMetrics
+  discardPileMetrics,
+  battleLogHistoryMetrics
 };

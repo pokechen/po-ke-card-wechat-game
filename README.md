@@ -61,6 +61,7 @@ node scripts/test-leader-skills.js     # 主将技能
 - 数据库集合：`game_rooms`、`users`、`user_tokens`、`match_history`、`daily_user_activity`、`rank_profiles`、`rank_matches`
 - 管理员 OpenID：不写入数据库与代码，仅配置在 `pvpRoom` 云函数环境变量 `ADMIN_OPENID`，多个用英文逗号分隔
 - 小游戏访问 `pvpRoom` 的 HTTP 地址：`https://po-ke-card-d0gg2ewaac3e700c4-1302893388.ap-shanghai.app.tcloudbase.com/pvpRoom`
+- 最近部署：`2026-08-07`，`pvpRoom` 已更新并通过 `getLoginContext` 调用验证。
 - 客户端是微信小游戏，不发布到 CloudBase 静态托管
 
 一键同步与部署脚本：

@@ -88,6 +88,11 @@ const app = {
     starting: false,
     submitting: false,
     leaderboardLoading: false,
+    avatarExpiresAt: 0,
+    visibleAvatarUserIds: [],
+    failedAvatarUserIds: [],
+    avatarRefreshLoading: false,
+    avatarRefreshRetryAt: 0,
     error: ""
   },
   pvp: {
@@ -177,6 +182,11 @@ const app = {
     adminStatsLoading: false,
     adminStatsError: "",
     adminStatsScroll: 0,
+    adminFeedbackDetail: null,
+    adminFeedbackLoading: false,
+    adminFeedbackError: "",
+    adminFeedbackDetailScroll: 0,
+    battleFeedbackSubmitting: false,
     rankLeaderboardScroll: 0,
     pageTransition: null,
     detailSwipe: null
@@ -214,6 +224,14 @@ const MULLIGAN_SWAP_IN_MS = 300;
 function requestFrame(callback) {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
   return setTimeout(callback, 16);
+}
+
+function cancelFrame(frameId) {
+  if (typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(frameId);
+  } else {
+    clearTimeout(frameId);
+  }
 }
 
 function playPvpReadyAnim(duration = 900) {
@@ -311,24 +329,48 @@ function persistActiveOnlineMatch() {
   }
 }
 
-// 排位局开局先上报一次实际出场信息（随机阵营/主将只有客户端知道），
-// 之后每打完一小局再上报比分。这样本地快照丢失（删小程序/清缓存）时，
-// 服务端补判负的弃局战绩也能展示阵营、主将与掉线时比分。
-// 全部只做展示用，不参与结算，因此上报失败不阻断对局。
+// 排位局把实际出场信息和每次局面变化上报到云端。用户主动开新局而旧局未结算时，
+// 服务端仍能记录双方阵营、主将、已结束小局与最后场面分；这些字段只用于展示，绝不参与结算。
+// 同一局的请求串行发送，避免网络乱序把较早的比分覆盖掉最新局面。
 function reportRankProgress(match) {
   if (!match?.ranked || !match.rankMatchId) return;
-  const finished = Array.isArray(match.roundResults) ? match.roundResults.length : 0;
-  const reported = app.rank.reportedProgress || {};
-  const last = reported[match.rankMatchId];
-  const first = last == null;
-  if (!first && Number(last) >= finished) return;
-  reported[match.rankMatchId] = finished;
-  app.rank.reportedProgress = reported;
-  const payload = { progress: matchProgressSnapshot(match) };
-  if (first) payload.setup = rankMatchSetupInfo(match);
-  pvpClient.reportRankProgress(match.rankMatchId, payload).catch(err => {
-    if (first) delete reported[match.rankMatchId];
-    else reported[match.rankMatchId] = Math.max(0, finished - 1);
+  const snapshot = { setup: rankMatchSetupInfo(match), progress: matchProgressSnapshot(match) };
+  const signature = JSON.stringify(snapshot);
+  const reports = app.rank.progressReports || {};
+  // 本地队列重启后会重建；从当前时间起号，确保恢复后能覆盖云端旧快照。
+  const report = reports[match.rankMatchId] || { sent: "", pending: "", payload: null, inFlight: false, version: Date.now() };
+  if (report.sent === signature) return;
+  if (report.pending === signature) {
+    flushRankProgress(match.rankMatchId);
+    return;
+  }
+  report.version = (Number(report.version) || 0) + 1;
+  report.pending = signature;
+  report.payload = { ...snapshot, progressVersion: report.version };
+  reports[match.rankMatchId] = report;
+  app.rank.progressReports = reports;
+  flushRankProgress(match.rankMatchId);
+}
+
+function flushRankProgress(rankMatchId) {
+  const report = app.rank.progressReports?.[rankMatchId];
+  if (!report || report.inFlight || !report.pending || !report.payload) return;
+  const signature = report.pending;
+  const payload = report.payload;
+  report.pending = "";
+  report.payload = null;
+  report.inFlight = true;
+  pvpClient.reportRankProgress(rankMatchId, payload).then(() => {
+    report.sent = signature;
+    report.inFlight = false;
+    // 本次请求成功后立即发送飞行期间积压的最新快照。
+    flushRankProgress(rankMatchId);
+  }).catch(err => {
+    if (!report.pending) {
+      report.pending = signature;
+      report.payload = payload;
+    }
+    report.inFlight = false;
     debugWarn("[rank] 上报排位对局信息失败", err?.message || err);
   });
 }
@@ -350,20 +392,31 @@ function rankMatchSetupInfo(match) {
   };
 }
 
-// 对局结束后取 finalScores，对局中实时算场上总分
+// 只有对局结束后 finalScores 才有意义；初始化的 [0, 0] 不能覆盖进行中的实时场面分。
 function progressScore(match, players, index) {
   const finalScore = match?.finalScores?.[index];
-  if (Number.isFinite(finalScore)) return finalScore;
+  if (match?.over && Number.isFinite(finalScore)) return finalScore;
   const player = players[index];
   if (!player) return 0;
   try { return totalScore(player) || 0; } catch (err) { return 0; }
 }
 
-// 当前对局的比分快照（本方视角），用于进度上报与掉线说明
+function rankProgressPhase(match) {
+  if (match?.mulligan?.active) return "mulligan";
+  if (match?.roundTransition) return "roundTransition";
+  if (match?.pending) return "pending";
+  return "playing";
+}
+
+// 当前对局的比分快照（本方视角），用于进度上报与超时/掉线说明。
 function matchProgressSnapshot(match, meIdx = 0) {
   const oppIdx = 1 - meIdx;
   const players = Array.isArray(match?.players) ? match.players : [];
   return {
+    round: Math.max(1, Number(match?.round) || 1),
+    phase: rankProgressPhase(match),
+    current: match?.current === oppIdx ? 1 : 0,
+    passed: [!!players[meIdx]?.passed, !!players[oppIdx]?.passed],
     rounds: [players[meIdx]?.roundsWon || 0, players[oppIdx]?.roundsWon || 0],
     scores: [progressScore(match, players, meIdx), progressScore(match, players, oppIdx)],
     roundResults: (match?.roundResults || []).map(item => ({
@@ -434,11 +487,22 @@ function clearPendingRankResult(rankMatchId = "") {
   try { api.removeStorageSync(PENDING_RANK_RESULT_KEY); } catch (err) {}
 }
 
-// 服务端已给出终局裁决（已结算 / 已判负 / 已作废）的错误码，客户端必须停止重试并清掉待提交缓存。
-const RANK_TERMINAL_CODES = ["RANK_ALREADY_FINISHED", "RANK_MATCH_ABANDONED", "RANK_MATCH_VOIDED", "RANK_MATCH_NOT_FOUND"];
+// 服务端已给出终局裁决（已结算 / 已判负）的错误码，客户端必须停止重试并清掉待提交缓存。
+const RANK_TERMINAL_CODES = ["RANK_ALREADY_FINISHED", "RANK_MATCH_ABANDONED", "RANK_MATCH_NOT_FOUND"];
 
 function isRankTerminalError(err) {
   return RANK_TERMINAL_CODES.includes(String(err?.code || ""));
+}
+
+// 联机对局掉线的局面说明；单机排位恢复后不再生成 disconnect 结束原因。
+function disconnectSnapshotOf(match, meIdx = 0) {
+  if (!match || match.endReason !== "disconnect") return null;
+  return matchProgressSnapshot(match, meIdx);
+}
+
+function applyRankForcedLoss(match, result) {
+  if (!match || !result?.autoLoss) return;
+  match.resultText = result.historyRecord?.resultText || "排位弃局";
 }
 
 function retryPendingRankResult(source = "retry") {
@@ -456,6 +520,7 @@ function retryPendingRankResult(source = "retry") {
       app.match.rankSubmitting = false;
       app.match.rankDelta = result.delta || null;
       app.match.rankSubmitError = "";
+      applyRankForcedLoss(app.match, result);
     }
     refreshCloudMatchHistory(false);
     render();
@@ -471,38 +536,8 @@ function retryPendingRankResult(source = "retry") {
   return true;
 }
 
-// 排位局被掉线打断：统一在首页判负结算并提示，并带上掉线时的真实比分用于说明。
-// 结算结果恒为失败，不按已打完的小局折算，避免“赢一局就跑”的套利。
-function settleDisconnectedRankMatch(source = "disconnect") {
-  const match = app.match;
-  if (!match || match.mode !== "ai" || !match.ranked || match.over) return false;
-  surrender(match, 0, "disconnect");
-  clearActiveSingleMatchSnapshot();
-  savePendingRankResult(match, Math.max(0, Date.now() - (match.rankStartedAt || Date.now())));
-  setScene("menu");
-  setTimeout(submitRankResultIfNeeded, 0);
-  debugLog("[rank] 排位局掉线已判负结算", source);
-  showHomeMatchNotice("上一局已判负", `上一局排位中途掉线，已判负并结算。${disconnectScoreText(match)}`, "上一局排位已判负");
-  return true;
-}
-
-// 掉线时的比分说明（只用于展示，不参与结算）
-function disconnectScoreText(match) {
-  const snapshot = disconnectSnapshotOf(match);
-  if (!snapshot) return "";
-  const rounds = snapshot.rounds || [0, 0];
-  const scores = snapshot.scores || [0, 0];
-  return `掉线时：小局 ${rounds[0]}:${rounds[1]} · 终分 ${scores[0]}:${scores[1]}。`;
-}
-
-// 掉线判负时额外带上的比分快照，只用于展示说明
-function disconnectSnapshotOf(match, meIdx = 0) {
-  if (!match || match.endReason !== "disconnect") return null;
-  return matchProgressSnapshot(match, meIdx);
-}
-
-// 重新启动时处理本地未完成的单机/排位对局：
-// 单机局不做掉线处理，直接恢复接着打；排位局按掉线判负。
+// 重新启动时处理本地未完成的单机/排位对局：两者都从本地快照恢复。
+// 排位仅在玩家主动发起下一局而旧局未结算时，由服务端按弃局判负，避免挑选胜局结算。
 function restoreInterruptedSingleMatch() {
   const snapshot = readActiveMatchSnapshot(ACTIVE_SINGLE_MATCH_KEY);
   if (!snapshot) return false;
@@ -519,7 +554,6 @@ function restoreInterruptedSingleMatch() {
     app.match = null;
     return false;
   }
-  if (app.match.ranked) return settleDisconnectedRankMatch("restart");
   app.scene = "battle";
   persistActiveSingleMatch();
   debugLog("[single-match] 已恢复上次未打完的单机对局");
@@ -1007,6 +1041,12 @@ let profileSaving = false;
 let profileAvatarUploading = false;
 let profileAvatarUploadPromise = null;
 let profileAvatarPickVersion = 0;
+const AVATAR_REFRESH_EARLY_MS = 5 * 60 * 1000;
+const AVATAR_REFRESH_RETRY_MS = 30 * 1000;
+let profileFetchedAt = 0;
+let profileRefreshPromise = null;
+let profileAvatarRefreshRetryAt = 0;
+let rankAvatarRefreshTimer = null;
 
 function randomCardImageUrl() {
   const cards = Array.isArray(allCards) ? allCards : [];
@@ -1032,7 +1072,8 @@ function destroyProfileAuthButton() {
 function applyProfile(userInfo) {
   const nickName = (userInfo && userInfo.nickName) || PROFILE_DEFAULT_NAME;
   const avatarUrl = (userInfo && userInfo.avatarUrl) || "";
-  app.ui.authUser = { nickName, avatarUrl };
+  const avatarFileID = (userInfo && userInfo.avatarFileID) || (String(avatarUrl).startsWith("cloud://") ? avatarUrl : "");
+  app.ui.authUser = { nickName, avatarUrl, avatarFileID };
   saveAuthSession({
     token: app.ui.authToken,
     expiresAt: app.ui.authExpiresAt,
@@ -1043,6 +1084,17 @@ function applyProfile(userInfo) {
     profileUpdating = true;
     ensureCloudAuth()
       .then(authed => authed ? pvpClient.updateProfile({ nickName, avatarUrl }) : null)
+      .then(result => {
+        const profile = result?.customProfile || result?.user;
+        if (!profile) return;
+        app.ui.authUser = {
+          nickName: profile.nickName || nickName,
+          avatarUrl: profile.avatarUrl || avatarUrl,
+          avatarFileID: profile.avatarFileID || avatarFileID
+        };
+        profileFetchedAt = Date.now();
+        render();
+      })
       .catch(err => console.warn("[profile] update failed", err && err.message ? err.message : err))
       .then(() => { profileUpdating = false; });
   }
@@ -1224,8 +1276,10 @@ function saveProfileDraft() {
       const profile = result?.customProfile || result?.user || {};
       app.ui.authUser = {
         nickName: profile.nickName || nickName,
-        avatarUrl: profile.avatarUrl || avatarUrl
+        avatarUrl: profile.avatarUrl || avatarUrl,
+        avatarFileID: profile.avatarFileID || (String(avatarUrl).startsWith("cloud://") ? avatarUrl : (app.ui.authUser?.avatarFileID || ""))
       };
+      profileFetchedAt = Date.now();
       saveAuthSession({
         token: app.ui.authToken,
         expiresAt: app.ui.authExpiresAt,
@@ -1252,7 +1306,11 @@ function saveProfileDraft() {
 function openProfileSheet(tip = "") {
   destroyProfileAuthButton();
   const user = app.ui.authUser || {};
-  app.ui.profileDraft = { nickName: user.nickName || "", avatarUrl: user.avatarUrl || "", avatarPreviewUrl: "" };
+  app.ui.profileDraft = {
+    nickName: user.nickName || "",
+    avatarUrl: user.avatarFileID || user.avatarUrl || "",
+    avatarPreviewUrl: user.avatarUrl || ""
+  };
   app.ui.profileEditingName = false;
   app.ui.profileTip = tip;
   app.ui.profileSheetOpen = true;
@@ -1465,6 +1523,10 @@ function drawProfileSheet(ctx, view, actions) {
 }
 
 function setScene(scene) {
+  if (scene !== "rankLeaderboard" && rankAvatarRefreshTimer) {
+    clearTimeout(rankAvatarRefreshTimer);
+    rankAvatarRefreshTimer = null;
+  }
   destroyProfileAuthButton();
   stopNameKeyboard();
   app.ui.profileSheetOpen = false;
@@ -1501,6 +1563,7 @@ function startMatch(optionsPatch = {}) {
   app.ui.mulliganSwapIndex = 0;
   app.ui.mulliganReplacedUid = "";
   app.ui.pendingPvpMulliganSwap = null;
+  app.ui.battleRecordGuideMatchKey = "";
   app.ui.discardPileOwner = null;
   app.ui.discardPileScroll = 0;
   app.ui.battleLogHistoryOpen = false;
@@ -1549,11 +1612,15 @@ function render() {
   if (app.scene === "battle") {
     app.ui.recentPlayAutoDismissMs = RECENT_PLAY_AUTO_DISMISS_MS;
     app.ui.roundTransitionNoticeMs = ROUND_TRANSITION_NOTICE_MS;
+    maybeActivateBattleRecordGuide();
+    maybeActivateDiscardPileGuide();
     preparePassLeadHint();
     battleScene.draw(ctx, view, app.actions, app.match, app.ui);
   }
-  if (app.scene === "result") resultScene.draw(ctx, view, app.actions, app.match);
+  if (app.scene === "result") resultScene.draw(ctx, view, app.actions, app.match, app.ui);
   if (app.scene === "battleCards") battleCardsScene.draw(ctx, view, app.actions, app.match, app.ui);
+  maybeRefreshOwnAvatar();
+  maybeRefreshVisibleRankAvatars();
   scheduleRecentPlayAutoDismiss();
   scheduleRoundTransitionAutoContinue();
 }
@@ -1693,7 +1760,10 @@ function saveAuthSession(session) {
 function applyAuthSession(session) {
   const token = String(session?.token || "");
   app.ui.authToken = token;
-  if (session && Object.prototype.hasOwnProperty.call(session, "user")) app.ui.authUser = session.user || null;
+  if (session && Object.prototype.hasOwnProperty.call(session, "user")) {
+    app.ui.authUser = session.user || null;
+    profileFetchedAt = app.ui.authUser ? Date.now() : 0;
+  }
   app.ui.authTokenStorage = session?.tokenStorage || "";
   app.ui.authExpiresAt = Number(session?.expiresAt || 0) || 0;
   pvpClient.setAuthToken?.(token);
@@ -1745,6 +1815,56 @@ async function refreshAdminStats() {
     app.ui.adminStatsLoading = false;
     if (app.scene === "adminStats") render();
   }
+}
+
+async function openAdminFeedbackDetail(feedbackId) {
+  if (!feedbackId || app.ui.adminFeedbackLoading || !pvpClient.getBattleFeedbackDetail) return;
+  app.ui.adminFeedbackLoading = true;
+  app.ui.adminFeedbackError = "";
+  app.ui.adminFeedbackDetailScroll = 0;
+  render();
+  try {
+    const result = await pvpClient.getBattleFeedbackDetail(feedbackId);
+    app.ui.adminFeedbackDetail = result?.feedback || null;
+  } catch (err) {
+    app.ui.adminFeedbackError = err?.message || "读取反馈详情失败";
+    toast(app.ui.adminFeedbackError);
+  } finally {
+    app.ui.adminFeedbackLoading = false;
+    if (app.scene === "adminStats") render();
+  }
+}
+
+async function updateAdminFeedback(patch) {
+  const feedback = app.ui.adminFeedbackDetail;
+  if (!feedback || app.ui.adminFeedbackLoading || !pvpClient.updateBattleFeedback) return;
+  app.ui.adminFeedbackLoading = true;
+  render();
+  try {
+    const result = await pvpClient.updateBattleFeedback(feedback.feedbackId, patch);
+    app.ui.adminFeedbackDetail = result?.feedback || null;
+    await refreshAdminStats();
+  } catch (err) {
+    toast(err?.message || "更新反馈失败");
+  } finally {
+    app.ui.adminFeedbackLoading = false;
+    if (app.scene === "adminStats") render();
+  }
+}
+
+function editAdminFeedbackField(field, title, placeholder) {
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.showModal || !app.ui.adminFeedbackDetail) return;
+  api.showModal({
+    title,
+    content: app.ui.adminFeedbackDetail[field] || "",
+    editable: true,
+    placeholderText: placeholder,
+    confirmText: "保存",
+    success: result => {
+      if (result.confirm) updateAdminFeedback({ [field]: String(result.content || "").trim() });
+    }
+  });
 }
 
 function clearAuthSession() {
@@ -1805,21 +1925,42 @@ async function reloginForExpiredToken() {
 
 pvpClient.setAuthInvalidHandler?.(reloginForExpiredToken);
 
+function refreshCurrentProfile() {
+  if (profileRefreshPromise || !pvpClient.getCurrentUser) return profileRefreshPromise || Promise.resolve(null);
+  profileRefreshPromise = pvpClient.getCurrentUser().then(result => {
+    if (!result?.user) return null;
+    app.ui.authUser = result.user;
+    app.ui.authAvatarNeedsRefresh = false;
+    profileFetchedAt = Date.now();
+    profileAvatarRefreshRetryAt = 0;
+    saveAuthSession({
+      token: app.ui.authToken,
+      expiresAt: app.ui.authExpiresAt,
+      tokenStorage: app.ui.authTokenStorage || ""
+    });
+    render();
+    return result.user;
+  }).finally(() => {
+    profileRefreshPromise = null;
+  });
+  return profileRefreshPromise;
+}
+
+function maybeRefreshOwnAvatar() {
+  if (!app.ui.authAvatarNeedsRefresh || profileRefreshPromise || Date.now() < profileAvatarRefreshRetryAt) return;
+  app.ui.authAvatarNeedsRefresh = false;
+  refreshCurrentProfile().catch(err => {
+    profileAvatarRefreshRetryAt = Date.now() + AVATAR_REFRESH_RETRY_MS;
+    app.ui.authAvatarNeedsRefresh = true;
+    console.warn("[profile] refresh expired avatar failed", err?.message || err);
+  });
+}
+
 async function ensureCloudAuth() {
   if (app.ui.authToken && app.ui.authExpiresAt > Date.now()) {
     try {
-      if (!app.ui.authUser && pvpClient.getCurrentUser) {
-        const result = await pvpClient.getCurrentUser();
-        if (result && result.user) {
-          app.ui.authUser = result.user;
-          saveAuthSession({
-            token: app.ui.authToken,
-            expiresAt: app.ui.authExpiresAt,
-            tokenStorage: app.ui.authTokenStorage || ""
-          });
-          render();
-        }
-      }
+      // 登录态只在没有资料时补拉；已有头像仅在实际加载失败时按需刷新。
+      if (!app.ui.authUser) await refreshCurrentProfile();
       refreshCloudMatchHistory(false);
       refreshAdminStatus();
       return true;
@@ -3823,8 +3964,10 @@ function handleMenu(action) {
   }
   if (action.id === "adminStats") {
     if (!app.ui.isAdmin) return;
-    app.ui.adminStatsScroll = 0;
-    setScene("adminStats");
+  app.ui.adminStatsScroll = 0;
+  app.ui.adminFeedbackDetail = null;
+  app.ui.adminFeedbackError = "";
+  setScene("adminStats");
     refreshAdminStats();
     return;
   }
@@ -4260,6 +4403,8 @@ function loadRankLeaderboard(force = false) {
   render();
   pvpClient.getRankLeaderboard(50).then(result => {
     app.rank.leaderboard = Array.isArray(result.leaderboard) ? result.leaderboard : [];
+    app.rank.avatarExpiresAt = Number(result.avatarExpiresAt || 0) || 0;
+    app.rank.avatarRefreshRetryAt = 0;
     app.rank.leaderboardLoading = false;
     app.rank.loading = false;
     app.ui.rankLeaderboardScroll = 0;
@@ -4278,6 +4423,58 @@ function loadRankLeaderboard(force = false) {
   });
 }
 
+function scheduleVisibleRankAvatarRefresh() {
+  if (rankAvatarRefreshTimer) {
+    clearTimeout(rankAvatarRefreshTimer);
+    rankAvatarRefreshTimer = null;
+  }
+  const failedAvatarUserIds = app.rank.failedAvatarUserIds || [];
+  if (app.scene !== "rankLeaderboard" || (!app.rank.visibleAvatarUserIds?.length && !failedAvatarUserIds.length)) return;
+  const expiresAt = Number(app.rank.avatarExpiresAt || 0) || 0;
+  if (!expiresAt && !failedAvatarUserIds.length) return;
+  const expiryReadyAt = failedAvatarUserIds.length ? Date.now() : expiresAt - AVATAR_REFRESH_EARLY_MS;
+  const readyAt = Math.max(expiryReadyAt, Number(app.rank.avatarRefreshRetryAt || 0) || 0);
+  const delay = Math.max(0, readyAt - Date.now());
+  rankAvatarRefreshTimer = setTimeout(() => {
+    rankAvatarRefreshTimer = null;
+    maybeRefreshVisibleRankAvatars();
+  }, delay);
+}
+
+function maybeRefreshVisibleRankAvatars() {
+  if (app.scene !== "rankLeaderboard" || app.rank.avatarRefreshLoading) return;
+  if (Date.now() < app.rank.avatarRefreshRetryAt) {
+    scheduleVisibleRankAvatarRefresh();
+    return;
+  }
+  const failedAvatarUserIds = app.rank.failedAvatarUserIds || [];
+  const expiresAt = Number(app.rank.avatarExpiresAt || 0) || 0;
+  if (!failedAvatarUserIds.length && (!expiresAt || Date.now() < expiresAt - AVATAR_REFRESH_EARLY_MS)) {
+    scheduleVisibleRankAvatarRefresh();
+    return;
+  }
+  const userIds = [...new Set([...(app.rank.visibleAvatarUserIds || []), ...failedAvatarUserIds].filter(Boolean))].slice(0, 50);
+  if (!userIds.length) return;
+  app.rank.avatarRefreshLoading = true;
+  pvpClient.refreshRankLeaderboardAvatars(userIds).then(result => {
+    const avatars = new Map((Array.isArray(result.avatars) ? result.avatars : []).map(item => [item.userId, item]));
+    app.rank.leaderboard = (app.rank.leaderboard || []).map(player => {
+      const avatar = avatars.get(player.userId);
+      return avatar ? { ...player, avatarUrl: avatar.avatarUrl, avatarUpdatedAt: avatar.avatarUpdatedAt } : player;
+    });
+    app.rank.avatarExpiresAt = Number(result.avatarExpiresAt || 0) || 0;
+    app.rank.failedAvatarUserIds = [];
+    app.rank.avatarRefreshRetryAt = 0;
+    render();
+  }).catch(err => {
+    app.rank.avatarRefreshRetryAt = Date.now() + AVATAR_REFRESH_RETRY_MS;
+    console.warn("[rank] refresh visible avatars failed", err?.message || err);
+  }).finally(() => {
+    app.rank.avatarRefreshLoading = false;
+    scheduleVisibleRankAvatarRefresh();
+  });
+}
+
 function openRankLeaderboard() {
   setScene("rankLeaderboard");
   loadRankLeaderboard(true);
@@ -4293,8 +4490,8 @@ function startRankMatch() {
     app.rank.currentMatch = result;
     app.rank.profile = result.profile || app.rank.profile;
     app.rank.rules = result.rules || app.rank.rules;
-    // 上一局中途退出被服务端补判负时必须告知玩家，否则会以为权势被莫名扣掉。
-    if (result.abandonedPrevious > 0) toast("上一局排位中途退出，已判负");
+    // 新开局前的未完成排位会被补判负，明确提示避免玩家误解权势变化。
+    if (result.abandonedPrevious > 0) toast("上一局排位弃局，已判负");
     const options = {
       ...(result.matchOptions || {}),
       ranked: true,
@@ -4336,6 +4533,18 @@ function rankFinalSummary(match) {
   };
 }
 
+function startRankSettlementAnimation(match) {
+  if (!match) return;
+  const animation = { start: Date.now(), duration: 900 };
+  match.rankSettlementAnim = animation;
+  const tick = () => {
+    if (app.scene !== "result" || app.match !== match || match.rankSettlementAnim !== animation) return;
+    render();
+    if (Date.now() - animation.start < animation.duration) requestFrame(tick);
+  };
+  requestFrame(tick);
+}
+
 function submitRankResultIfNeeded() {
   const match = app.match;
   if (!match || !match.ranked || !match.rankMatchId || !match.over || match.rankSubmitted || match.rankSubmitting) return;
@@ -4351,6 +4560,8 @@ function submitRankResultIfNeeded() {
     match.rankSubmitting = false;
     match.rankDelta = result.delta || null;
     match.rankSubmitError = "";
+    applyRankForcedLoss(match, result);
+    startRankSettlementAnimation(match);
     app.rank.submitting = false;
     app.rank.profile = result.profile || app.rank.profile;
     app.rank.resultDelta = result.delta || null;
@@ -4632,8 +4843,11 @@ function handleBattle(action) {
   if (action.id === "leaderRevealPanel") return render();
   if (action.id === "battleLog") return openBattleLogHistory();
   if (action.id === "closeBattleLogHistory") {
+    const returnScene = app.ui.battleLogHistoryReturnScene || "";
     app.ui.battleLogHistoryOpen = false;
     app.ui.battleLogHistoryScroll = 0;
+    app.ui.battleLogHistoryReturnScene = "";
+    if (returnScene) return setScene(returnScene);
     return render();
   }
   if (action.id === "battleLogHistoryPanel") return render();
@@ -4704,6 +4918,7 @@ function handleBattle(action) {
   if (app.ui.battleCardDetailId || app.ui.battleCardDetailUid) return render();
   if (app.ui.battleLogHistoryOpen) return render();
   if (action.id === "viewDiscardPile") {
+    markGuideDone("discardPile");
     app.ui.discardPileOwner = Number.isInteger(action.playerIndex) ? action.playerIndex : 0;
     app.ui.discardPileScroll = 0;
     return render();
@@ -4773,6 +4988,85 @@ function handleBattle(action) {
   afterHumanAction();
 }
 
+function feedbackBattleSnapshot(match) {
+  const players = Array.isArray(match?.players) ? match.players : [];
+  const local = match?.mode === "online" && Number.isInteger(match?.localPlayerIndex) ? match.localPlayerIndex : 0;
+  const history = Array.isArray(match?.playedHistory) ? match.playedHistory : [];
+  return {
+    matchId: String(match?.matchId || `local-${Date.now()}`).slice(0, 80),
+    mode: match?.mode === "online" ? "online" : "ai",
+    ranked: !!match?.ranked,
+    resultText: String(match?.resultText || "对局结束").slice(0, 40),
+    endReason: String(match?.endReason || "normal").slice(0, 24),
+    rounds: Array.isArray(match?.roundResults) ? match.roundResults.slice(0, 3).map(item => ({
+      round: Number(item?.round) || 0,
+      scores: Array.isArray(item?.scores) ? item.scores.slice(0, 2).map(value => Number(value) || 0) : [],
+      winner: item?.winner == null ? null : Number(item.winner)
+    })) : [],
+    players: players.slice(0, 2).map((player, index) => ({
+      side: index === local ? "我方" : "对方",
+      faction: String(player?.factionName || player?.faction || "").slice(0, 40),
+      leader: String(player?.leader?.name || player?.leader?.baseName || "").slice(0, 60),
+      leaderId: String(player?.leader?.id || "").slice(0, 80)
+    })),
+    history: history.slice(0, 500).map(entry => ({
+      seq: Number(entry?.seq) || 0,
+      round: Number(entry?.round) || 0,
+      side: Number(entry?.playerIndex) === local ? "我方" : "对方",
+      type: String(entry?.type || entry?.actionType || "action").slice(0, 24),
+      text: String(entry?.text || entry?.description || entry?.name || "").slice(0, 240)
+    })).filter(entry => entry.text),
+    logs: (Array.isArray(match?.logs) ? match.logs : []).slice(0, 500).map(item => String(item || "").slice(0, 240)).filter(Boolean)
+  };
+}
+
+function submitCurrentBattleFeedback() {
+  if (!app.match || app.ui.battleFeedbackSubmitting) return;
+  const api = typeof wx !== "undefined" ? wx : null;
+  if (!api?.showModal) return toast("当前环境不支持反馈输入");
+  api.showModal({
+    title: "对局反馈",
+    content: "",
+    editable: true,
+    placeholderText: "请描述遇到的问题或建议",
+    confirmText: "提交",
+    success: response => {
+      if (!response.confirm) return;
+      const content = String(response.content || "").trim();
+      if (!content) return toast("请先填写反馈内容");
+      app.ui.battleFeedbackSubmitting = true;
+      render();
+      Promise.resolve()
+        .then(() => ensureCloudAuth())
+        .then(authed => {
+          if (!authed) throw new Error("云端登录失败，请稍后重试");
+          return pvpClient.submitBattleFeedback(content, feedbackBattleSnapshot(app.match));
+        })
+        .then(() => {
+          if (api.showModal) api.showModal({
+            title: "感谢反馈",
+            content: "已收到你的反馈，并保存了本局对战记录供我们核查。",
+            showCancel: false,
+            confirmText: "知道了"
+          });
+        })
+        .catch(err => toast(err?.message || "反馈提交失败，请稍后重试"))
+        .finally(() => {
+          app.ui.battleFeedbackSubmitting = false;
+          if (app.scene === "result") render();
+        });
+    }
+  });
+}
+
+function openCompletedBattleHistory() {
+  if (!app.match) return;
+  app.ui.battleLogHistoryReturnScene = "result";
+  app.ui.battleLogHistoryOpen = true;
+  app.ui.battleLogHistoryScroll = 0;
+  setScene("battle");
+}
+
 function handleBattleCards(action) {
   if (action.id === "detailPanel" || action.id === "battleCardsHelpPanel") return;
   if (action.id === "closeDetail") {
@@ -4800,6 +5094,17 @@ function handleBattleCards(action) {
 }
 
 function handleAdminStats(action) {
+  if (action.id === "closeAdminFeedbackDetail") {
+    app.ui.adminFeedbackDetail = null;
+    app.ui.adminFeedbackDetailScroll = 0;
+    app.ui.adminFeedbackError = "";
+    return render();
+  }
+  if (action.id === "adminFeedbackDetailPanel") return;
+  if (action.id === "openAdminFeedbackDetail") return openAdminFeedbackDetail(action.feedbackId);
+  if (action.id === "adminFeedbackStatus") return updateAdminFeedback({ status: action.status });
+  if (action.id === "adminFeedbackNote") return editAdminFeedbackField("note", "处理备注", "仅管理员可见");
+  if (action.id === "adminFeedbackReply") return editAdminFeedbackField("reply", "回复内容", "暂不发送给用户，仅记录");
   if (action.id === "backAdminStats") return setScene("menu");
 }
 
@@ -4820,6 +5125,17 @@ function handleAction(action) {
   if (app.scene === "battle") return handleBattle(action);
   if (app.scene === "battleCards") return handleBattleCards(action);
   if (app.scene === "result") {
+    if (action.id === "rankResultPrestigeHelp") {
+      app.match.rankPrestigeHelpOpen = true;
+      return render();
+    }
+    if (action.id === "closeRankResultPrestigeHelp") {
+      app.match.rankPrestigeHelpOpen = false;
+      return render();
+    }
+    if (action.id === "rankResultPrestigeHelpPanel") return;
+    if (action.id === "viewFullBattleHistory") return openCompletedBattleHistory();
+    if (action.id === "submitBattleFeedback") return submitCurrentBattleFeedback();
     if (action.id === "viewBattleCards") {
       app.ui.battleCardDetailId = "";
       app.ui.battleCardDetailUid = "";
@@ -4855,68 +5171,9 @@ function normalizeTouch(event) {
   return { x: touch.clientX ?? touch.x, y: touch.clientY ?? touch.y };
 }
 
-function mergeBattlePlayLogEntries(logs) {
-  const entries = [];
-  let pendingRecruit = "";
-  (logs || []).forEach(item => {
-    const value = String(item || "");
-    if (/^集贤(?:生效：)?(?:(?:从牌库)?额外打出|从牌库打出)/.test(value)) {
-      pendingRecruit = value.replace(/^集贤生效：/, "集贤").replace(/。$/, "");
-      return;
-    }
-    if (/打出|使用主将/.test(value)) {
-      const textValue = pendingRecruit ? `${value.replace(/。$/, "")}；${pendingRecruit}。` : value;
-      entries.push({ text: textValue });
-      pendingRecruit = "";
-    }
-  });
-  return entries;
-}
-
-function summonHistoryInfo(entry) {
-  const source = [entry.description, entry.text].filter(Boolean).map(String).join("");
-  const m = source.match(/召唤岳家军\s*(\d+)\s*张(?:：([^；。]+))?/);
-  if (!m) return null;
-  return {
-    count: Number(m[1]) || 0,
-    names: (m[2] || "岳家军").split("、").map(name => name.trim()).filter(Boolean)
-  };
-}
-
-function shouldHideSummonedBattleEntry(history, entry) {
-  if (!entry || entry.actionType !== "card" || !Number.isFinite(entry.seq)) return false;
-  const name = entry.name || "";
-  if (!name) return false;
-  return history.some(parent => {
-    if (!parent || !Number.isFinite(parent.seq) || parent.seq >= entry.seq) return false;
-    if (parent.playerIndex !== entry.playerIndex) return false;
-    const info = summonHistoryInfo(parent);
-    if (!info || entry.seq > parent.seq + info.count) return false;
-    return !info.names.length || info.names.includes(name);
-  });
-}
-
-function visibleBattlePlayHistory(history) {
-  return history.filter((entry) => !shouldHideSummonedBattleEntry(history, entry));
-}
-
-function battlePlayedHistory() {
-  const history = Array.isArray(app.match?.playedHistory) ? visibleBattlePlayHistory(app.match.playedHistory) : [];
-  if (history.length) return history;
-  const playLogs = mergeBattlePlayLogEntries(app.match?.logs || []);
-  if (playLogs.length) return playLogs;
-  return app.match?.lastPlayed ? [app.match.lastPlayed] : [];
-}
-
 function battleLogHistoryScrollBounds() {
-  const panelY = view.safeTop + 74;
-  const panelH = Math.max(300, Math.min(430, view.height - view.safeTop - view.safeBottom - 156));
-  const listTop = panelY + 72;
-  const listBottom = panelY + panelH - 22;
-  const rowH = 48;
-  const viewportH = Math.max(0, listBottom - listTop);
-  const contentH = battlePlayedHistory().length * rowH;
-  return { listTop, listBottom, maxScroll: Math.max(0, contentH - viewportH) };
+  const metrics = battleScene.battleLogHistoryMetrics(ctx, view, app.match);
+  return { listTop: metrics.listTop, listBottom: metrics.listBottom, maxScroll: metrics.maxScroll };
 }
 
 function clampBattleLogHistoryScroll(value) {
@@ -4939,6 +5196,26 @@ function scrollAdminStatsBy(deltaY) {
   const next = clampAdminStatsScroll(before - deltaY);
   if (Math.abs(next - before) > 0.5) {
     app.ui.adminStatsScroll = next;
+    render();
+  }
+  return true;
+}
+
+function adminFeedbackDetailScrollBounds() {
+  return adminStatsScene.feedbackDetailScrollBounds(view, app.ui.adminFeedbackDetail);
+}
+
+function clampAdminFeedbackDetailScroll(value) {
+  const { maxScroll } = adminFeedbackDetailScrollBounds();
+  return Math.max(0, Math.min(value || 0, maxScroll));
+}
+
+function scrollAdminFeedbackDetailBy(deltaY) {
+  if (app.scene !== "adminStats" || !app.ui.adminFeedbackDetail) return false;
+  const before = app.ui.adminFeedbackDetailScroll || 0;
+  const next = clampAdminFeedbackDetailScroll(before - deltaY);
+  if (Math.abs(next - before) > 0.5) {
+    app.ui.adminFeedbackDetailScroll = next;
     render();
   }
   return true;
@@ -4991,6 +5268,33 @@ function startAdminStatsScrollInertia(initialVelocity) {
   requestFrame(step);
 }
 
+let adminFeedbackDetailScrollMotionId = 0;
+
+function cancelAdminFeedbackDetailScrollInertia() {
+  adminFeedbackDetailScrollMotionId += 1;
+}
+
+function startAdminFeedbackDetailScrollInertia(initialVelocity) {
+  let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity || 0));
+  if (app.scene !== "adminStats" || !app.ui.adminFeedbackDetail || Math.abs(velocity) < 0.04) return;
+  const motionId = ++adminFeedbackDetailScrollMotionId;
+  let lastTime = Date.now();
+  function step() {
+    if (motionId !== adminFeedbackDetailScrollMotionId || app.scene !== "adminStats" || !app.ui.adminFeedbackDetail) return;
+    const now = Date.now();
+    const elapsed = Math.min(32, Math.max(1, now - lastTime));
+    lastTime = now;
+    const before = app.ui.adminFeedbackDetailScroll || 0;
+    const next = clampAdminFeedbackDetailScroll(before + velocity * elapsed);
+    app.ui.adminFeedbackDetailScroll = next;
+    if (Math.abs(next - before) < 0.05) return;
+    render();
+    velocity *= Math.exp(-0.0048 * elapsed);
+    if (Math.abs(velocity) >= 0.025) requestFrame(step);
+  }
+  requestFrame(step);
+}
+
 function scrollBattleLogHistoryBy(deltaY) {
   if (app.scene !== "battle" || !app.match || app.ui.battleCardDetailId || app.ui.battleCardDetailUid || !app.ui.battleLogHistoryOpen) return false;
   const before = app.ui.battleLogHistoryScroll || 0;
@@ -5028,31 +5332,32 @@ function scrollDiscardPileBy(deltaY) {
 }
 let discardPileInertiaRAF = null;
 function cancelDiscardPileInertia() {
-  if (discardPileInertiaRAF) {
-    cancelAnimationFrame(discardPileInertiaRAF);
+  if (discardPileInertiaRAF != null) {
+    cancelFrame(discardPileInertiaRAF);
     discardPileInertiaRAF = null;
   }
 }
 function startDiscardPileInertia(velocity) {
   cancelDiscardPileInertia();
-  if (Math.abs(velocity) < 0.02) return;
+  if (Math.abs(velocity) < 0.02 || discardPileScrollMax() <= 0) return;
   let v = velocity;
-  let last = performance.now();
-  function step(now) {
+  let last = Date.now();
+  function step() {
     if (app.ui.discardPileOwner == null) { discardPileInertiaRAF = null; return; }
-    const dt = Math.min(32, now - last);
+    const now = Date.now();
+    const dt = Math.min(32, Math.max(1, now - last));
     last = now;
     app.ui.discardPileScroll = clampDiscardPileScroll((app.ui.discardPileScroll || 0) + v * dt);
     render();
     v *= Math.pow(0.95, dt / 16);
     const max = discardPileScrollMax();
     if (Math.abs(v) > 0.02 && app.ui.discardPileScroll > 0 && app.ui.discardPileScroll < max) {
-      discardPileInertiaRAF = requestAnimationFrame(step);
+      discardPileInertiaRAF = requestFrame(step);
     } else {
       discardPileInertiaRAF = null;
     }
   }
-  discardPileInertiaRAF = requestAnimationFrame(step);
+  discardPileInertiaRAF = requestFrame(step);
 }
 
 function handleDiscardPileSwipe(start, end) {
@@ -5590,23 +5895,27 @@ function handleTap(point) {
 const LONG_PRESS_MS = 380;
 
 // 分步新手指引：按序逐个触发，每轮对局最多一个；用户完成则不再提醒，未完成且未达三次的指引循环触发，达到三次后停止提醒
-const GUIDE_STEPS = ["cardDetail", "leaderSkill", "battleRecord", "fieldCardDetail"];
+const GUIDE_STEPS = ["cardDetail", "leaderSkill", "battleRecord", "fieldCardDetail", "discardPile"];
 const MAX_GUIDE_REMIND = 3;
 
-function pickActiveGuide() {
+function guideStepAvailable(step) {
+  return !["battleRecord", "discardPile"].includes(step) || app.match?.round === 2;
+}
+
+function pickActiveGuide(onlyStep = "") {
   app.ui.activeGuide = "";
   app.ui.guideDismissed = false;
   const save = loadSave();
   const guides = save.guides || {};
   const n = GUIDE_STEPS.length;
 
-  // 收集所有「未完成且未超限」的可用指引
+  // 收集所有「未完成、条件满足且未超限」的可用指引
   const available = [];
   for (let i = 0; i < n; i += 1) {
     const step = GUIDE_STEPS[i];
     const g = guides[step];
     const cnt = Number.isFinite(g && g.count) ? g.count : 0;
-    if (g && !g.done && cnt < MAX_GUIDE_REMIND) {
+    if ((!onlyStep || step === onlyStep) && guideStepAvailable(step) && g && !g.done && cnt < MAX_GUIDE_REMIND) {
       available.push(step);
     }
   }
@@ -5635,6 +5944,40 @@ function pickActiveGuide() {
   const g = guides[selectedStep];
   g.count = (Number.isFinite(g.count) ? g.count : 0) + 1;
   saveProgress({ guides: save.guides, guideCursor: (selectedIdx + 1) % n });
+}
+
+function maybeActivateBattleRecordGuide() {
+  const match = app.match;
+  if (app.scene !== "battle" || !match || match.round !== 2 || app.ui.showCardGuide) return;
+  const matchKey = `${match.matchId || app.ui.passLeadHintMatchKey || "current"}:2`;
+  if (app.ui.battleRecordGuideMatchKey === matchKey) return;
+  const guide = loadSave().guides?.battleRecord;
+  const count = Number.isFinite(guide?.count) ? guide.count : 0;
+  if (!guide || guide.done || count >= MAX_GUIDE_REMIND) {
+    app.ui.battleRecordGuideMatchKey = matchKey;
+    return;
+  }
+  app.ui.battleRecordGuideMatchKey = matchKey;
+  pickActiveGuide("battleRecord");
+}
+
+function maybeActivateDiscardPileGuide() {
+  const match = app.match;
+  if (app.scene !== "battle" || !match || match.round !== 2 || app.ui.showCardGuide) return;
+  const matchKey = `${match.matchId || app.ui.passLeadHintMatchKey || "current"}:2`;
+  if (app.ui.discardPileGuideMatchKey === matchKey) return;
+  if (app.ui.activeGuide === "battleRecord") {
+    app.ui.discardPileGuideMatchKey = matchKey;
+    return;
+  }
+  const guide = loadSave().guides?.discardPile;
+  const count = Number.isFinite(guide?.count) ? guide.count : 0;
+  if (!guide || guide.done || count >= MAX_GUIDE_REMIND) {
+    app.ui.discardPileGuideMatchKey = matchKey;
+    return;
+  }
+  app.ui.discardPileGuideMatchKey = matchKey;
+  pickActiveGuide("discardPile");
 }
 
 function markGuideDone(step) {
@@ -5811,6 +6154,7 @@ if (typeof wx !== "undefined" && wx.onTouchStart) {
     cancelBattleCardsPageScrollInertia();
     cancelSettingDeckScrollInertia();
     cancelAdminStatsScrollInertia();
+    cancelAdminFeedbackDetailScrollInertia();
     cancelDiscardPileInertia();
     touchStartState = { point, startTime: Date.now() };
     startLongPress(point);
@@ -5834,6 +6178,35 @@ if (typeof wx !== "undefined" && wx.onTouchMove) {
         const offset = Math.max(-maxOffset, Math.min(maxOffset, dx));
         app.ui.detailSwipe = { offset, animating: false };
         render();
+      }
+    }
+
+    if (app.scene === "adminStats" && app.ui.adminFeedbackDetail) {
+      const start = touchStartState.point;
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      const bodyTop = view.safeTop + 120;
+      const bodyBottom = view.height - view.safeBottom - 42;
+      if (!touchStartState.adminFeedbackDetailScrolling && start.y >= bodyTop && start.y <= bodyBottom && Math.abs(dy) > 3 && Math.abs(dy) > Math.abs(dx) * 0.7) {
+        touchStartState.adminFeedbackDetailScrolling = true;
+      }
+      if (touchStartState.adminFeedbackDetailScrolling) {
+        clearLongPress();
+        const last = touchStartState.lastPoint || start;
+        const now = Date.now();
+        const lastTime = touchStartState.lastTime || touchStartState.startTime || now - 16;
+        const deltaY = point.y - last.y;
+        const elapsed = Math.max(1, now - lastTime);
+        scrollAdminFeedbackDetailBy(deltaY);
+        const instantVelocity = -deltaY / elapsed;
+        const previousVelocity = touchStartState.adminFeedbackDetailScrollVelocity;
+        touchStartState.adminFeedbackDetailScrollVelocity = previousVelocity == null
+          ? instantVelocity
+          : previousVelocity * 0.65 + instantVelocity * 0.35;
+        touchStartState.adminFeedbackDetailScrolled = true;
+        touchStartState.lastPoint = point;
+        touchStartState.lastTime = now;
+        return;
       }
     }
 
@@ -6130,6 +6503,12 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       startHistoryScrollInertia((state.historyScrollVelocity || 0) * releaseFactor);
       return;
     }
+    if (state && state.adminFeedbackDetailScrolled) {
+      const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
+      const releaseFactor = Math.max(0, 1 - idleMs / 120);
+      startAdminFeedbackDetailScrollInertia((state.adminFeedbackDetailScrollVelocity || 0) * releaseFactor);
+      return;
+    }
     if (state && state.adminStatsScrolled) {
       const idleMs = Math.max(0, Date.now() - (state.lastTime || Date.now()));
       const releaseFactor = Math.max(0, 1 - idleMs / 120);
@@ -6149,6 +6528,10 @@ if (typeof wx !== "undefined" && wx.onTouchEnd) {
       startDiscardPileInertia((state.discardPileVelocity || 0) * releaseFactor);
       return;
     }
+    // 弃牌堆遮罩上的轻微手指偏移不应让关闭点击失效。
+    if (app.scene === "battle" && app.ui.discardPileOwner != null && findAction(point)?.id === "closeDiscardPile") {
+      return handleAction({ id: "closeDiscardPile" });
+    }
     if (handleBattleLogHistorySwipe(start, point)) return;
     if (handleDiscardPileSwipe(start, point)) return;
     if (handleSettingsSwipe(start, point)) return;
@@ -6166,6 +6549,7 @@ if (typeof wx !== "undefined" && wx.onTouchCancel) {
     }
     cancelSettingDeckScrollInertia();
     cancelAdminStatsScrollInertia();
+    cancelAdminFeedbackDetailScrollInertia();
     cancelHistoryRecordScrollInertia();
     touchStartState = null;
   });

@@ -5,9 +5,9 @@
 // 覆盖四条曾经可以零成本免罚的路径：
 //   1. 开局后不提交结算，直接开下一局（杀进程逃跑）
 //   2. 并发开多局，只提交赢的那一局
-//   3. 拖到对局过期后再提交
+//   3. 长时间后台后再恢复结算
 //   4. 提交自相矛盾的战报把必输的局洗成"数据异常"
-// 另外验证宽限期内的重复创建不会被误判负。
+// 同时验证立即重开也会判负上一局。
 
 const assert = require("assert");
 const Module = require("module");
@@ -50,6 +50,7 @@ function matchesCondition(doc, id, condition) {
   return Object.entries(condition || {}).every(([key, expected]) => {
     const actual = key === "_id" ? id : doc?.[key];
     if (expected && expected.__dbOperation === "lt") return Number(actual) < Number(expected.value);
+    if (expected && expected.__dbOperation === "gt") return Number(actual) > Number(expected.value);
     if (expected && expected.__dbOperation === "nin") return !expected.value.includes(actual);
     return actual === expected;
   });
@@ -76,11 +77,11 @@ function docRef(name, id) {
 
 function queryRef(name, condition) {
   const store = storeFor(name);
-  const state = { orderKey: "", orderDir: "asc", limit: 0 };
+  const state = { orderKey: "", orderDir: "asc", limit: 0, skip: 0 };
   const ref = {
     orderBy(key, dir) { state.orderKey = key; state.orderDir = dir || "asc"; return ref; },
     limit(value) { state.limit = value; return ref; },
-    skip() { return ref; },
+    skip(value) { state.skip = Math.max(0, Number(value) || 0); return ref; },
     async count() {
       return { total: ref.__rows().length };
     },
@@ -94,6 +95,7 @@ function queryRef(name, condition) {
           return state.orderDir === "desc" ? -diff : diff;
         });
       }
+      rows = rows.slice(state.skip);
       return state.limit ? rows.slice(0, state.limit) : rows;
     },
     async get() {
@@ -126,6 +128,7 @@ const database = {
     set(value) { return operation("set", value); },
     remove() { return operation("remove"); },
     lt(value) { return operation("lt", value); },
+    gt(value) { return operation("gt", value); },
     nin(value) { return operation("nin", value); }
   },
   async createCollection(name) { storeFor(name); },
@@ -224,9 +227,8 @@ async function testAbandonOnNextStart() {
   const before = await power(openid);
   assert(before >= 7, `应已脱离低段位保护，实际权势 ${before}`);
 
-  // 开局后直接不提交（等价于杀进程逃跑），超过宽限期再开下一局
+  // 排位创建后直接不提交（等价于杀进程逃跑），下次开局立即判负。
   await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
-  clockOffset += rankCore.ABANDON_GRACE_MS + 1000;
   const restart = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
 
   assert.equal(restart.abandonedPrevious, 1, "上一局未提交必须被补判负1 局");
@@ -241,7 +243,6 @@ async function testAbandonOnNextStart() {
 
   // 被判负的那局不能再提交一份赢的战报
   const abandonedId = restart.rankMatchId;
-  clockOffset += rankCore.ABANDON_GRACE_MS + 1000;
   const next = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
   assert.equal(next.abandonedPrevious, 1, "再次开局应把上一局也判负");
   await rpcFailure(openid, "finishRankMatch", {
@@ -259,7 +260,6 @@ async function testConcurrentMatchesCannotBeCherryPicked() {
   const before = await power(openid);
 
   const first = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
-  clockOffset += rankCore.ABANDON_GRACE_MS + 1000;
   const second = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
   assert.equal(second.abandonedPrevious, 1, "开第二局时第一局必须被判负，无法同时挂两局挑赢的交");
 
@@ -282,27 +282,75 @@ async function testConcurrentMatchesCannotBeCherryPicked() {
   console.log("✓ 并发开局无法只结算赢的那一局");
 }
 
-async function testTimeoutSubmitIsLoss() {
+async function testLongSuspendCanFinishNormally() {
   const openid = "rank-abandon-3";
-  await liftAboveProtection(openid, 8);
   const before = await power(openid);
 
   const started = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
-  clockOffset += 3 * 60 * 60 * 1000; // 超过 ROOM_TTL_MS
+  const firstReport = await rpc(openid, "reportRankProgress", {
+    rankMatchId: started.rankMatchId,
+    progressVersion: 1,
+    setup: {
+      humanFaction: "开国群雄",
+      humanLeader: "刘邦",
+      humanLeaderId: "leader-liubang",
+      aiFaction: "遗策复兴",
+      aiLeader: "项籍",
+      aiLeaderId: "leader-xiangyu"
+    },
+    progress: {
+      round: 2,
+      phase: "playing",
+      current: 1,
+      passed: [true, false],
+      rounds: [1, 0],
+      scores: [45, 38],
+      roundResults: [{ round: 1, scores: [45, 38], winner: 0 }]
+    }
+  });
+  assert.equal(firstReport.updated, true, "初始局面必须成功写入当前排位局");
+
+  // 模拟小程序被长时间挂起后恢复；排位局不应因时长被判负。
+  clockOffset += 3 * 60 * 60 * 1000;
+  const resumedReport = await rpc(openid, "reportRankProgress", {
+    rankMatchId: started.rankMatchId,
+    progressVersion: 2,
+    progress: {
+      round: 2,
+      phase: "playing",
+      current: 0,
+      passed: [true, false],
+      rounds: [1, 0],
+      scores: [52, 46],
+      roundResults: [{ round: 1, scores: [45, 38], winner: 0 }]
+    }
+  });
+  assert.equal(resumedReport.updated, true, "长时间后台恢复后仍必须能更新排位局面");
+
   const result = await rpc(openid, "finishRankMatch", {
     rankMatchId: started.rankMatchId,
     clientVersion: "test",
     durationMs: 120000,
-    finalStateSummary: winSummary()
+    finalStateSummary: {
+      ...winSummary(),
+      humanFaction: "开国群雄",
+      humanLeader: "刘邦",
+      humanLeaderId: "leader-liubang",
+      aiFaction: "遗策复兴",
+      aiLeader: "项籍",
+      aiLeaderId: "leader-xiangyu"
+    }
   });
 
-  assert.equal(result.autoLoss, true, "超时提交应标记为自动判负");
-  assert.equal(result.delta.powerDelta, -1, "超时提交必须扣 1 点权势");
+  assert.equal(result.autoLoss, undefined, "长时间后台恢复后结算不得自动判负");
+  assert.equal(result.delta.powerDelta, 1, "恢复后正常赢局必须增加 1 点权势");
   const after = await power(openid);
-  assert.equal(after, before - 1, `超时提交不得免罚：${before} -> ${after}`);
-  const record = (await historyFor(openid)).find(item => item.endReason === "timeout");
-  assert(record && record.resultText === "排位超时", "超时判负必须写入战绩");
-  console.log("✓ 拖到过期再提交赢局→ 按超时判负");
+  assert.equal(after, before + 1, `长时间后台恢复后必须正常计分：${before} -> ${after}`);
+  const record = (await historyFor(openid)).find(item => item.rankMatchId === started.rankMatchId);
+  assert(record && record.endReason === "normal", "长时间后台恢复后的排位必须记录为正常结算");
+  assert.equal(record.humanFaction, "开国群雄", "恢复后的正常战绩必须记录我方阵营");
+  assert.equal(record.aiLeader, "项籍", "恢复后的正常战绩必须记录对手主将");
+  console.log("✓ 排位长时间后台后仍可继续同步并正常结算");
 }
 
 async function testInvalidSubmitIsLoss() {
@@ -327,25 +375,29 @@ async function testInvalidSubmitIsLoss() {
   assert.equal(after, before - 1, `提交垃圾战报不得免罚：${before} -> ${after}`);
   const record = (await historyFor(openid)).find(item => item.endReason === "invalid");
   assert(record, "异常判负必须写入战绩");
+  assert.equal(record.resultText, "排位弃局", "异常判负对玩家也必须统一显示为排位弃局");
+  assert.equal(record.validationStatus, "invalid", "统一文案不得抹掉异常风控状态");
+  assert(record.riskFlags.includes("MISSING_ROUND_RESULTS"), "异常原因必须保留在风控标记中");
   assert.equal(record.rankedAnomaly, true, "异常判负应保留风控标记");
   assert.equal(record.rankDeltaText, "权势 -1，威望不变", `异常判负也要照实展示扣分，实际 ${record.rankDeltaText}`);
   console.log("✓ 提交自相矛盾战报 → 按数据异常判负而非免罚");
 }
 
-async function testGracePeriodNotPunished() {
+async function testImmediateRestartIsAbandon() {
   const openid = "rank-abandon-5";
   await liftAboveProtection(openid, 8);
   const before = await power(openid);
 
-  // 模拟客户端请求超时后立刻重试开局：宽限期内的空局只能作废，不能判负
+  // 排位创建即视为开局：即使立即重开，也不能作废上一局逃避结算。
   await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
-  clockOffset += 5000;
   const retry = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
-  assert.equal(retry.abandonedPrevious, 0, "宽限期内的重复创建不得判负");
+  assert.equal(retry.abandonedPrevious, 1, "立即重复创建也必须判负上一局");
 
   const after = await power(openid);
-  assert.equal(after, before, `宽限期内重试不得扣分：${before} -> ${after}`);
-  console.log("✓ 宽限期内重复开局只作废，不误判负");
+  assert.equal(after, before - 1, `立即重开必须扣分：${before} -> ${after}`);
+  const record = (await historyFor(openid)).find(item => item.endReason === "abandon");
+  assert(record, "立即重开必须写入弃局战绩");
+  console.log("✓ 创建后立即重开 → 上一局按弃局判负");
 }
 
 async function testNormalWinStillWorks() {
@@ -382,6 +434,7 @@ async function testDisconnectSnapshotReported() {
   // 赢下第一小局后上报进度，然后直接跑掉
   const reported = await rpc(openid, "reportRankProgress", {
     rankMatchId: started.rankMatchId,
+    progressVersion: 1,
     setup: {
       humanFaction: "开国群雄",
       humanLeader: "刘邦",
@@ -391,14 +444,37 @@ async function testDisconnectSnapshotReported() {
       aiLeaderId: "leader-xiangyu"
     },
     progress: {
+      round: 2,
+      phase: "playing",
+      current: 1,
+      passed: [true, false],
       rounds: [1, 0],
       scores: [45, 38],
       roundResults: [{ round: 1, scores: [45, 38], winner: 0 }]
     }
   });
   assert.equal(reported.updated, true, "小局进度必须写入当前排位局");
-  
-  clockOffset += rankCore.ABANDON_GRACE_MS + 1000;
+  const newer = await rpc(openid, "reportRankProgress", {
+    rankMatchId: started.rankMatchId,
+    progressVersion: 2,
+    progress: {
+      round: 2,
+      phase: "playing",
+      current: 0,
+      passed: [true, false],
+      rounds: [1, 0],
+      scores: [52, 46],
+      roundResults: [{ round: 1, scores: [45, 38], winner: 0 }]
+    }
+  });
+  const delayed = await rpc(openid, "reportRankProgress", {
+    rankMatchId: started.rankMatchId,
+    progressVersion: 1,
+    progress: { round: 2, phase: "playing", current: 1, passed: [false, false], rounds: [1, 0], scores: [99, 0], roundResults: [] }
+  });
+  assert.equal(newer.updated, true, "更高版本局面必须写入当前排位局");
+  assert.equal(delayed.updated, false, "延迟到达的旧局面不得覆盖最新局面");
+
   const restart = await rpc(openid, "startRankMatch", { playerSetup: { faction: "random" } });
   assert.equal(restart.abandonedPrevious, 1, "跑掉的那局必须被补判负");
   
@@ -411,7 +487,11 @@ async function testDisconnectSnapshotReported() {
   
   assert(record.disconnectSnapshot, "必须带出掉线时的比分快照");
   assert.deepEqual(record.disconnectSnapshot.rounds, [1, 0], "快照小局比分应为上报值");
-  assert.deepEqual(record.disconnectSnapshot.scores, [45, 38], "快照场面分应为上报值");
+  assert.deepEqual(record.disconnectSnapshot.scores, [52, 46], "快照场面分应为最后一次有效上报值");
+  assert.equal(record.disconnectSnapshot.round, 2, "快照应保留当前所在小局");
+  assert.equal(record.disconnectSnapshot.phase, "playing", "快照应保留当前阶段");
+  assert.equal(record.disconnectSnapshot.current, 0, "快照应保留最后一次有效上报的行动方");
+  assert.deepEqual(record.disconnectSnapshot.passed, [true, false], "快照应保留双方停牌状态");
   assert.equal(record.disconnectSnapshot.roundResults.length, 1, "快照应保留已打完的小局明细");
   
   // 弃局战绩不能一片空白：阵营、主将、难度、牌组模式、已打小局数都要有
@@ -427,6 +507,7 @@ async function testDisconnectSnapshotReported() {
   // 已结算的局不能再被上报进度改写
   const stale = await rpc(openid, "reportRankProgress", {
     rankMatchId: started.rankMatchId,
+    progressVersion: 2,
     progress: { rounds: [2, 0], scores: [99, 0], roundResults: [] }
   });
   assert.equal(stale.updated, false, "已结算的排位局不得再接受进度上报");
@@ -435,6 +516,7 @@ async function testDisconnectSnapshotReported() {
   const other = await rpc("rank-abandon-8", "startRankMatch", { playerSetup: { faction: "random" } });
   const crossWrite = await rpc(openid, "reportRankProgress", {
     rankMatchId: other.rankMatchId,
+    progressVersion: 1,
     progress: { rounds: [2, 0], scores: [99, 0], roundResults: [] }
   });
   assert.equal(crossWrite.updated, false, "不得向他人的排位局写入进度");
@@ -443,14 +525,64 @@ async function testDisconnectSnapshotReported() {
   console.log("✓ 掉线判负仍为 0:2，但能带出掉线时比分且不可跨局写入");
 }
 
+async function testRankPublicProfileRecentStats() {
+  const openid = "rank-public-profile";
+  const profile = await rpc(openid, "getRankProfile", {});
+  const baseTime = Date.now();
+  const records = [];
+  const append = (faction, wins, losses, prestigePerWin) => {
+    for (let index = 0; index < wins + losses; index += 1) {
+      const winner = index < wins ? 0 : 1;
+      records.push({
+        winner,
+        humanFaction: faction,
+        rankPrestigeDelta: winner === 0 ? prestigePerWin : 0
+      });
+    }
+  };
+  // 前两阵营胜场与胜率完全相同，必须由威望提升决出常胜阵营。
+  append("开国群雄", 5, 2, 12);
+  append("纵横权谋", 5, 2, 8);
+  append("百家争鸣", 0, 6, 0);
+  records.forEach((record, index) => {
+    storeFor("match_history").set(`rank-public-${index}`, {
+      openid,
+      time: baseTime - index,
+      source: "pvpRoom",
+      record: { ranked: true, ...record }
+    });
+  });
+  // 第 21 场不应进入近 20 场统计。
+  storeFor("match_history").set("rank-public-outside-window", {
+    openid,
+    time: baseTime - records.length,
+    source: "pvpRoom",
+    record: { ranked: true, winner: 0, humanFaction: "遗策复兴", rankPrestigeDelta: 200 }
+  });
+
+  const result = await rpc("rank-public-viewer", "getRankPublicProfile", { userId: profile.profile.userId });
+  const stats = result.profile.recentRank;
+  assert.equal(stats.totalMatches, 20, "公开资料只统计最近 20 场排位");
+  assert.equal(stats.wins, 10, "近 20 场胜场统计应准确");
+  assert.equal(stats.losses, 10, "近 20 场负场统计应准确");
+  assert.equal(stats.draws, 0, "近 20 场平局统计应准确");
+  assert.equal(stats.winRate, 50, "近 20 场排位胜率应准确");
+  assert.equal(stats.favoriteFaction?.faction, "开国群雄", "胜场、胜率相同后应按威望提升选出常胜阵营");
+  assert.equal(stats.favoriteFaction?.wins, 5, "常胜阵营应返回最近 20 场的胜场");
+  assert.equal(stats.favoriteFaction?.winRate, 71.4, "常胜阵营应返回最近 20 场的胜率");
+  assert.equal(stats.favoriteFaction?.prestigeGain, 60, "常胜阵营应累计最近 20 场的正向威望提升");
+  console.log("✓ 公开排位资料准确展示近 20 场胜率与常胜阵营");
+}
+
 async function run() {
   await testNormalWinStillWorks();
-  await testGracePeriodNotPunished();
+  await testImmediateRestartIsAbandon();
   await testAbandonOnNextStart();
   await testConcurrentMatchesCannotBeCherryPicked();
-  await testTimeoutSubmitIsLoss();
+  await testLongSuspendCanFinishNormally();
   await testInvalidSubmitIsLoss();
   await testDisconnectSnapshotReported();
+  await testRankPublicProfileRecentStats();
   console.log("\n排位赛逃跑免罚回归测试全部通过");
 }
 

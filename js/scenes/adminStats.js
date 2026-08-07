@@ -1,4 +1,4 @@
-const { clear, text, fillRoundRect, wrapText, drawRemoteImage, drawTopLeftBack } = require("../ui/canvas");
+const { clear, text, button, fillRoundRect, wrapText, drawRemoteImage, drawTopLeftBack } = require("../ui/canvas");
 
 const INK = "#2f2417";
 const MUTED = "#775c34";
@@ -49,7 +49,8 @@ function contentHeight(stats) {
   const topPlayersH = listPanelHeight(playerItems(stats).length, 52, 52);
   const recentMatchesH = recentMatchesPanelHeight(recentItems(stats));
   const rankAnomalyH = rankAnomalyPanelHeight(stats);
-  return 572 + 14 + topPlayersH + 14 + recentMatchesH + (rankAnomalyH ? 14 + rankAnomalyH : 0) + 24;
+  const feedbackH = feedbackPanelHeight(stats);
+  return 572 + 14 + topPlayersH + 14 + recentMatchesH + (rankAnomalyH ? 14 + rankAnomalyH : 0) + 14 + feedbackH + 24;
 }
 
 function scrollBounds(view, stats) {
@@ -378,6 +379,168 @@ function drawRankAnomalies(ctx, x, y, w, stats) {
   return height;
 }
 
+function feedbackItems(stats) {
+  return Array.isArray(stats?.feedback?.items) ? stats.feedback.items : [];
+}
+
+function feedbackStatusMeta(status) {
+  if (status === "processed") return { label: "已处理", color: "#2f6f57" };
+  if (status === "ignored") return { label: "忽略", color: "#8d6840" };
+  return { label: "待处理", color: "#9f3b24" };
+}
+
+function feedbackPanelHeight(stats) {
+  const items = feedbackItems(stats);
+  return 58 + (items.length ? items.length * 86 + 12 : 58);
+}
+
+function battleSummary(item) {
+  const battle = item?.battle || {};
+  const players = Array.isArray(battle.players) ? battle.players : [];
+  const sides = players.map(player => `${player.faction || "未知阵营"}·${player.leader || "未知主将"}`).join(" 对 ");
+  return `${battle.mode === "online" ? "联机" : "单机"} · ${sides || "对局信息缺失"}`;
+}
+
+function drawBattleFeedbacks(ctx, x, y, w, stats, actions) {
+  const feedback = stats?.feedback || {};
+  const items = feedbackItems(stats);
+  const height = feedbackPanelHeight(stats);
+  panel(ctx, x, y, w, height, "对局反馈");
+  text(ctx, `待处理 ${feedback.pending || 0} · 已处理 ${feedback.processed || 0} · 忽略 ${feedback.ignored || 0}`, x + w - 14, y + 20, 10, MUTED, "right");
+  if (!items.length) {
+    text(ctx, "暂无用户反馈", x + w / 2, y + 82, 12, MUTED, "center");
+    return height;
+  }
+  items.forEach((item, index) => {
+    const rowY = y + 38 + index * 86;
+    const status = feedbackStatusMeta(item.status);
+    const row = { id: "openAdminFeedbackDetail", feedbackId: item.feedbackId, x: x + 12, y: rowY, w: w - 24, h: 76 };
+    actions.push(row);
+    fillRoundRect(ctx, row.x, row.y, row.w, row.h, 11, "#fffdf6", "#dfcfac");
+    const user = item.user || { nickName: "匿名玩家", avatarUrl: "" };
+    drawPlayerAvatar(ctx, user, row.x + 10, row.y + 10, 28);
+    text(ctx, fitText(ctx, user.nickName || "匿名玩家", row.w - 118, 12), row.x + 46, row.y + 17, 12, INK);
+    fillRoundRect(ctx, row.x + row.w - 60, row.y + 6, 50, 18, 7, status.color);
+    text(ctx, status.label, row.x + row.w - 35, row.y + 19, 9, "#fff7e8", "center");
+    text(ctx, formatMatchTime(item.createdAt), row.x + 46, row.y + 33, 10, MUTED);
+    text(ctx, fitText(ctx, item.content, row.w - 56, 11), row.x + 46, row.y + 50, 11, "#5f4727");
+    text(ctx, fitText(ctx, battleSummary(item), row.w - 56, 10), row.x + 46, row.y + 67, 10, MUTED);
+  });
+  return height;
+}
+
+function wrapFeedbackDetailLine(value, maxChars = 32) {
+  const chars = Array.from(String(value || ""));
+  if (!chars.length) return [""];
+  const lines = [];
+  for (let index = 0; index < chars.length; index += maxChars) lines.push(chars.slice(index, index + maxChars).join(""));
+  return lines;
+}
+
+function feedbackDetailLines(item) {
+  const battle = item?.battle || {};
+  const players = Array.isArray(battle.players) ? battle.players : [];
+  const playersText = players.map(player => `${player.side || ""} ${player.faction || "未知阵营"}·${player.leader || "未知主将"}`).join(" / ");
+  const history = Array.isArray(battle.history) ? battle.history : [];
+  const logs = Array.isArray(battle.logs) ? battle.logs : [];
+  const historyLines = history.map(entry => `第${entry.round || "-"}局 ${entry.side || ""} ${entry.text || ""}`);
+  const logicalLines = [
+    `提交时间：${formatMatchTime(item?.createdAt)}`,
+    "",
+    "反馈内容",
+    item?.content || "（空）",
+    "",
+    `对局：${playersText || "信息缺失"}`,
+    `记录：${history.length} 条行动 · ${logs.length} 条日志`,
+    `备注：${item?.note || "未填写"}`,
+    `回复：${item?.reply || "未填写（暂不触达用户）"}`,
+    "",
+    "完整战斗记录",
+    ...(historyLines.length ? historyLines : logs.length ? logs : ["（没有可用记录）"])
+  ];
+  return logicalLines.flatMap(line => (line === "" || line === "反馈内容" || line === "完整战斗记录") ? [line] : wrapFeedbackDetailLine(line));
+}
+
+function feedbackDetailScrollBounds(view, item) {
+  const panelH = Math.min(view.height - view.safeTop - view.safeBottom - 32, 520);
+  const viewportH = Math.max(0, panelH - 160);
+  const contentH = feedbackDetailLines(item).length * 18 + 8;
+  return { maxScroll: Math.max(0, contentH - viewportH) };
+}
+
+function drawFeedbackDetail(ctx, view, actions, ui) {
+  const item = ui.adminFeedbackDetail;
+  if (!item) return;
+  actions.push({ id: "closeAdminFeedbackDetail", x: 0, y: 0, w: view.width, h: view.height });
+  ctx.save();
+  ctx.fillStyle = "rgba(28, 21, 14, 0.52)";
+  ctx.fillRect(0, 0, view.width, view.height);
+  ctx.restore();
+  const panelW = view.width - 28;
+  const panelH = Math.min(view.height - view.safeTop - view.safeBottom - 32, 520);
+  const panelX = 14;
+  const panelY = view.safeTop + 52;
+  const bodyScroll = Math.max(0, Number(ui.adminFeedbackDetailScroll) || 0);
+  const panel = { id: "adminFeedbackDetailPanel", x: panelX, y: panelY, w: panelW, h: panelH };
+  actions.push(panel);
+  fillRoundRect(ctx, panelX, panelY, panelW, panelH, 18, "#fffaf0", "#d1ad6a");
+  const status = feedbackStatusMeta(item.status);
+  text(ctx, "反馈详情", panelX + 18, panelY + 26, 18, INK);
+  fillRoundRect(ctx, panelX + panelW - 88, panelY + 10, 50, 20, 8, status.color);
+  text(ctx, status.label, panelX + panelW - 63, panelY + 24, 10, "#fff7e8", "center");
+  const close = { id: "closeAdminFeedbackDetail", x: panelX + panelW - 32, y: panelY + 8, w: 24, h: 24 };
+  actions.push(close);
+  text(ctx, "×", close.x + 12, close.y + 14, 16, "#775c34", "center");
+  const bodyX = panelX + 18;
+  const bodyW = panelW - 36;
+  const user = item.user || { nickName: "匿名玩家", avatarUrl: "" };
+  drawPlayerAvatar(ctx, user, bodyX, panelY + 43, 38);
+  text(ctx, fitText(ctx, user.nickName || "匿名玩家", bodyW - 54, 14), bodyX + 48, panelY + 59, 14, INK);
+  text(ctx, fitText(ctx, item.userId || "未知", bodyW - 54, 10), bodyX + 48, panelY + 78, 10, MUTED);
+  const bodyTop = panelY + 104;
+  const bodyBottom = panelY + panelH - 58;
+  const detailLines = feedbackDetailLines(item);
+  const lineHeight = 18;
+  const { maxScroll } = feedbackDetailScrollBounds(view, item);
+  const scroll = Math.min(maxScroll, bodyScroll);
+  ui.adminFeedbackDetailScroll = scroll;
+  const contentHeight = detailLines.length * lineHeight + 8;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(bodyX, bodyTop, bodyW, bodyBottom - bodyTop);
+  ctx.clip();
+  detailLines.forEach((line, index) => {
+    if (!line) return;
+    const isHeading = line === "反馈内容" || line === "完整战斗记录";
+    text(ctx, fitText(ctx, line, bodyW, isHeading ? 12 : 11), bodyX, bodyTop + 14 + index * lineHeight - scroll, isHeading ? 12 : 11, isHeading ? INK : "#5f4727");
+  });
+  ctx.restore();
+  if (maxScroll > 0) {
+    const trackY = bodyTop;
+    const trackH = bodyBottom - bodyTop;
+    const thumbH = Math.max(22, trackH * trackH / contentHeight);
+    const thumbY = trackY + (trackH - thumbH) * (scroll / maxScroll);
+    fillRoundRect(ctx, panelX + panelW - 10, trackY, 4, trackH, 2, "#e4d7bd");
+    fillRoundRect(ctx, panelX + panelW - 10, thumbY, 4, thumbH, 2, "#ab8652");
+  }
+  const buttonY = panelY + panelH - 46;
+  const statusW = 60;
+  [
+    ["pending", "待处理", "#9f3b24"],
+    ["processed", "已处理", "#2f6f57"],
+    ["ignored", "忽略", "#8d6840"]
+  ].forEach((entry, index) => {
+    const rect = { id: "adminFeedbackStatus", status: entry[0], x: bodyX + index * (statusW + 6), y: buttonY, w: statusW, h: 30 };
+    actions.push(rect);
+    button(ctx, { ...rect, label: entry[1], size: 10, fill: item.status === entry[0] ? entry[2] : "#b7a98d", shadow: false });
+  });
+  const note = { id: "adminFeedbackNote", x: panelX + panelW - 132, y: buttonY, w: 54, h: 30 };
+  const reply = { id: "adminFeedbackReply", x: panelX + panelW - 72, y: buttonY, w: 54, h: 30 };
+  actions.push(note, reply);
+  button(ctx, { ...note, label: "备注", size: 10, fill: "#4f6d8a", shadow: false });
+  button(ctx, { ...reply, label: "回复", size: 10, fill: "#7a5a95", shadow: false });
+}
+
 function drawDashboard(ctx, view, actions, ui, state) {
   const stats = ui.adminStats || {};
   const users = stats.users || {};
@@ -417,7 +580,9 @@ function drawDashboard(ctx, view, actions, ui, state) {
   const playerPanelH = drawActivePlayers(ctx, x, playerPanelY, w, stats);
   const recentPanelY = playerPanelY + playerPanelH + 14;
   const recentPanelH = drawRecentMatches(ctx, x, recentPanelY, w, stats);
-  drawRankAnomalies(ctx, x, recentPanelY + recentPanelH + 14, w, stats);
+  const rankPanelY = recentPanelY + recentPanelH + 14;
+  const rankPanelH = drawRankAnomalies(ctx, x, rankPanelY, w, stats);
+  drawBattleFeedbacks(ctx, x, rankPanelY + (rankPanelH ? rankPanelH + 14 : 0), w, stats, actions);
 }
 
 function draw(ctx, view, actions, ui = {}) {
@@ -462,7 +627,8 @@ function draw(ctx, view, actions, ui = {}) {
     fillRoundRect(ctx, 24, state.listTop + 26, view.width - 48, 112, 16, PANEL, LINE);
     wrapText(ctx, ui.adminStatsError || "正在读取数据统计…", 42, state.listTop + 72, view.width - 84, 20, 2, 13, ui.adminStatsError ? "#9f3b24" : MUTED);
   }
+  drawFeedbackDetail(ctx, view, actions, ui);
 
 }
 
-module.exports = { draw, scrollBounds };
+module.exports = { draw, scrollBounds, feedbackDetailScrollBounds };

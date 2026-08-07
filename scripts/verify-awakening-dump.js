@@ -1,6 +1,6 @@
 // 验证卧薪尝胆「死牌开局即打」默认策略的行为：
-//  1) 持有彻底无用的死牌雪耻（无出使、无蛰伏）时，轮到自己会立即打出清掉废牌；
-//  2) 若己方手牌/场上存在蛰伏，则不应主动打出（守卫生效）。
+//  1) 持有彻底无用的死牌复国（无出使、无战俘）时，轮到自己会立即打出清掉废牌；
+//  2) 若己方手牌/场上存在战俘，则不应主动打出（守卫生效）。
 // 注意：该策略已作为默认行为，无需任何开关即可触发。
 const battle = require("../shared/core/battle");
 const { allCards } = require("../shared/core/cards");
@@ -18,22 +18,22 @@ function cloneCard(card, uid, owner) {
   return c;
 }
 
-// 强制双方持有「死牌卧薪尝胆」：移除出使/蛰伏，注入雪耻。
+// 强制双方持有「死牌卧薪尝胆」：移除出使/战俘，注入复国。
 function injectDeadAwakening(state) {
   const mard = allCards().find(c => c.name === "卧薪尝胆");
   let counter = 0;
   state.players.forEach((player, idx) => {
-    player.hand = player.hand.filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "蛰伏"));
-    player.deck = (player.deck || []).filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "蛰伏"));
-    player.discard = (player.discard || []).filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "蛰伏"));
+    player.hand = player.hand.filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "战俘"));
+    player.deck = (player.deck || []).filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "战俘"));
+    player.discard = (player.discard || []).filter(c => !hasAbilitySafe(c, "出使") && !hasAbilitySafe(c, "战俘"));
     player.hand.push(cloneCard(mard, `inject-awakening-${idx}-${counter++}`, idx));
   });
 }
 
-// 强制双方持有「雪耻 + 一张蛰伏单位」：验证守卫不主动打出。
+// 强制双方持有「复国 + 一张战俘单位」：验证守卫不主动打出。
 function injectAwakeningWithDormantUnit(state) {
   const mard = allCards().find(c => c.name === "卧薪尝胆");
-  const dormantUnit = allCards().find(c => hasAbilitySafe(c, "蛰伏"));
+  const dormantUnit = allCards().find(c => hasAbilitySafe(c, "战俘"));
   if (!dormantUnit) return;
   let counter = 0;
   state.players.forEach((player, idx) => {
@@ -60,8 +60,8 @@ function runOne(seed, inject) {
     const idx = state.current;
     const player = state.players[idx];
     const before = player.hand.some(c => c.uid === mardUid[idx]);
-    const hadDormantUnitInHand = player.hand.some(c => hasAbilitySafe(c, "蛰伏"));
-    const hadDormantUnitOnBoard = ["疆场", "朝堂", "文脉"].some(row => (player.board[row] || []).some(c => hasAbilitySafe(c, "蛰伏") && !c.transformed));
+    const hadDormantUnitInHand = player.hand.some(c => hasAbilitySafe(c, "战俘"));
+    const hadDormantUnitOnBoard = ["疆场", "朝堂", "文脉"].some(row => (player.board[row] || []).some(c => hasAbilitySafe(c, "战俘") && !c.transformed));
     battle.autoStep(state, { playerIndex: idx, cfg: HARD });
     const after = player.hand.some(c => c.uid === mardUid[idx]);
     if (before && !after) {
@@ -79,7 +79,7 @@ for (let i = 0; i < N; i++) {
   if (result.played[0]) mardPlayed++;
   if (result.played[1]) mardPlayed++;
 }
-console.log(`[死牌清废] 抽样 ${N * 2} 次出手：打出雪耻=${mardPlayed}，${mardPlayed >= N * 2 * 0.9 ? "默认策略已主动清废牌(符合预期，未打出多为对手已放弃则转为争胜)" : "存在未打出，需排查"}`);
+console.log(`[死牌清废] 抽样 ${N * 2} 次出手：打出复国=${mardPlayed}，${mardPlayed >= N * 2 * 0.9 ? "默认策略已主动清废牌(符合预期，未打出多为对手已放弃则转为争胜)" : "存在未打出，需排查"}`);
 
 let guardBadDump = 0;
 for (let i = 0; i < N; i++) {
@@ -87,4 +87,4 @@ for (let i = 0; i < N; i++) {
   if (result.dumpedBeforeDormantUnit[0]) guardBadDump++;
   if (result.dumpedBeforeDormantUnit[1]) guardBadDump++;
 }
-console.log(`[守卫校验] 抽样 ${N * 2} 次出手：手牌仍有蛰伏时抢先打雪耻=${guardBadDump}，${guardBadDump === 0 ? "持有蛰伏时不主动清废(守卫生效)" : "存在误打，需排查"}`);
+console.log(`[守卫校验] 抽样 ${N * 2} 次出手：手牌仍有战俘时抢先打复国=${guardBadDump}，${guardBadDump === 0 ? "持有战俘时不主动清废(守卫生效)" : "存在误打，需排查"}`);

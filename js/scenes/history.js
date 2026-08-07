@@ -23,8 +23,16 @@ const RESULT_STYLES = {
   anomaly: { label: "异常", color: "#8d6840", fill: "#fff7e8", tagFill: "#8d6840" }
 };
 
+function isRankAbandon(item) {
+  return !!item?.ranked && ["abandon", "invalid"].includes(item.endReason);
+}
+
+function hasVisibleRankAnomaly(item) {
+  return !!item?.rankedAnomaly && !isRankAbandon(item);
+}
+
 function resultType(item) {
-  if (item.rankedAnomaly) return "anomaly";
+  if (hasVisibleRankAnomaly(item)) return "anomaly";
   if (item.winner === 0) return "win";
   if (item.winner == null) return "draw";
   return "loss";
@@ -91,9 +99,14 @@ function roundLine(rounds) {
   }).join(" · ");
 }
 
-// 掉线/弃局的战绩固定记 0:2 失败，这里只额外补一句离开时的场面，不影响胜负展示。
-// 服务端补判负时 roundResults 为空，此时才靠 disconnectSnapshot 把比分补回来。
-const AWAY_END_REASONS = ["disconnect", "abandon", "timeout"];
+// 中断类战绩固定记 0:2 失败，但必须保留结束前的真实局面，且不影响正式胜负展示。
+const AWAY_END_REASONS = ["disconnect", "abandon", "invalid"];
+const PROGRESS_PHASE_LABELS = { mulligan: "换牌中", roundTransition: "小局结算中", pending: "等待选择", playing: "对战中" };
+
+function interruptionPrefix(item) {
+  if (item.endReason === "disconnect") return "掉线前";
+  return "离开前";
+}
 
 function disconnectDetail(item) {
   if (!AWAY_END_REASONS.includes(item.endReason)) return "";
@@ -102,8 +115,12 @@ function disconnectDetail(item) {
   const snapshotRounds = Array.isArray(snapshot.roundResults) ? snapshot.roundResults : [];
   const rounds = Array.isArray(snapshot.rounds) ? snapshot.rounds : [0, 0];
   const scores = Array.isArray(snapshot.scores) ? snapshot.scores : [0, 0];
-  const detail = snapshotRounds.length ? roundLine(snapshotRounds) : `小局 ${rounds[0] || 0}:${rounds[1] || 0}`;
-  return `离开时 ${detail} · 场面 ${scores[0] || 0}:${scores[1] || 0}`;
+  const completed = snapshotRounds.length ? roundLine(snapshotRounds) : `小局 ${rounds[0] || 0}:${rounds[1] || 0}`;
+  const phase = PROGRESS_PHASE_LABELS[snapshot.phase] || "";
+  const turn = snapshot.current == null ? "" : (snapshot.current === 0 ? "我方回合" : "对手回合");
+  const passed = Array.isArray(snapshot.passed) ? ` · 停牌 ${snapshot.passed[0] ? "我" : ""}${snapshot.passed[0] && snapshot.passed[1] ? "/" : ""}${snapshot.passed[1] ? "敌" : "无"}` : "";
+  const stage = snapshot.round ? `第${snapshot.round}局${phase ? `·${phase}` : ""}${turn ? `·${turn}` : ""}` : "";
+  return `${interruptionPrefix(item)} ${stage ? `${stage} · ` : ""}${completed} · 场面 ${scores[0] || 0}:${scores[1] || 0}${passed}`;
 }
 
 function roundDetail(item) {
@@ -151,11 +168,11 @@ function matchStrengthLabel(item) {
 }
 
 // 只有非正常结束才需要额外交代原因，正常结束不占用第一行空间。
-// 弃局与掉线对玩家是同一件事（中途离开没提交战报），统一显示成“掉线”，和详情标题保持一致。
-const END_REASON_NOTES = { disconnect: "掉线", abandon: "掉线", surrender: "认输", timeout: "超时", invalid: "异常" };
+const END_REASON_NOTES = { disconnect: "掉线", surrender: "认输" };
 
 function endReasonNote(item) {
-  if (item.rankedAnomaly) return "异常";
+  if (isRankAbandon(item)) return "弃局";
+  if (hasVisibleRankAnomaly(item)) return "异常";
   return END_REASON_NOTES[item.endReason] || "";
 }
 
@@ -196,10 +213,10 @@ function matchTypeLabel(item) {
   return `单机对战 · ${DIFFICULTY_LABELS[item.difficulty] || item.difficulty || "普通"}`;
 }
 
-// 弃局本质是中途离开、没提交战报，对玩家展示成掉线更好理解。
 function recordTitle(item) {
   const reason = item.endReason || "";
-  if (reason === "disconnect" || reason === "abandon") return item.ranked ? "排位掉线" : "掉线";
+  if (isRankAbandon(item)) return "排位弃局";
+  if (reason === "disconnect") return item.ranked ? "排位掉线" : "掉线";
   return item.resultText || (reason === "surrender" ? "认输" : "已结束");
 }
 
@@ -359,11 +376,15 @@ function roundsBlock(item, contentW) {
 function recordDetailBlocks(ctx, item, contentW) {
   const style = resultStyle(item);
   const scores = Array.isArray(item.scores) ? item.scores : [];
+  const durationMs = item.startedAt && item.time ? Math.max(0, item.time - item.startedAt) : 0;
+  const durationText = durationMs ? `${Math.floor(durationMs / 60000)}分${Math.floor(durationMs / 1000) % 60}秒` : "";
   const blocks = [
     resultBlock(item, contentW, style),
     sidesBlock(ctx, item, contentW),
     infoBlock(ctx, "对局信息", [
       { label: "对局类型", value: matchTypeLabel(item) },
+      { label: "开局时间", value: item.startedAt ? formatFullTime(item.startedAt) : "" },
+      { label: "对局时长", value: durationText },
       { label: "小局比分", value: `${item.rounds?.[0] || 0} : ${item.rounds?.[1] || 0}` },
       { label: "最终影响力", value: scores.length ? `${scores[0] || 0} : ${scores[1] || 0}` : "" },
       { label: "房间号", value: item.mode === "online" ? (item.roomId || "") : "" }
@@ -372,13 +393,17 @@ function recordDetailBlocks(ctx, item, contentW) {
   ];
   if (item.ranked) {
     blocks.push(infoBlock(ctx, "排位结算", [
-      { label: "权势变化", value: item.rankDeltaText || "未结算", color: item.rankedAnomaly ? "#8d6840" : "#3b2b18" },
+      { label: "权势变化", value: item.rankDeltaText || "未结算", color: hasVisibleRankAnomaly(item) ? "#8d6840" : "#3b2b18" },
       { label: "当前段位", value: item.rankDisplay || "" }
     ], contentW));
   }
   const disconnect = disconnectDetail(item);
   if (disconnect) {
-    blocks.push(infoBlock(ctx, "掉线信息", [{ label: "掉线记录", value: disconnect, color: "#8d6840" }], contentW));
+    const label = interruptionPrefix(item);
+    blocks.push(infoBlock(ctx, `${label}记录`, [
+      { label: `${label}局面`, value: disconnect, color: "#8d6840" },
+      { label: "最后同步", value: item.lastProgressAt ? formatFullTime(item.lastProgressAt) : "" }
+    ], contentW));
   }
   return blocks.filter(Boolean);
 }
@@ -601,7 +626,7 @@ function draw(ctx, view, actions, ui = {}) {
     wrapText(ctx, `我方·${lineupText(item.humanDeckMode, item.humanFaction, item.humanLeader, "阵营", "主将")}`, textX, y + 40, textW, 14, 1, 11, "#3b2b18");
     wrapText(ctx, `对手·${oppMode ? `${oppMode}·` : ""}${lineupText(item.aiDeckMode, item.aiFaction, item.aiLeader, "系统", "系统主将")}`, textX, y + 61, textW, 14, 1, 10, "#775c34");
     const detailText = item.ranked ? `${item.rankDeltaText || "排位"} · ${roundDetail(item)}` : roundDetail(item);
-    wrapText(ctx, detailText, textX, y + 80, textW, 13, 1, 10, item.rankedAnomaly ? "#8d6840" : "#6f5a3a");
+    wrapText(ctx, detailText, textX, y + 80, textW, 13, 1, 10, hasVisibleRankAnomaly(item) ? "#8d6840" : "#6f5a3a");
     const morale = Array.isArray(item.morale) ? item.morale : moraleAfterRoundResults(item.roundResults);
     const moraleX = view.width - 58;
     text(ctx, "军心", moraleX + 8, y + 34, 10, "#8a6132", "center");

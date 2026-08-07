@@ -157,6 +157,8 @@ const ROW_MARKS = {
 
 const imageCache = {};
 const MAX_CARD_IMAGE_CACHE = 72;
+const MAX_REMOTE_IMAGE_CACHE = 120;
+const REMOTE_IMAGE_RETRY_MS = 30 * 1000;
 let imageCacheTick = 0;
 const STATIC_CARD_IMAGE_BASE_URL = "https://po-ke-card-d0gg2ewaac3e700c4-1302893388.tcloudbaseapp.com/po-ke-card";
 let imageRenderHook = null;
@@ -168,6 +170,17 @@ function pruneCardImageCache() {
     return entry?.loaded || entry?.failed;
   });
   const removeCount = keys.length - MAX_CARD_IMAGE_CACHE;
+  if (removeCount <= 0) return;
+  const entries = keys
+    .map(key => ({ key, lastUsed: imageCache[key]?.lastUsed || 0 }))
+    .sort((a, b) => a.lastUsed - b.lastUsed);
+  for (let i = 0; i < removeCount; i++) delete imageCache[entries[i].key];
+}
+
+function pruneRemoteImageCache() {
+  const keys = Object.keys(imageCache)
+    .filter(key => key.startsWith("remote:") && (imageCache[key]?.loaded || imageCache[key]?.failed));
+  const removeCount = keys.length - MAX_REMOTE_IMAGE_CACHE;
   if (removeCount <= 0) return;
   const entries = keys
     .map(key => ({ key, lastUsed: imageCache[key]?.lastUsed || 0 }))
@@ -216,11 +229,10 @@ const ABILITY_MARKS = {
   "通才": "通才",
   "奇策": "奇策",
   "鼓舞": "鼓舞",
-  "召唤岳家军": "召唤",
-  "召唤无当飞军": "召唤",
-  "召唤东吴水师": "召唤",
-  "蛰伏": "蛰伏",
-  "雪耻": "雪耻"
+  "召唤风火轮": "召唤",
+  "召唤哮天犬": "召唤",
+  "战俘": "战俘",
+  "复国": "复国"
 };
 
 function abilityIconLabel(label) {
@@ -550,7 +562,9 @@ function card(ctx, spec) {
   const artW = spec.w - pad * 2;
   const artH = spec.h - pad - stripH - 3;
   drawCardImage(ctx, { ...spec, imageFill: true, imageX: artX, imageY: artY, imageW: artW, imageH: artH });
-  if (spec.selectedCount > 0) {
+  const hasMultipleCopies = spec.count > 1;
+  const isSelected = spec.selectedCount > 0;
+  if (isSelected) {
     const maskR = Math.min(10, Math.floor(artH / 8));
     ctx.save();
     roundRect(ctx, artX, artY, artW, artH, maskR);
@@ -560,11 +574,24 @@ function card(ctx, spec) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
     ctx.fillRect(artX, artY, artW, Math.max(12, artH * 0.28));
     ctx.restore();
-    const label = spec.selectedCount > 1 ? `已选x${spec.selectedCount}` : "已选";
-    const labelW = Math.min(artW - 10, Math.max(40, label.length * 12 + 16));
+  }
+  const selectionLabel = isSelected
+    ? (hasMultipleCopies ? `已选${spec.selectedCount}/${spec.count}` : "已选")
+    : (hasMultipleCopies ? `x${spec.count}` : "");
+  if (selectionLabel) {
+    const labelW = Math.min(artW - 10, Math.max(40, selectionLabel.length * 12 + 16));
     const labelH = 24;
-    fillRoundRect(ctx, artX + (artW - labelW) / 2, artY + (artH - labelH) / 2, labelW, labelH, 12, "rgba(47,111,87,0.94)", "rgba(255,247,216,0.92)");
-    text(ctx, label, artX + artW / 2, artY + artH / 2 + 1, 12, THEME.creamText, "center");
+    fillRoundRect(
+      ctx,
+      artX + (artW - labelW) / 2,
+      artY + (artH - labelH) / 2,
+      labelW,
+      labelH,
+      12,
+      isSelected ? "rgba(47,111,87,0.94)" : "rgba(74,50,26,0.86)",
+      "rgba(255,247,216,0.92)"
+    );
+    text(ctx, selectionLabel, artX + artW / 2, artY + artH / 2 + 1, 12, THEME.creamText, "center");
   }
   const nameW = spec.w - 4;
   const nameFill = hero ? "rgba(31, 23, 13, 0.98)" : "rgba(255, 249, 235, 0.96)";
@@ -578,31 +605,22 @@ function card(ctx, spec) {
     fillRoundRect(ctx, spec.x + 3, spec.y + 3, bs, bs, bs / 2, hero ? "#1f2f4f" : THEME.rust, hero ? "#f4b63d" : "rgba(255,247,216,0.88)");
     text(ctx, String(spec.strength == null ? "-" : spec.strength), spec.x + 3 + bs / 2, spec.y + 3 + bs / 2, 13, hero ? "#ffe27a" : THEME.creamText, "center");
   }
-  if (spec.count > 1) {
-    const label = `x${spec.count}`;
-    const badgeW = Math.min(spec.w - 8, Math.max(24, label.length * 8 + 10));
-    const badgeH = 17;
-    const bx = spec.x + spec.w - badgeW - 4;
-    const by = spec.y + spec.h - stripH - badgeH - 5;
-    fillRoundRect(ctx, bx, by, badgeW, badgeH, 8.5, "rgba(47,111,87,0.94)", "rgba(255,247,216,0.84)");
-    text(ctx, label, bx + badgeW / 2, by + badgeH / 2 + 0.5, 10, THEME.creamText, "center");
-  }
-  if (spec.selectedCount > 0) {
-    const label = spec.selectedCount > 1 ? `已${spec.selectedCount}` : "已选";
-    const badgeW = Math.min(spec.w - 8, Math.max(28, label.length * 10 + 10));
-    const badgeH = 18;
-    const bx = spec.x + 4;
-    const by = spec.y + spec.h - stripH - badgeH - 5;
-    fillRoundRect(ctx, bx, by, badgeW, badgeH, 9, "rgba(47,111,87,0.96)", "rgba(255,247,216,0.92)");
-    text(ctx, label, bx + badgeW / 2, by + badgeH / 2 + 0.5, 10, THEME.creamText, "center");
-  }
   if (hero) heroFrameStroke(ctx, spec.x + 1, spec.y + 1, spec.w - 2, spec.h - 2, 10, true);
 }
 
 function drawRemoteImage(ctx, url, x, y, w, h, options = {}) {
   if (!url) return false;
   const key = `remote:${url}`;
-  const entry = imageCache[key] || (imageCache[key] = createLocalImage([url]));
+  let entry = imageCache[key];
+  const time = Date.now();
+  if (entry?.failed && time - Number(entry.failedAt || 0) >= REMOTE_IMAGE_RETRY_MS) {
+    delete imageCache[key];
+    entry = null;
+  }
+  if (!entry) {
+    entry = imageCache[key] = createLocalImage([url]);
+    pruneRemoteImageCache();
+  }
   entry.lastUsed = ++imageCacheTick;
   const radius = options.radius || 0;
   ctx.save();
@@ -616,10 +634,13 @@ function drawRemoteImage(ctx, url, x, y, w, h, options = {}) {
     ctx.restore();
     return true;
   }
-  if (entry.failed && typeof options.onFail === "function") {
-    ctx.restore();
-    options.onFail();
-    return false;
+  if (entry.failed) {
+    entry.failedAt = entry.failedAt || time;
+    if (typeof options.onFail === "function") {
+      ctx.restore();
+      options.onFail();
+      return false;
+    }
   }
   ctx.restore();
   return false;

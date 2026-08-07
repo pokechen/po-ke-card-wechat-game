@@ -23,14 +23,18 @@ const ROOMS = "game_rooms";
 const USERS = "users";
 const USER_TOKENS = "user_tokens";
 const MATCH_HISTORY = "match_history";
+const BATTLE_FEEDBACK = "battle_feedback";
 const DAILY_USER_ACTIVITY = "daily_user_activity";
 const RANK_PROFILES = "rank_profiles";
 const RANK_MATCHES = "rank_matches";
-const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+// 仅用于联机房间的生命周期与房号回收；单机排位没有对局时限。
+const PVP_ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TOKEN_TTL_MS = TOKEN_TTL_SECONDS * 1000;
 const PLAYER_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
 const MATCH_HISTORY_LIMIT = 20;
+const RANK_PUBLIC_HISTORY_SCAN_LIMIT = 200;
+const RANK_PUBLIC_HISTORY_PAGE_SIZE = 100;
 const PVP_READY_DEBUG_VERSION = "20260803-ready-atomic-v2";
 
 let redisClientPromise = null;
@@ -108,6 +112,7 @@ const REQUIRED_COLLECTIONS = [
   USERS,
   USER_TOKENS,
   MATCH_HISTORY,
+  BATTLE_FEEDBACK,
   DAILY_USER_ACTIVITY,
   RANK_PROFILES,
   RANK_MATCHES
@@ -140,6 +145,9 @@ const RATE_LIMIT_RULES = {
   generateRoomCode: { limit: 12, windowMs: 60000 },
   uploadAvatar: { limit: 6, windowMs: 60000 },
   updateProfile: { limit: 12, windowMs: 60000 },
+  submitBattleFeedback: { limit: 8, windowMs: 60000 },
+  getBattleFeedbackDetail: { limit: 30, windowMs: 60000 },
+  updateBattleFeedback: { limit: 20, windowMs: 60000 },
   getAdminStats: { limit: 12, windowMs: 60000 },
   // 房间轮询 1.5s 一次（约 40 次/分钟），默认额度需要给足余量
   default: { limit: 240, windowMs: 60000 }
@@ -340,7 +348,7 @@ async function cleanupExpiredRooms(limit = 50) {
   try {
     const res = await db.collection(ROOMS)
       .where({
-        expireAt: _.lt(now() - ROOM_TTL_MS),
+        expireAt: _.lt(now() - PVP_ROOM_TTL_MS),
         status: _.nin(["playing", "selecting"])
       })
       .limit(limit)
@@ -548,14 +556,25 @@ function matchRecordKey(record = {}) {
   ].join(":"));
 }
 
-// 掉线判负时额外带上的“掉线时比分”，只用于展示说明，不参与胜负与积分结算。
+// 中断判负时额外带上的结束前局面，只用于展示说明，不参与胜负与积分结算。
 function sanitizeDisconnectSnapshot(input) {
   if (!input || typeof input !== "object") return null;
   const rounds = safeArray(input.rounds).slice(0, 2).map(value => safeNumber(value, 0));
   const scores = safeArray(input.scores).slice(0, 2).map(value => safeNumber(value, 0));
   const roundResults = safeArray(input.roundResults).slice(0, 3).map(sanitizeRoundResult);
   if (!rounds.length && !scores.length && !roundResults.length) return null;
-  return { rounds, scores, roundResults };
+  const phase = ["mulligan", "roundTransition", "pending", "playing"].includes(safeText(input.phase, 24)) ? safeText(input.phase, 24) : "";
+  const current = input.current == null ? null : (safeNumber(input.current, 0) === 1 ? 1 : 0);
+  const passed = safeArray(input.passed).length ? [!!input.passed[0], !!input.passed[1]] : [false, false];
+  return {
+    round: Math.max(1, Math.min(3, safeNumber(input.round, 1))),
+    phase,
+    current,
+    passed,
+    rounds,
+    scores,
+    roundResults
+  };
 }
 
 function sanitizeMatchRecord(input = {}) {
@@ -582,6 +601,7 @@ function sanitizeMatchRecord(input = {}) {
     endReason: safeText(source.endReason || "normal", 24),
     disconnectSnapshot: sanitizeDisconnectSnapshot(source.disconnectSnapshot),
     startedAt: safeNumber(source.startedAt, 0),
+    lastProgressAt: safeNumber(source.lastProgressAt, 0),
     finishedRounds: safeNumber(source.finishedRounds, 0),
     roomId: normalizeRoomId(source.roomId) || "",
     matchId: safeText(source.matchId, 80),
@@ -590,6 +610,7 @@ function sanitizeMatchRecord(input = {}) {
     rankMatchId: safeText(source.rankMatchId, 80),
     rankDisplay: safeText(source.rankDisplay, 40),
     rankDeltaText: safeText(source.rankDeltaText, 80),
+    rankPrestigeDelta: Math.max(-rankCore.PRESTIGE_CAP, Math.min(rankCore.PRESTIGE_CAP, safeNumber(source.rankPrestigeDelta, 0))),
     validationStatus: safeText(source.validationStatus, 20),
     riskFlags: safeArray(source.riskFlags).slice(0, 12).map(flag => safeText(flag, 40)).filter(Boolean)
   };
@@ -626,6 +647,9 @@ async function upsertMatchHistoryForOpenid(openid, record, source = "client") {
       endReason: safe.endReason,
       roomId: safe.roomId,
       matchId: safe.matchId,
+      ranked: safe.ranked,
+      humanFaction: safe.humanFaction,
+      rankPrestigeDelta: safe.rankPrestigeDelta,
       record: safe,
       source,
       updatedAt: now()
@@ -787,13 +811,8 @@ function rankPublicUserId(openid) {
 }
 
 async function userPublicProfile(openid) {
-  try {
-    const res = await db.collection(USERS).doc(openid).get();
-    const user = res.data || null;
-    return displayUser(user || {});
-  } catch (err) {
-    return { nickName: "匿名玩家", avatarUrl: "" };
-  }
+  const user = await readUserDocument(openid);
+  return { ...displayUser(user || {}), avatarUpdatedAt: Number(user?.updatedAt || 0) || 0 };
 }
 
 function normalizeRankProfileDoc(openid, source = {}) {
@@ -925,10 +944,10 @@ async function startRankMatch(event, openid) {
     prestigeBefore: profile.prestige,
     playerSetup: setup,
     roundProgress: null,
+    progressVersion: 0,
     aiSetup: { faction: "random", leaderId: "random", difficulty: rules.aiDifficulty, deckMode: "auto" },
     ruleSnapshot: rules,
     createdAt: time,
-    expireAt: time + ROOM_TTL_MS,
     updatedAt: time
   };
   await db.collection(RANK_MATCHES).doc(rankMatchId).set({ data: match });
@@ -956,6 +975,8 @@ function rankResultSummary(finalState = {}) {
   const roundsWon = Math.max(0, safeNumber(finalState.roundsWon, safeArray(finalState.rounds)[0] || 0));
   const roundsLost = Math.max(0, safeNumber(finalState.roundsLost, safeArray(finalState.rounds)[1] || 0));
   const winner = finalState.winner == null ? null : (safeNumber(finalState.winner, 0) === 0 ? 0 : 1);
+  // 单机排位只有正常结束与主动认输；超时、掉线等联机概念不接受客户端伪造。
+  const endReason = finalState.endReason === "surrender" ? "surrender" : "normal";
   return {
     result: rankCore.resultFromWinner(winner),
     winner,
@@ -973,7 +994,7 @@ function rankResultSummary(finalState = {}) {
     aiLeaderId: safeText(finalState.aiLeaderId, 80),
     humanDeckMode: safeText(finalState.humanDeckMode, 20),
     aiDeckMode: safeText(finalState.aiDeckMode, 20),
-    endReason: safeText(finalState.endReason || "normal", 24),
+    endReason,
     disconnectSnapshot: sanitizeDisconnectSnapshot(finalState.disconnectSnapshot)
   };
 }
@@ -982,8 +1003,7 @@ function validateRankFinish(match, summary, event) {
   const flags = [];
   const hardInvalid = [];
   const surrendered = summary.endReason === "surrender";
-  const disconnected = summary.endReason === "disconnect";
-  const earlyEnd = surrendered || disconnected;
+  const earlyEnd = surrendered;
   if (!summary.roundResults.length && !earlyEnd) hardInvalid.push("MISSING_ROUND_RESULTS");
   const roundWins = summary.roundResults.filter(item => item.winner === 0).length;
   const roundLosses = summary.roundResults.filter(item => item.winner === 1).length;
@@ -999,11 +1019,8 @@ function validateRankFinish(match, summary, event) {
 }
 
 function rankResultText(result, endReason = "normal") {
-  if (endReason === "disconnect") return result === "loss" ? "排位掉线" : "对方掉线";
   if (endReason === "surrender") return result === "loss" ? "排位认输" : "对方认输";
-  if (endReason === "abandon") return "排位弃局";
-  if (endReason === "timeout") return "排位超时";
-  if (endReason === "invalid") return "排位数据异常";
+  if (endReason === "abandon" || endReason === "invalid") return "排位弃局";
   if (result === "win") return "排位胜利";
   if (result === "loss") return "排位失败";
   return "排位平局";
@@ -1030,6 +1047,7 @@ function buildRankHistoryRecord(match, summary, delta, validationStatus, riskFla
     roundResults: summary.roundResults,
     disconnectSnapshot: summary.disconnectSnapshot || null,
     startedAt: safeNumber(summary.startedAt, 0),
+    lastProgressAt: safeNumber(summary.lastProgressAt, 0),
     finishedRounds: safeNumber(summary.finishedRounds, 0),
     humanFaction: summary.humanFaction,
     aiFaction: summary.aiFaction,
@@ -1048,6 +1066,7 @@ function buildRankHistoryRecord(match, summary, delta, validationStatus, riskFla
     rankMatchId,
     rankDisplay: delta.after.display,
     rankDeltaText: rankDeltaText(delta),
+    rankPrestigeDelta: delta.prestigeDelta,
     validationStatus,
     riskFlags
   };
@@ -1056,20 +1075,6 @@ function buildRankHistoryRecord(match, summary, delta, validationStatus, riskFla
 // 兼容 wx-server-sdk 与测试桩两种返回结构，取本次真实更新的文档数。
 function updatedCount(res) {
   return Math.max(0, safeNumber(res?.stats?.updated ?? res?.updated, 0));
-}
-
-// 宽限期内未结算的排位局视为客户端重复创建 / 尚未开打，直接作废，不判负也不写战绩。
-async function voidRankMatch(rankMatchId) {
-  const time = now();
-  try {
-    const res = await db.collection(RANK_MATCHES)
-      .where({ _id: rankMatchId, status: "created" })
-      .update({ data: { status: "voided", validationStatus: "voided", finishedAt: time, updatedAt: time } });
-    return updatedCount(res) > 0;
-  } catch (err) {
-    console.warn("[rank] 作废未开打排位局失败", rankMatchId, err?.message || err);
-    return false;
-  }
 }
 
 // 把一局未正常结算的排位对局按 0:2 判负写入战绩与排位资料。
@@ -1096,6 +1101,7 @@ async function settleRankAbandon(openid, match, endReason = "abandon", validatio
     ...rankCore.abandonSummary(endReason, match?.roundProgress),
     ...rankAbandonMatchInfo(match),
     startedAt: safeNumber(match?.createdAt, 0),
+    lastProgressAt: safeNumber(match?.lastProgressAt, 0),
     finishedRounds: safeArray(match?.roundProgress?.roundResults).length
   };
   const delta = rankCore.settleRankProfile(profile, summary);
@@ -1139,7 +1145,7 @@ async function settleRankAbandon(openid, match, endReason = "abandon", validatio
   return { delta, historyRecord, summary };
 }
 
-// 清理该玩家所有还挂在 created 的排位局：超过宽限期的判负，宽限期内的作废。
+// 清理该玩家所有还挂在 created 的排位局：排位一经创建即视为已开局，未完成就按弃局判负。
 // 副作用：执行后该玩家最多只会保留即将新建的那一局，天然限制并发开局。
 async function settleOpenRankMatches(openid) {
   let docs = [];
@@ -1152,22 +1158,16 @@ async function settleOpenRankMatches(openid) {
     docs = safeArray(res.data);
   } catch (err) {
     console.warn("[rank] 查询未结算排位局失败", err?.message || err);
-    return { abandoned: 0, voided: 0 };
+    return { abandoned: 0 };
   }
   let abandoned = 0;
-  let voided = 0;
   for (const match of docs) {
     const rankMatchId = match.rankMatchId || match._id || "";
     if (!rankMatchId) continue;
-    const startedAt = safeNumber(match.createdAt, 0);
-    if (startedAt && now() - startedAt < rankCore.ABANDON_GRACE_MS) {
-      if (await voidRankMatch(rankMatchId)) voided += 1;
-      continue;
-    }
     const settled = await settleRankAbandon(openid, { ...match, rankMatchId }, "abandon", "valid", ["RANK_ABANDON_AUTO_LOSS"]);
     if (settled) abandoned += 1;
   }
-  return { abandoned, voided };
+  return { abandoned };
 }
 
 // 客户端上报的对局展示信息（实际阵营/主将/难度）。
@@ -1190,16 +1190,22 @@ function sanitizeRankMatchInfo(input) {
 async function reportRankProgress(event, openid) {
   const rankMatchId = safeText(event.rankMatchId, 80);
   if (!rankMatchId) return fail("缺少排位对局标识");
+  const progressVersion = Math.floor(safeNumber(event.progressVersion, 0));
+  if (progressVersion < 1 || progressVersion > Number.MAX_SAFE_INTEGER) return fail("对局进度版本无效");
   const progress = sanitizeDisconnectSnapshot(event.progress);
   const matchInfo = sanitizeRankMatchInfo(event.setup);
   if (!progress && !matchInfo) return fail("对局进度数据无效");
   const time = now();
-  const data = { updatedAt: time };
-  if (progress) data.roundProgress = progress;
+  const data = { updatedAt: time, progressVersion };
+  if (progress) {
+    data.roundProgress = progress;
+    data.lastProgressAt = time;
+  }
   if (matchInfo) data.matchInfo = matchInfo;
   try {
+    // 单机排位可跨后台/重启恢复；仅允许递增版本覆盖快照，阻止网络乱序写回旧局面。
     const res = await db.collection(RANK_MATCHES)
-      .where({ _id: rankMatchId, openid, status: "created" })
+      .where({ _id: rankMatchId, openid, status: "created", progressVersion: _.lt(progressVersion) })
       .update({ data });
     return ok({ updated: updatedCount(res) > 0 });
   } catch (err) {
@@ -1265,14 +1271,7 @@ async function finishRankMatch(event, openid) {
   if (!match) return fail("排位对局不存在", "RANK_MATCH_NOT_FOUND");
   if (match.openid !== openid) return fail("无权结算该排位对局", "FORBIDDEN");
   if (match.status === "abandoned") return fail("该排位对局已因中途退出判负", "RANK_MATCH_ABANDONED");
-  if (match.status === "voided") return fail("该排位对局尚未开始已作废", "RANK_MATCH_VOIDED");
   if (match.status !== "created") return fail("该排位对局已结算", "RANK_ALREADY_FINISHED");
-
-  //拖过有效期再提交同样不能免罚，否则"挂着不交等过期"就是零成本逃跑。
-  if (safeNumber(match.expireAt, 0) && now() > safeNumber(match.expireAt, 0)) {
-    const settled = await settleRankAbandon(openid, match, "timeout", "valid", ["RANK_TIMEOUT_AUTO_LOSS"]);
-    return rankSettlementResponse(openid, settled, "valid", ["RANK_TIMEOUT_AUTO_LOSS"]);
-  }
 
   const profile = await getRankProfileDoc(openid, true);
   const summary = rankResultSummary(event.finalStateSummary || {});
@@ -1352,11 +1351,94 @@ async function getRankLeaderboard(event, openid = "") {
     .sort((a, b) => b.totalPower - a.totalPower || b.prestige - a.prestige || b.winRate - a.winRate || b.totalMatches - a.totalMatches || a.updatedAt - b.updatedAt)
     .slice(0, limit)
     .map((item, index) => ({ ...item, rank: index + 1 }));
-  if (!openid) return ok({ leaderboard: list, selfRank: null });
+  const avatarExpiresAt = avatarUrlExpiryForPayload(list);
+  if (!openid) return ok({ leaderboard: list, selfRank: null, avatarExpiresAt });
   const selfProfile = await getRankProfileDoc(openid, true);
   const selfPublic = publicRankPayload(selfProfile);
   const selfRank = list.find(item => item.userId === selfPublic.userId)?.rank || null;
-  return ok({ leaderboard: list, selfRank: selfRank ? { ...selfPublic, rank: selfRank } : selfPublic });
+  return ok({
+    leaderboard: list,
+    selfRank: selfRank ? { ...selfPublic, rank: selfRank } : selfPublic,
+    avatarExpiresAt
+  });
+}
+
+async function refreshRankLeaderboardAvatars(event) {
+  const userIds = [...new Set(safeArray(event.userIds).map(id => safeText(id, 80)).filter(Boolean))].slice(0, 50);
+  if (!userIds.length) return ok({ avatars: [], avatarExpiresAt: 0 });
+  const res = await db.collection(RANK_PROFILES).where({ publicUserId: _.in(userIds) }).limit(userIds.length).get();
+  const avatars = await Promise.all(safeArray(res.data).map(async profile => {
+    const publicProfile = publicRankPayload(profile);
+    let user = null;
+    try { user = await readUserDocument(profile.openid); } catch (err) {}
+    const latest = user ? displayUser(user) : publicProfile;
+    return {
+      userId: publicProfile.userId,
+      avatarUrl: latest.avatarUrl,
+      avatarUpdatedAt: Number(user?.updatedAt || publicProfile.avatarUpdatedAt || 0) || 0
+    };
+  }));
+  return ok({ avatars, avatarExpiresAt: avatarUrlExpiryForPayload(avatars) });
+}
+
+function avatarUrlExpiryForPayload(payload) {
+  const hasCloudAvatar = safeArray(payload).some(item => String(item?.avatarUrl || "").startsWith(CLOUD_FILE_PREFIX));
+  // 临时 URL 可能复用服务端缓存，向客户端只承诺缓存窗口，避免误报为完整两小时。
+  return hasCloudAvatar ? now() + TEMP_URL_CACHE_MS : 0;
+}
+
+function rankWinRate(wins, totalMatches) {
+  return totalMatches ? Number((wins * 100 / totalMatches).toFixed(1)) : 0;
+}
+
+function buildRecentRankStats(records = []) {
+  const recent = safeArray(records).slice(0, MATCH_HISTORY_LIMIT);
+  const wins = recent.filter(record => record.winner === 0).length;
+  const losses = recent.filter(record => record.winner === 1).length;
+  const draws = recent.length - wins - losses;
+  const factions = new Map();
+  recent.forEach(record => {
+    const faction = safeText(record.humanFaction, 40);
+    if (!FACTION_KEYS.includes(faction)) return;
+    const stats = factions.get(faction) || { faction, totalMatches: 0, wins: 0, prestigeGain: 0 };
+    stats.totalMatches += 1;
+    if (record.winner === 0) stats.wins += 1;
+    stats.prestigeGain += Math.max(0, safeNumber(record.rankPrestigeDelta, 0));
+    factions.set(faction, stats);
+  });
+  const favoriteFaction = [...factions.values()]
+    .map(stats => ({ ...stats, winRate: rankWinRate(stats.wins, stats.totalMatches) }))
+    .sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || b.prestigeGain - a.prestigeGain || a.faction.localeCompare(b.faction, "zh-Hans-CN"))[0] || null;
+  return {
+    totalMatches: recent.length,
+    wins,
+    losses,
+    draws,
+    winRate: rankWinRate(wins, recent.length),
+    favoriteFaction
+  };
+}
+
+async function recentRankHistoryFor(openid) {
+  const records = [];
+  let skip = 0;
+  while (records.length < MATCH_HISTORY_LIMIT && skip < RANK_PUBLIC_HISTORY_SCAN_LIMIT) {
+    const limit = Math.min(RANK_PUBLIC_HISTORY_PAGE_SIZE, RANK_PUBLIC_HISTORY_SCAN_LIMIT - skip);
+    const res = await db.collection(MATCH_HISTORY)
+      .where({ openid })
+      .orderBy("time", "desc")
+      .skip(skip)
+      .limit(limit)
+      .get();
+    const page = safeArray(res.data);
+    if (!page.length) break;
+    page.forEach(doc => {
+      if (doc?.source === "pvpRoom" && doc?.record?.ranked) records.push(doc.record);
+    });
+    skip += page.length;
+    if (page.length < limit) break;
+  }
+  return records.slice(0, MATCH_HISTORY_LIMIT);
 }
 
 async function getRankPublicProfile(event, openid) {
@@ -1365,7 +1447,8 @@ async function getRankPublicProfile(event, openid) {
   const res = await db.collection(RANK_PROFILES).where({ publicUserId: userId }).limit(1).get();
   const profile = safeArray(res.data)[0];
   if (!profile) return fail("未找到玩家排位资料", "RANK_PROFILE_NOT_FOUND");
-  return ok({ profile: publicRankPayload(profile) });
+  const recentRank = buildRecentRankStats(await recentRankHistoryFor(profile.openid));
+  return ok({ profile: { ...publicRankPayload(profile), recentRank } });
 }
 
 function buildMatch(players) {
@@ -1408,14 +1491,39 @@ function displayUser(user = {}) {
   };
 }
 
-// 房间与对局中的展示资料只认服务端已保存的用户资料（微信授权资料或已过内容安全检测的自定义资料）。
-async function serverProfileFor(openid) {
+//「文档不存在」与「读取失败」必须区分：不存在＝全新玩家，返回 null 交由调用方按新用户处理；
+// 其他读取异常（网络/权限等）必须继续抛出，否则 set 会以空 customProfile 覆盖已上传头像。
+// 排位档案会读取用户公开资料（userPublicProfile），若这里对缺失文档直接抛错，
+// 从未写入 users 文档的账号调用 getRankProfile / startRankMatch 会整体失败。
+function isDocumentMissingError(err) {
+  const code = String(err?.code || err?.errCode || "");
+  const message = String(err?.message || "");
+  if (code === "ResourceNotFound" || code === "DATABASE_DOCUMENT_NOT_EXIST") return true;
+  return /document not found|does not exist|not exist|DOCUMENT_NOT_EXIST/i.test(message);
+}
+
+async function readUserDocument(openid) {
   try {
     const res = await db.collection(USERS).doc(openid).get();
-    return displayUser(res.data || {});
+    return res?.data || null;
   } catch (err) {
-    return { nickName: "", avatarUrl: "" };
+    if (isDocumentMissingError(err)) return null;
+    throw err;
   }
+}
+
+// 仅向本人返回稳定 fileID；其他玩家仍只会拿到可展示的临时 URL。
+function ownerUser(user = {}, openid) {
+  const profile = displayUser(user);
+  return {
+    ...profile,
+    avatarFileID: ownedAvatarFileId(user?.customProfile?.avatarUrl, openid)
+  };
+}
+
+// 房间与对局中的展示资料只认服务端已保存的用户资料（微信授权资料或已过内容安全检测的自定义资料）。
+async function serverProfileFor(openid) {
+  return displayUser((await readUserDocument(openid)) || {});
 }
 
 const DEFAULT_WECHAT_APPID = "wx144b92ed6dc01596";
@@ -1467,9 +1575,13 @@ const TEMP_URL_MAX_AGE_SECONDS = 2 * 60 * 60;
 const TEMP_URL_CACHE_MS = 60 * 60 * 1000;
 const tempUrlCache = new Map();
 
+function isCloudFileIdentifierKey(key) {
+  return key === "fileID" || key === "avatarFileID";
+}
+
 function collectCloudFileIds(value, found, key = "") {
   if (typeof value === "string") {
-    if (key !== "fileID" && value.startsWith(CLOUD_FILE_PREFIX)) found.add(value);
+    if (!isCloudFileIdentifierKey(key) && value.startsWith(CLOUD_FILE_PREFIX)) found.add(value);
     return;
   }
   if (Array.isArray(value)) {
@@ -1483,7 +1595,7 @@ function collectCloudFileIds(value, found, key = "") {
 
 function replaceCloudFileIds(value, map, key = "") {
   if (typeof value === "string") {
-    if (key === "fileID") return value;
+    if (isCloudFileIdentifierKey(key)) return value;
     return map.get(value) || value;
   }
   if (Array.isArray(value)) return value.map(item => replaceCloudFileIds(item, map, key));
@@ -1698,31 +1810,180 @@ async function fetchAllCollection(name, hardLimit = ADMIN_FETCH_HARD_LIMIT) {
   return { rows: result, total, truncated: total > hardLimit };
 }
 
+const FEEDBACK_STATUS = ["pending", "processed", "ignored"];
+const ADMIN_FEEDBACK_LIST_LIMIT = 100;
+
+function feedbackStatus(value) {
+  return FEEDBACK_STATUS.includes(value) ? value : "pending";
+}
+
+function sanitizeFeedbackBattle(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    matchId: safeText(source.matchId, 80),
+    mode: source.mode === "online" ? "online" : "ai",
+    ranked: !!source.ranked,
+    resultText: safeText(source.resultText, 40),
+    endReason: safeText(source.endReason || "normal", 24),
+    rounds: safeArray(source.rounds).slice(0, 3).map(item => ({
+      round: Math.max(0, safeNumber(item?.round, 0)),
+      scores: safeArray(item?.scores).slice(0, 2).map(value => safeNumber(value, 0)),
+      winner: item?.winner == null ? null : safeNumber(item.winner, 0)
+    })),
+    players: safeArray(source.players).slice(0, 2).map((player, index) => ({
+      side: player?.side === "对方" ? "对方" : (index === 0 ? "我方" : "对方"),
+      faction: safeText(player?.faction, 40),
+      leader: safeText(player?.leader, 60),
+      leaderId: safeText(player?.leaderId, 80)
+    })),
+    history: safeArray(source.history).slice(0, 500).map(entry => ({
+      seq: Math.max(0, safeNumber(entry?.seq, 0)),
+      round: Math.max(0, safeNumber(entry?.round, 0)),
+      side: entry?.side === "对方" ? "对方" : "我方",
+      type: safeText(entry?.type, 24),
+      text: safeText(entry?.text, 240)
+    })).filter(entry => entry.text),
+    logs: safeArray(source.logs).slice(0, 500).map(item => safeText(item, 240)).filter(Boolean)
+  };
+}
+
+function feedbackUserProfile(user = {}) {
+  const profile = displayUser(user);
+  return {
+    nickName: safeText(profile.nickName, 24) || "匿名玩家",
+    avatarUrl: safeText(profile.avatarUrl, 1024)
+  };
+}
+
+function feedbackSummary(document = {}, user = null) {
+  const battle = sanitizeFeedbackBattle(document.battle);
+  return {
+    feedbackId: safeText(document.feedbackId || document._id, 80),
+    userId: safeText(document.userId || document.openid, 100),
+    user: feedbackUserProfile(user || {}),
+    content: safeText(document.content, 1000),
+    status: feedbackStatus(document.status),
+    note: safeText(document.note, 1000),
+    reply: safeText(document.reply, 1000),
+    createdAt: safeNumber(document.createdAt, 0),
+    updatedAt: safeNumber(document.updatedAt, 0),
+    handledAt: safeNumber(document.handledAt, 0),
+    battle: {
+      matchId: battle.matchId,
+      mode: battle.mode,
+      ranked: battle.ranked,
+      resultText: battle.resultText,
+      players: battle.players,
+      historyCount: battle.history.length,
+      logCount: battle.logs.length
+    }
+  };
+}
+
+function feedbackDetail(document = {}, user = null) {
+  return { ...feedbackSummary(document, user), battle: sanitizeFeedbackBattle(document.battle) };
+}
+
+async function submitBattleFeedback(event, openid) {
+  const content = safeText(event.content, 1000).trim();
+  if (!content) return fail("请填写反馈内容", "MISSING_FEEDBACK_CONTENT");
+  await assertTextSafe(content, openid, 2);
+  const time = now();
+  const feedbackId = sha1(`feedback:${openid}:${time}:${crypto.randomBytes(12).toString("hex")}`);
+  const document = {
+    _openid: openid,
+    openid,
+    userId: openid,
+    feedbackId,
+    content,
+    battle: sanitizeFeedbackBattle(event.battle),
+    status: "pending",
+    note: "",
+    reply: "",
+    createdAt: time,
+    updatedAt: time,
+    handledAt: 0
+  };
+  await db.collection(BATTLE_FEEDBACK).doc(feedbackId).set({ data: document });
+  return ok({ feedback: feedbackSummary(document) });
+}
+
+async function getBattleFeedbackDetail(event, openid) {
+  if (!(await isAdministrator(openid))) return fail("无权查看反馈", "FORBIDDEN");
+  const feedbackId = safeText(event.feedbackId, 80);
+  if (!feedbackId) return fail("缺少反馈记录", "MISSING_FEEDBACK");
+  const result = await db.collection(BATTLE_FEEDBACK).doc(feedbackId).get();
+  if (!result.data) return fail("反馈记录不存在", "NOT_FOUND");
+  const user = await readUserDocument(String(result.data.openid || result.data.userId || ""));
+  return ok({ feedback: feedbackDetail(result.data, user) });
+}
+
+async function updateBattleFeedback(event, openid) {
+  if (!(await isAdministrator(openid))) return fail("无权处理反馈", "FORBIDDEN");
+  const feedbackId = safeText(event.feedbackId, 80);
+  if (!feedbackId) return fail("缺少反馈记录", "MISSING_FEEDBACK");
+  const patch = event.patch && typeof event.patch === "object" ? event.patch : {};
+  const existing = await db.collection(BATTLE_FEEDBACK).doc(feedbackId).get();
+  if (!existing.data) return fail("反馈记录不存在", "NOT_FOUND");
+  const next = {};
+  if (Object.prototype.hasOwnProperty.call(patch, "status")) next.status = feedbackStatus(patch.status);
+  if (Object.prototype.hasOwnProperty.call(patch, "note")) next.note = safeText(patch.note, 1000).trim();
+  if (Object.prototype.hasOwnProperty.call(patch, "reply")) {
+    next.reply = safeText(patch.reply, 1000).trim();
+    if (next.reply) await assertTextSafe(next.reply, openid, 2);
+  }
+  const feedbackUser = await readUserDocument(String(existing.data.openid || existing.data.userId || ""));
+  if (!Object.keys(next).length) return ok({ feedback: feedbackDetail(existing.data, feedbackUser) });
+  const time = now();
+  next.updatedAt = time;
+  next.updatedBy = openid;
+  if (next.status && next.status !== "pending") next.handledAt = time;
+  await db.collection(BATTLE_FEEDBACK).doc(feedbackId).update({ data: next });
+  return ok({ feedback: feedbackDetail({ ...existing.data, ...next }, feedbackUser) });
+}
+
 async function getAdminStats(openid) {
   if (!(await isAdministrator(openid))) return fail("无权查看数据统计", "FORBIDDEN");
-  const [users, matches, activities, rankMatches] = await Promise.all([
+  const [users, matches, activities, rankMatches, feedback] = await Promise.all([
     fetchAllCollection(USERS),
     fetchAllCollection(MATCH_HISTORY),
     fetchAllCollection(DAILY_USER_ACTIVITY),
-    fetchAllCollection(RANK_MATCHES)
+    fetchAllCollection(RANK_MATCHES),
+    fetchAllCollection(BATTLE_FEEDBACK)
   ]);
+  const usersByOpenid = new Map(users.rows.map(user => [String(user?._id || user?.openid || ""), user]));
+  const feedbackItems = feedback.rows
+    .map(item => feedbackSummary(item, usersByOpenid.get(String(item?.openid || item?.userId || ""))))
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .slice(0, ADMIN_FEEDBACK_LIST_LIMIT);
+  const feedbackStats = {
+    total: feedback.total,
+    pending: feedback.rows.filter(item => feedbackStatus(item?.status) === "pending").length,
+    processed: feedback.rows.filter(item => feedbackStatus(item?.status) === "processed").length,
+    ignored: feedback.rows.filter(item => feedbackStatus(item?.status) === "ignored").length,
+    items: feedbackItems
+  };
   const dataScope = {
-    truncated: users.truncated || matches.truncated || activities.truncated || rankMatches.truncated,
+    truncated: users.truncated || matches.truncated || activities.truncated || rankMatches.truncated || feedback.truncated,
     totals: {
       users: users.total,
       matches: matches.total,
       activities: activities.total,
-      rankMatches: rankMatches.total
+      rankMatches: rankMatches.total,
+      feedback: feedback.total
     }
   };
   return ok({
-    stats: buildAdminStats({
-      users: users.rows,
-      matches: matches.rows,
-      activities: activities.rows,
-      rankMatches: rankMatches.rows,
-      now: now()
-    }),
+    stats: {
+      ...buildAdminStats({
+        users: users.rows,
+        matches: matches.rows,
+        activities: activities.rows,
+        rankMatches: rankMatches.rows,
+        now: now()
+      }),
+      feedback: feedbackStats
+    },
     dataScope
   });
 }
@@ -1730,11 +1991,8 @@ async function getAdminStats(openid) {
 async function saveUser(openid, event, wxContext) {
   const incomingUserInfo = pickUserInfo(event);
   const time = now();
-  let previous = null;
-  try {
-    const res = await db.collection(USERS).doc(openid).get();
-    previous = res.data || null;
-  } catch (err) {}
+  // 读取异常不能当作新用户处理，否则 set 会以空 customProfile 覆盖已上传头像。
+  const previous = await readUserDocument(openid);
   const isNewUser = !previous;
   // 静默登录不会携带资料，必须保留已授权的微信资料，不能用空对象覆盖。
   const hasIncomingProfile = !!(incomingUserInfo && (incomingUserInfo.nickName || incomingUserInfo.avatarUrl));
@@ -1758,7 +2016,9 @@ async function saveUser(openid, event, wxContext) {
     createdAt: previous?.createdAt || time,
     loginCount: (Number(previous?.loginCount || 0) || 0) + 1
   };
-  await db.collection(USERS).doc(openid).set({ data });
+  const userRef = db.collection(USERS).doc(openid);
+  if (previous) await userRef.update({ data });
+  else await userRef.set({ data });
   try {
     await recordDailyActivity(openid, time);
   } catch (err) {
@@ -1786,17 +2046,13 @@ async function login(event, wxContext) {
     tokenStorage,
     isNewUser: !!user.isNewUser,
     needsProfile: !!user.needsProfile,
-    user: displayUser(user)
+    user: ownerUser(user, openid)
   });
 }
 
 async function currentUser(openid) {
-  let user = null;
-  try {
-    const res = await db.collection(USERS).doc(openid).get();
-    user = res.data || null;
-  } catch (err) {}
-  const userProfile = displayUser(user || {});
+  const user = await readUserDocument(openid);
+  const userProfile = ownerUser(user || {}, openid);
   return ok({
     openid,
     user: userProfile,
@@ -1964,28 +2220,25 @@ async function saveWechatProfile(event, openid) {
   const userInfo = event.userInfo && typeof event.userInfo === "object" ? event.userInfo : {};
   const wechatUserInfo = publicUser(userInfo);
   if (!wechatUserInfo.nickName && !wechatUserInfo.avatarUrl) return ok({ updated: false });
+  const time = now();
+  const existing = await readUserDocument(openid);
   const patch = {
-    updatedAt: now(),
+    updatedAt: time,
     userInfo,
     userInfoResult: event.userInfoResult || null,
     profile: _.remove()
   };
-  let user = null;
-  try {
-    await db.collection(USERS).doc(openid).update({ data: patch });
-    const res = await db.collection(USERS).doc(openid).get();
-    user = res.data || null;
-  } catch (err) {
-    user = {
+  const userRef = db.collection(USERS).doc(openid);
+  const user = existing
+    ? { ...existing, ...patch }
+    : {
       openid,
-      createdAt: now(),
-      updatedAt: now(),
-      userInfo,
-      userInfoResult: event.userInfoResult || null,
+      createdAt: time,
+      ...patch,
       customProfile: {}
     };
-    await db.collection(USERS).doc(openid).set({ data: user });
-  }
+  if (existing) await userRef.update({ data: patch });
+  else await userRef.set({ data: user });
   return ok({ updated: true, userInfo: wechatUserInfo, user: displayUser(user) });
 }
 
@@ -2015,36 +2268,29 @@ async function updateProfile(event, openid) {
   if (!nickName && !nextAvatarFileId) return ok({ updated: false });
   // 自定义昵称属于会展示给其他玩家的 UGC，入库前必须过内容安全检测。
   await assertTextSafe(nickName, openid, 1);
-  let previous = null;
-  try {
-    const res = await db.collection(USERS).doc(openid).get();
-    previous = res.data || null;
-  } catch (err) {}
+  // 数据库读取失败时必须中止保存，不能以空 previous 覆盖已上传头像。
+  const previous = await readUserDocument(openid);
   const previousAvatar = String(previous?.customProfile?.avatarUrl || "").trim();
   // 只改昵称时不带 fileID，此时必须保留已有头像，不能被空值或临时链接覆盖。
   const avatarUrl = nextAvatarFileId || previousAvatar;
   const customProfile = { nickName, avatarUrl };
-  const patch = { updatedAt: now(), customProfile, profile: _.remove() };
-  let user = null;
-  try {
-    await db.collection(USERS).doc(openid).update({ data: patch });
-    const res = await db.collection(USERS).doc(openid).get();
-    user = res.data || null;
-  } catch (err) {
-    user = {
-      openid,
-      createdAt: now(),
-      updatedAt: now(),
-      userInfo: {},
-      customProfile
-    };
-    await db.collection(USERS).doc(openid).set({ data: user });
-  }
+  const time = now();
+  const patch = { updatedAt: time, customProfile, profile: _.remove() };
+  const userRef = db.collection(USERS).doc(openid);
+  const user = previous
+    ? { ...previous, ...patch }
+    : { openid, createdAt: time, userInfo: {}, ...patch };
+  if (previous) await userRef.update({ data: patch });
+  else await userRef.set({ data: user });
   // 换了新头像后删掉旧文件，避免云存储里不断堆积废弃头像
   if (nextAvatarFileId && previousAvatar && previousAvatar !== nextAvatarFileId) {
     await removeAvatarFile(previousAvatar);
   }
-  return ok({ updated: true, customProfile, user: displayUser(user) });
+  return ok({
+    updated: true,
+    customProfile: { ...customProfile, avatarFileID: avatarUrl },
+    user: ownerUser(user, openid)
+  });
 }
 
 async function authOpenid(event, wxContext) {
@@ -2128,7 +2374,7 @@ async function createRoom(event, openid) {
       turnSeq: 0,
       createdAt: now(),
       updatedAt: now(),
-      expireAt: now() + ROOM_TTL_MS
+      expireAt: now() + PVP_ROOM_TTL_MS
     };
     try {
       const existed = await getRoom(roomId);
@@ -2548,11 +2794,13 @@ async function handleRpc(event = {}, wxContext = {}) {
     return login(event, wxContext);
   }
   if (action === "getLoginContext") return ok({ wxContext: { APPID: wxContext.APPID || "", UNIONID: wxContext.UNIONID || "" } });
-  if (action === "getAdminStats") {
+  if (["getAdminStats", "getBattleFeedbackDetail", "updateBattleFeedback"].includes(action)) {
     const openid = await authAdminStatsOpenid(event, wxContext);
     if (!openid) return fail("无法获取用户身份", "NO_OPENID");
     if (await isRateLimited(action, `openid:${openid}`)) return fail("操作过于频繁，请稍后再试", "RATE_LIMITED");
-    return getAdminStats(openid);
+    if (action === "getAdminStats") return getAdminStats(openid);
+    if (action === "getBattleFeedbackDetail") return getBattleFeedbackDetail(event, openid);
+    return updateBattleFeedback(event, openid);
   }
   if (action === "getRankLeaderboard") {
     let openid = "";
@@ -2569,6 +2817,7 @@ async function handleRpc(event = {}, wxContext = {}) {
   if (action === "currentUser") return currentUser(openid);
   if (action === "getAdminStatus") return ok({ isAdmin: await isAdministrator(openid) });
   if (action === "getRankProfile") return getRankProfile(event, openid);
+  if (action === "refreshRankLeaderboardAvatars") return refreshRankLeaderboardAvatars(event);
   if (action === "startRankMatch") return startRankMatch(event, openid);
   if (action === "reportRankProgress") return reportRankProgress(event, openid);
   if (action === "finishRankMatch") return finishRankMatch(event, openid);
@@ -2586,6 +2835,7 @@ async function handleRpc(event = {}, wxContext = {}) {
   if (action === "returnToRoom") return returnToRoom(event, openid);
   if (action === "submitAction") return submitAction(event, openid);
   if (action === "leaveRoom") return leaveRoom(event, openid);
+  if (action === "submitBattleFeedback") return submitBattleFeedback(event, openid);
   if (action === "recordMatchHistory") return recordMatchHistory(event, openid);
   if (action === "listMatchHistory") return listMatchHistory(event, openid);
   return fail("未知请求");
